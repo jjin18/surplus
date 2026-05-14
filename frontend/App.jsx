@@ -4,6 +4,7 @@ import {
   GitBranch, BriefcaseBusiness, Zap, TrendingUp, RotateCw, Mail,
   CornerDownRight
 } from "lucide-react";
+import { api } from "./lib/api.js";
 
 // ============================================================
 // Event ROI MVP — browser demo
@@ -245,7 +246,7 @@ function Intake({ profile, setProfile, onRun }) {
 }
 
 // ---- Stage 1: Pipeline --------------------------------------
-function Pipeline({ profile, onDone }) {
+function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   const sources = [
     { key: "github", label: "GitHub adapter", icon: GitBranch, note: "OSS signal · clean API" },
     { key: "x", label: "X adapter", icon: Send, note: "Reach signal · paid API" },
@@ -253,14 +254,42 @@ function Pipeline({ profile, onDone }) {
   ];
   const steps = ["Prospecting", "Fit scoring", "Auto-outreach"];
   const [progress, setProgress] = useState(0);
+  const [apiDone, setApiDone] = useState(false);
 
+  // visual progress bar — purely cosmetic, runs alongside the real call
   useEffect(() => {
     const t = setInterval(() => setProgress((p) => (p >= 100 ? (clearInterval(t), 100) : p + 2)), 45);
     return () => clearInterval(t);
   }, []);
+
+  // fire the real backend pipeline (fan-out + score + threshold + outreach)
   useEffect(() => {
-    if (progress >= 100) { const t = setTimeout(onDone, 650); return () => clearTimeout(t); }
-  }, [progress, onDone]);
+    if (!eventId) { setApiDone(true); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await api.runPipeline(eventId);
+        if (!cancelled) {
+          onResult && onResult(result);
+          setApiDone(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          onError && onError(`Pipeline failed: ${e.message}`);
+          setApiDone(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [eventId, onResult, onError]);
+
+  // only advance when BOTH the cosmetic timer and the real API finished
+  useEffect(() => {
+    if (progress >= 100 && apiDone) {
+      const t = setTimeout(onDone, 650);
+      return () => clearTimeout(t);
+    }
+  }, [progress, apiDone, onDone]);
 
   const funnelTarget = Math.round(profile.headcount / 0.6);
   const found = Math.round((progress / 100) * funnelTarget * 1.4);
@@ -729,7 +758,40 @@ export default function App() {
     goal: "Hiring pipeline",
     budget: 12000,
   });
+  // backend-wired state — eventId comes from real /events POST; runResult is
+  // the response from /run (prospects, counts, etc.). Both null until the
+  // user runs the flow.
+  const [eventId, setEventId] = useState(null);
+  const [runResult, setRunResult] = useState(null);
+  const [apiError, setApiError] = useState(null);
   const go = (s) => { setStage(s); setMaxReached((m) => Math.max(m, s)); };
+
+  const handleIntakeRun = async () => {
+    setApiError(null);
+    try {
+      const ev = await api.createEvent({
+        role: profile.role,
+        seniority: profile.seniority,
+        co_stage: profile.coStage,
+        headcount: profile.headcount,
+        format: profile.format,
+        city: profile.city,
+        goal: profile.goal,
+        budget: profile.budget,
+      });
+      setEventId(ev.id);
+      go(1);
+    } catch (e) {
+      setApiError(`Couldn't create event: ${e.message}`);
+    }
+  };
+
+  const restart = () => {
+    setEventId(null);
+    setRunResult(null);
+    setApiError(null);
+    go(0);
+  };
 
   return (
     <div className="root">
@@ -741,15 +803,26 @@ export default function App() {
             <div className="brand-text">
               <span className="brand-name">surplus</span>
             </div>
+            {eventId && (
+              <span className="live-badge" title="connected to backend">
+                event #{eventId} · live
+              </span>
+            )}
           </div>
           <StageRail stage={stage} setStage={go} maxReached={maxReached} />
         </header>
+        {apiError && (
+          <div className="api-error">{apiError}</div>
+        )}
         <main className="canvas" key={stage}>
-          {stage === 0 && <Intake profile={profile} setProfile={setProfile} onRun={() => go(1)} />}
-          {stage === 1 && <Pipeline profile={profile} onDone={() => go(2)} />}
-          {stage === 2 && <Prospects profile={profile} onNext={() => go(3)} />}
+          {stage === 0 && <Intake profile={profile} setProfile={setProfile} onRun={handleIntakeRun} />}
+          {stage === 1 && <Pipeline profile={profile} eventId={eventId}
+                                    onResult={setRunResult}
+                                    onError={setApiError}
+                                    onDone={() => go(2)} />}
+          {stage === 2 && <Prospects profile={profile} runResult={runResult} onNext={() => go(3)} />}
           {stage === 3 && <Matching profile={profile} onNext={() => go(4)} />}
-          {stage === 4 && <ROI profile={profile} onRestart={() => go(0)} />}
+          {stage === 4 && <ROI profile={profile} onRestart={restart} />}
         </main>
       </div>
     </div>
@@ -787,6 +860,12 @@ const CSS = `
 .brand-name { font-family:'Inter',system-ui,sans-serif; font-weight:800;
   letter-spacing:-0.05em; font-size:1.85rem; line-height:1; color:var(--ink); }
 .brand-sub { font-size:11px; color:var(--ink-faint); line-height:1.2; }
+.live-badge { margin-left:14px; padding:4px 10px; border-radius:var(--r-pill);
+  font-size:10.5px; font-weight:600; letter-spacing:0.02em; text-transform:uppercase;
+  background:var(--acc-soft); color:var(--acc);
+  border:1px solid rgba(108,67,217,0.18); }
+.api-error { padding:10px 18px; background:#fff5f5; color:#b03030;
+  border-bottom:1px solid #f3d6d6; font-size:13px; font-weight:500; }
 .rail { display:flex; gap:5px; flex-wrap:wrap; }
 .rail-item { display:flex; align-items:center; gap:7px; background:transparent;
   border:1px solid transparent; color:var(--ink-faint); padding:7px 12px; cursor:pointer;

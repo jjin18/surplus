@@ -1,22 +1,20 @@
 """
 main.py — FastAPI app.
 
-The five-stage mechanism, exposed as one API:
-
-    01  intake     POST /events                   define the event
-    02  pipeline   POST /events/{id}/run          fan-out + score + outreach
-    03   "         (folded into /run)
-    04  matching   POST /events/{id}/match        symbiotic value graph
-    05  roi        GET  /events/{id}/roi          verified conversion ledger
+Serves the API and (when present) the built React frontend at the same origin
+so production deploys hit one URL: GET / returns the SPA, /api/* + /events/*
++ /webhooks/* serve the backend.
 
 Run it:  uvicorn backend.main:app --reload
-Docs at: http://localhost:8000/docs
+API docs: http://localhost:8000/docs
 """
 from __future__ import annotations
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .db import init_db
 from .routes import events, pipeline, matching, roi, webhooks
@@ -24,7 +22,7 @@ from .routes import events, pipeline, matching, roi, webhooks
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()  # create tables on startup
+    init_db()
     yield
 
 
@@ -36,7 +34,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# the frontend demo is a separate client — allow it through in dev
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -51,11 +48,23 @@ app.include_router(roi.router)
 app.include_router(webhooks.router)
 
 
-@app.get("/", tags=["meta"])
-def root():
+@app.get("/api/health", tags=["meta"])
+def health():
+    """API discovery JSON. Moved from `/` so the frontend can own `/`."""
     return {
         "service": "surplus-roi-engine",
         "version": "0.1.0",
         "stages": ["01 intake", "02-03 pipeline", "04 matching", "05 roi"],
         "docs": "/docs",
     }
+
+
+# --- Serve the built React frontend ---------------------------------------
+# In prod (Docker build): /app/frontend/dist exists and is mounted at "/".
+# Locally without a build, this branch is skipped — visit /docs for the API
+# or run `cd frontend && npm run dev` for hot-reload development.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    # html=True makes StaticFiles serve index.html for "/" and for any path
+    # that doesn't match an existing file (= SPA fallback).
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
