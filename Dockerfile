@@ -9,6 +9,12 @@ RUN npm run build
 
 # --- Stage 2: python runtime, serves API + built frontend ------------------
 FROM python:3.12-slim
+
+# system deps that some pip packages occasionally need
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # install Python deps first (cache-friendly)
@@ -21,7 +27,12 @@ COPY backend/ ./backend/
 # built frontend
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-# Railway sets $PORT
+# make sure the SQLite data dir exists + is writable
+RUN mkdir -p /app/backend/data && chmod -R 777 /app/backend/data
+
+# Railway injects $PORT. Default 8000 for local docker run.
 ENV PORT=8000
 EXPOSE 8000
-CMD uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}
+
+# exec-form CMD so $PORT expands properly via sh
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}"]
