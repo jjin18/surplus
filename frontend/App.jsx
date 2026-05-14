@@ -418,7 +418,10 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   const [providerInfo, setProviderInfo] = useState(null);
 
   useEffect(() => {
-    if (!eventId) return;
+    // Skip the preview fetch when the pool is empty — the backend 409s
+    // with "no prospects — call /prospect first" and we'd surface that as
+    // a spurious error banner on top of the empty-state UI.
+    if (!eventId || PROS.length === 0) return;
     let cancelled = false;
     (async () => {
       try {
@@ -439,7 +442,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [eventId, onError]);
+  }, [eventId, onError, PROS.length]);
 
   const updateEdit = (prospectId, field, value) => {
     setEditsById((s) => ({
