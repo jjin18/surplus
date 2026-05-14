@@ -73,6 +73,7 @@ class ProspectOut(BaseModel):
     gh_stars: int
     x_followers: int
     li_resolved: bool
+    linkedin_url: str | None
     sources: str
     fit_score: int
     fit_reason: str
@@ -88,6 +89,7 @@ class ProspectOut(BaseModel):
             seniority=p.seniority, side=p.side, works_on=p.works_on,
             offers=p.offers, seeks=p.seeks, gh_stars=p.gh_stars,
             x_followers=p.x_followers, li_resolved=p.li_resolved,
+            linkedin_url=p.linkedin_url,
             sources=p.sources, fit_score=p.fit_score, fit_reason=p.fit_reason,
             status=p.status, above_threshold=p.fit_score >= threshold,
             group_id=p.group_id,
@@ -113,6 +115,114 @@ class PipelineResult(BaseModel):
             "below": sum(r.status == "below" for r in rows),
         }
         return cls(event=EventOut.of(ev), counts=counts, prospects=rows)
+
+
+# ── stage 03b: outreach run + preview + log ───────────────────────────────
+class OutreachActionResult(BaseModel):
+    prospect_id: int
+    state: str
+    provider: str
+    provider_lead_id: str | None
+    dry_run: bool
+    error: str | None = None
+
+
+class OutreachRunResult(BaseModel):
+    event_id: int
+    provider: str
+    dry_run: bool
+    counts: dict[str, int]
+    results: list[OutreachActionResult]
+    event: EventOut
+    prospects: list[ProspectOut]
+
+    @classmethod
+    def build(cls, ev, prospects, results) -> "OutreachRunResult":
+        from .providers import get_provider
+        prov = get_provider()
+        rows = [ProspectOut.of(p, ev.threshold) for p in
+                sorted(prospects, key=lambda p: -p.fit_score)]
+        counts = {
+            "results_total": len(results),
+            "above_threshold": sum(r.above_threshold for r in rows),
+            "approved": sum(r.status == "approved" for r in rows),
+            "contacted": sum(r.status == "contacted" for r in rows),
+            "rsvp": sum(r.status == "rsvp" for r in rows),
+            "below": sum(r.status == "below" for r in rows),
+        }
+        return cls(
+            event_id=ev.id,
+            provider=prov.name,
+            dry_run=prov.dry_run,
+            counts=counts,
+            results=[OutreachActionResult(
+                prospect_id=r.prospect_id, state=r.state,
+                provider=r.provider, provider_lead_id=r.provider_lead_id,
+                dry_run=r.dry_run, error=r.error,
+            ) for r in results],
+            event=EventOut.of(ev),
+            prospects=rows,
+        )
+
+
+class OutreachPreviewRow(BaseModel):
+    prospect_id: int
+    name: str
+    company: str
+    linkedin_url: str | None
+    fit_score: int
+    eligible: bool
+    skip_reason: str | None
+    note: str
+    note_chars: int
+    message: str
+    payload: dict | None  # the provider-shaped payload that would be sent
+
+
+class OutreachPreview(BaseModel):
+    event_id: int
+    provider: str
+    dry_run: bool
+    count_eligible: int
+    count_skipped: int
+    prospects: list[OutreachPreviewRow]
+
+
+class OutreachLogEntry(BaseModel):
+    id: int
+    prospect_id: int
+    prospect_name: str
+    channel: str
+    state: str
+    provider: str | None
+    provider_lead_id: str | None
+    body_preview: str  # first 300 chars of body
+    ts: datetime
+
+
+class OutreachLogResult(BaseModel):
+    event_id: int
+    count: int
+    entries: list[OutreachLogEntry]
+
+    @classmethod
+    def build(cls, ev) -> "OutreachLogResult":
+        entries: list[OutreachLogEntry] = []
+        for p in ev.prospects:
+            for o in p.outreach:
+                entries.append(OutreachLogEntry(
+                    id=o.id,
+                    prospect_id=p.id,
+                    prospect_name=p.name,
+                    channel=o.channel,
+                    state=o.state,
+                    provider=o.provider,
+                    provider_lead_id=o.provider_lead_id,
+                    body_preview=(o.body or "")[:300],
+                    ts=o.ts,
+                ))
+        entries.sort(key=lambda e: (e.prospect_id, e.ts))
+        return cls(event_id=ev.id, count=len(entries), entries=entries)
 
 
 # ── stage 04: matching ────────────────────────────────────────────────────

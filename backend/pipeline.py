@@ -1,34 +1,38 @@
 """
-pipeline.py — stage 02-03 orchestrator.
+pipeline.py — stage 02-03 orchestrator, split into two halves.
 
-run_pipeline() is the barrier flow behind `POST /events/{id}/run`:
+    run_prospect(db, event)        stage 02 + 03a
+        fan-out -> persist -> score -> floating threshold ->
+        mark each prospect 'below' or 'approved'.
 
-    fan-out  ->  persist surfaced prospects
-             ->  score every prospect
-             ->  set the floating threshold on the event
-             ->  mark below-threshold prospects
-             ->  autonomous outreach for everyone above it
-             ->  commit
+    run_outreach_stage(db, event)  stage 03b
+        for every approved prospect:
+          1. compose() the (note, message)
+          2. provider.send_connection(lead) — DRY_RUN by default
+          3. write an OutreachLog row capturing the result
+        In DRY_RUN, additionally roll the RNG simulator so /match and /roi
+        still have RSVPs to work with. In LIVE mode, status changes come
+        only via real webhook events.
 
-Matching (stage 04) and ROI (stage 05) are deliberately *not* here — they are
-separate barriers that only make sense once the pool has resolved, and they're
-triggered by their own endpoints.
+    run_pipeline(db, event)        facade — does both, in order.
 """
 from __future__ import annotations
+import json
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from . import models, config
 from .agents.prospector import prospect
 from .agents.scorer import score_prospect, floating_threshold
-from .agents.outreach import run_outreach
+from .agents.outreach import compose, run_outreach
+from .providers import get_provider, ProviderResult
 
 
-async def run_pipeline(db: Session, event: models.Event) -> list[models.Prospect]:
-    """Run fan-out, scoring, thresholding, and autonomous outreach for an event."""
+async def run_prospect(db: Session, event: models.Event) -> list[models.Prospect]:
+    """Fan out, persist, score, set the floating threshold, mark approved/below."""
     icp = {"role": event.role, "seniority": event.seniority, "co_stage": event.co_stage}
 
-    # --- stage 02: concurrent fan-out, persist what surfaced --------------
     raw = await prospect(icp)
     prospects: list[models.Prospect] = []
     for r in raw:
@@ -46,14 +50,14 @@ async def run_pipeline(db: Session, event: models.Event) -> list[models.Prospect
             gh_stars=r["gh_stars"],
             x_followers=r["x_followers"],
             li_resolved=r["li_resolved"],
+            linkedin_url=r.get("linkedin_url"),
             sources=r["sources"],
             status="surfaced",
         )
         db.add(p)
         prospects.append(p)
-    db.flush()  # assign ids
+    db.flush()
 
-    # --- stage 03a: score, then float the threshold to hit funnel supply --
     for p in prospects:
         p.fit_score, p.fit_reason = score_prospect(p, event)
 
@@ -61,16 +65,127 @@ async def run_pipeline(db: Session, event: models.Event) -> list[models.Prospect
     event.threshold = floating_threshold([p.fit_score for p in prospects], funnel_target)
 
     for p in prospects:
-        if p.fit_score < event.threshold:
-            p.status = "below"
-
-    # --- stage 03b: autonomous outreach for everyone above the line ------
-    for p, events, status in run_outreach(prospects, event):
-        p.status = status
-        for e in events:
-            db.add(models.OutreachLog(
-                prospect_id=p.id, state=e["state"], body=e["body"], ts=e["ts"],
-            ))
+        p.status = "approved" if p.fit_score >= event.threshold else "below"
 
     db.commit()
     return prospects
+
+
+# ---------- outreach -------------------------------------------------------
+
+
+def _eligible_for_outreach(p: models.Prospect) -> tuple[bool, str | None]:
+    """
+    Layer-A qualification check. Returns (eligible, skip_reason).
+    """
+    if p.status not in ("approved", "contacted", "rsvp"):
+        return False, f"status={p.status!r} (not approved)"
+    if not p.linkedin_url:
+        return False, "no linkedin_url"
+    return True, None
+
+
+def _peer_names_for(target: models.Prospect, attending: list[models.Prospect]) -> list[str]:
+    """The first names already-confirmed peers for the composition reveal."""
+    return [p.name for p in attending if p.id != target.id]
+
+
+def run_outreach_stage(db: Session, event: models.Event) -> list[ProviderResult]:
+    """
+    Provider-backed outreach. Idempotent: wipes prior outreach logs + resets
+    contacted/rsvp prospects back to 'approved' before re-running.
+
+    Returns the per-prospect ProviderResult list (also stored in OutreachLog).
+    """
+    provider = get_provider()
+
+    # idempotent reset
+    targets = [p for p in event.prospects
+               if p.status in ("approved", "contacted", "rsvp")]
+    for p in targets:
+        for o in list(p.outreach):
+            db.delete(o)
+        p.status = "approved"
+    db.flush()
+
+    # personalization peers = the other approved/confirmed prospects for this event
+    peers = [p for p in targets if p.fit_score >= event.threshold]
+
+    results: list[ProviderResult] = []
+    eligible: list[models.Prospect] = []
+
+    for p in targets:
+        ok, skip_reason = _eligible_for_outreach(p)
+        if not ok:
+            db.add(models.OutreachLog(
+                prospect_id=p.id,
+                channel="linkedin",
+                state="failed",
+                body=f"skipped: {skip_reason}",
+                provider=provider.name,
+            ))
+            continue
+
+        peer_names = _peer_names_for(p, peers)
+        msg = compose(p, event, peers=peer_names)
+        lead = provider.build_lead_payload(p, event, note=msg.note, message=msg.message)
+        res = provider.send_connection(lead)
+        results.append(res)
+        eligible.append(p)
+
+        # cache the provider's internal LinkedIn user id so webhooks can
+        # resolve back to this prospect.
+        if res.linkedin_provider_id:
+            p.linkedin_provider_id = res.linkedin_provider_id
+
+        db.add(models.OutreachLog(
+            prospect_id=p.id,
+            channel="linkedin",
+            state=res.state,
+            body=json.dumps(res.payload, default=str)[:8000],
+            ts=datetime.now(timezone.utc),
+            provider=res.provider,
+            provider_lead_id=res.provider_lead_id,
+        ))
+        # In dry-run we don't update prospect.status here — the simulator
+        # below will set it to contacted/rsvp for demo continuity. In live
+        # mode, a successful send_connection means we're now waiting on
+        # invite_accepted / message_replied webhooks; we update status now
+        # so the funnel reflects that.
+        if not provider.dry_run and res.state == "invite_sent":
+            p.status = "contacted"
+
+    db.flush()
+
+    # DRY_RUN continuity: roll the RNG simulator so /match and /roi keep
+    # working end-to-end. We only do this in dry-run because in live mode
+    # real webhooks are the source of truth for status.
+    if provider.dry_run:
+        sim_targets = [p for p in eligible if p.status == "approved"]
+        for p, sim_events, status in run_outreach(sim_targets, event):
+            p.status = status
+            for e in sim_events:
+                # skip the redundant 'sent' entry — provider's dry_run_queued
+                # log already captures the first touch.
+                if e["state"] == "sent":
+                    continue
+                db.add(models.OutreachLog(
+                    prospect_id=p.id,
+                    channel="linkedin",
+                    state="invite_accepted" if e["state"] == "opened" else
+                          "message_replied" if e["state"] == "replied" else
+                          e["state"],
+                    body=e["body"],
+                    ts=e["ts"],
+                    provider=provider.name,
+                ))
+
+    db.commit()
+    return results
+
+
+async def run_pipeline(db: Session, event: models.Event):
+    """Facade — run /prospect then /outreach back-to-back."""
+    await run_prospect(db, event)
+    run_outreach_stage(db, event)
+    return list(event.prospects)

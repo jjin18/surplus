@@ -27,6 +27,10 @@ class LinkedInAdapter(SourceAdapter):
                 "offers": p["offers"],
                 "seeks": p["seeks"],
                 "contact_resolved": p["contact_resolved"],
+                # linkedin_url is optional in the pool — some leads can't be
+                # resolved to a profile URL. We let the merge see whatever
+                # came back so prospect.linkedin_url ends up None when missing.
+                **({"linkedin_url": p["linkedin_url"]} if p.get("linkedin_url") else {}),
             }
             for p in POOL
         ]

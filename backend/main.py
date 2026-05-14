@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
-from .routes import events, pipeline, matching, roi
+from .routes import events, pipeline, matching, roi, webhooks
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ app.include_router(events.router)
 app.include_router(pipeline.router)
 app.include_router(matching.router)
 app.include_router(roi.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/", tags=["meta"])

@@ -72,6 +72,10 @@ class Prospect(Base):
     gh_stars: Mapped[int] = mapped_column(default=0)
     x_followers: Mapped[int] = mapped_column(default=0)
     li_resolved: Mapped[bool] = mapped_column(default=False)
+    linkedin_url: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    # the provider's internal LinkedIn user ID. Resolved once on first
+    # send_connection (Unipile requires this) and cached for webhook matching.
+    linkedin_provider_id: Mapped[Optional[str]] = mapped_column(String(120), default=None)
     sources: Mapped[str] = mapped_column(String(80), default="")  # comma-joined adapter keys
 
     # scoring
@@ -92,14 +96,28 @@ class Prospect(Base):
 
 
 class OutreachLog(Base):
+    """
+    One row per state transition in the outreach lifecycle.
+
+    Canonical states (provider-agnostic):
+        dry_run_queued, queued, invite_sent, invite_accepted,
+        message_sent, message_replied, follow_up_sent, failed
+
+    Legacy email-flavored states (still supported for the simulator):
+        sent, opened, replied
+    """
     __tablename__ = "outreach_log"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     prospect_id: Mapped[int] = mapped_column(ForeignKey("prospects.id"))
-    channel: Mapped[str] = mapped_column(String(20), default="email")
-    state: Mapped[str] = mapped_column(String(20))  # sent | opened | replied
+    channel: Mapped[str] = mapped_column(String(20), default="email")  # email | linkedin
+    state: Mapped[str] = mapped_column(String(30))
     body: Mapped[str] = mapped_column(Text, default="")
     ts: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    # provider tracking (nullable — only set when a real provider was invoked)
+    provider: Mapped[Optional[str]] = mapped_column(String(20), default=None)
+    provider_lead_id: Mapped[Optional[str]] = mapped_column(String(80), default=None)
 
     prospect: Mapped["Prospect"] = relationship(back_populates="outreach")
 
