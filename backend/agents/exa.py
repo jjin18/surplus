@@ -187,6 +187,11 @@ def _parse_result(source: str, r: dict) -> Optional[dict]:
             "role": role,
             "company": company,
             "contact_resolved": True,
+            # Inferred from role + headline text. The scorer uses this to
+            # decide the seniority bonus vs the event's target — without it
+            # everyone defaults to 'Mid' and gets a -8 penalty against any
+            # Senior+ ICP, which is exactly what was wrong before.
+            "seniority": _infer_seniority(role, headline),
             # Headline is the one-liner bio under the name. The LLM judge
             # reads this as a high-signal summary of who the person is.
             "headline": headline,
@@ -330,6 +335,53 @@ _AT_LINE_RE = re.compile(
 )
 _SECTION_KEYWORDS = ("about", "experience", "education", "skills",
                      "licenses", "certifications", "languages")
+
+# Role-keyword → seniority bucket. The scorer (backend/agents/scorer.py)
+# expects one of: Mid / Senior / Staff+ / Leadership. Exa's structured
+# fields don't carry seniority, so we infer from the role + headline text.
+# Order matters — first match wins, most senior bucket first.
+_SENIORITY_HINTS: tuple[tuple[str, str], ...] = (
+    ("Leadership", "founder"),
+    ("Leadership", "ceo"),
+    ("Leadership", "cto"),
+    ("Leadership", "cpo"),
+    ("Leadership", "coo"),
+    ("Leadership", "vp "),
+    ("Leadership", "vp,"),
+    ("Leadership", "vice president"),
+    ("Leadership", "head of"),
+    ("Leadership", "chief "),
+    ("Leadership", "director"),
+    ("Leadership", "partner"),
+    ("Staff+", "principal "),
+    ("Staff+", "staff "),
+    ("Staff+", "distinguished "),
+    ("Staff+", "fellow "),
+    ("Staff+", "founding "),  # "founding engineer" = Staff+ at a seed startup
+    ("Staff+", " lead"),
+    ("Senior", "senior "),
+    ("Senior", "sr. "),
+    ("Senior", "sr "),
+    ("Mid", "junior "),
+    ("Mid", "associate "),
+    ("Mid", "entry "),
+)
+
+
+def _infer_seniority(*texts: str) -> str:
+    """Pick a seniority bucket from one or more role/headline strings.
+
+    Defaults to 'Senior' when no keyword matches — most LinkedIn-discovered
+    professionals are at least Senior, and 'Mid' would mean a -8 hit
+    against any Senior+ ICP target which we don't want by default.
+    """
+    haystack = " ".join(t.lower() for t in texts if t)
+    if not haystack:
+        return "Senior"
+    for bucket, needle in _SENIORITY_HINTS:
+        if needle in haystack:
+            return bucket
+    return "Senior"
 _DATE_TRAILER_RE = re.compile(
     r"\s+(?:\(?Current\)?|\d{4}\s*[-–]\s*(?:Present|\d{4}).*|\d{4}\s*[-–]\s*\d{4}.*)$",
     re.IGNORECASE,
