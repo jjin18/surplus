@@ -142,6 +142,14 @@ class LinkedInProvider(abc.ABC):
         """
         ...
 
+    def resolve_linkedin_user(self, linkedin_url: str) -> Optional[str]:
+        """
+        Resolve a LinkedIn profile URL to the provider's internal user id.
+        Providers that don't need this can leave it None — `send_message`
+        will then fail with a clear error in live mode.
+        """
+        return None
+
     def send_message(self, lead: LeadPayload, linkedin_provider_id: Optional[str] = None) -> ProviderResult:
         """
         Send a DM to an already-connected lead. Only invoked by the webhook

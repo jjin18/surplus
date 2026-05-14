@@ -37,13 +37,18 @@ async def prospect_only(event_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{event_id}/outreach", response_model=schemas.OutreachRunResult)
-def outreach_only(event_id: int, db: Session = Depends(get_db)):
+def outreach_only(event_id: int, db: Session = Depends(get_db),
+                  confirm_live_batch: bool = False):
     """
     Stage 03b only: provider-backed outreach for everyone 'approved'.
 
-    DRY_RUN is the default (UNIPILE_DRY_RUN=true). Idempotent — wipes prior
-    outreach logs and resets contacted/rsvp back to approved before re-running.
-    409s if /prospect has not been called or if no prospect passed the threshold.
+    SAFETY: in LIVE mode this fires real LinkedIn invites to every approved
+    prospect at once. We require ?confirm_live_batch=true as an explicit
+    second-step opt-in to prevent the entire mock pool from getting blasted
+    by accident. DRY_RUN calls bypass the guard.
+
+    Idempotent: wipes prior outreach logs and resets contacted/rsvp back
+    to approved before re-running.
     """
     ev = db.get(models.Event, event_id)
     if not ev:
@@ -56,18 +61,41 @@ def outreach_only(event_id: int, db: Session = Depends(get_db)):
         raise HTTPException(409, "no approved prospects to contact — "
                                  "threshold may be too high for the pool")
 
+    provider = get_provider()
+    if not provider.dry_run and not confirm_live_batch:
+        raise HTTPException(
+            400,
+            f"refusing to fire {len(targets)} real LinkedIn invites in one batch "
+            f"without explicit confirmation. Re-call with ?confirm_live_batch=true, "
+            f"or use POST /events/{ev.id}/prospects/<pid>/dm for one-at-a-time sends.",
+        )
+
     results = run_outreach_stage(db, ev)
     return schemas.OutreachRunResult.build(ev, list(ev.prospects), results)
 
 
 @router.post("/{event_id}/run", response_model=schemas.PipelineResult)
-async def run(event_id: int, db: Session = Depends(get_db)):
+async def run(event_id: int, db: Session = Depends(get_db),
+              confirm_live_batch: bool = False):
     """
     Convenience: /prospect + /outreach back-to-back. Idempotent.
+
+    Same SAFETY guard as /outreach — in LIVE mode this fires real invites
+    to every approved prospect at once. Pass ?confirm_live_batch=true to
+    proceed, or use the per-prospect /dm endpoint for safer one-at-a-time.
     """
     ev = db.get(models.Event, event_id)
     if not ev:
         raise HTTPException(404, "event not found")
+
+    provider = get_provider()
+    if not provider.dry_run and not confirm_live_batch:
+        raise HTTPException(
+            400,
+            "refusing to run the full pipeline in LIVE mode without "
+            "?confirm_live_batch=true. This endpoint fires real LinkedIn "
+            "invites for every approved prospect at once.",
+        )
 
     _wipe_prior_prospects(db, ev)
     prospects = await run_pipeline(db, ev)
@@ -148,6 +176,138 @@ def outreach_preview(event_id: int, db: Session = Depends(get_db)):
         count_skipped=sum(1 for r in rows if not r.eligible),
         prospects=rows,
     )
+
+
+@router.post("/{event_id}/prospects/{prospect_id}/invite")
+def send_connection_invite(event_id: int, prospect_id: int,
+                           db: Session = Depends(get_db)):
+    """
+    Send a LinkedIn connection request to ONE prospect with the composed
+    note. Use this for cold outreach (you're not already connected). The
+    post-accept DM is queued automatically via the /webhooks/unipile
+    handler once the invite is accepted.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    ev = db.get(models.Event, event_id)
+    if not ev:
+        raise HTTPException(404, "event not found")
+    p = db.get(models.Prospect, prospect_id)
+    if not p or p.event_id != event_id:
+        raise HTTPException(404, "prospect not found on this event")
+    if not p.linkedin_url:
+        raise HTTPException(409, "prospect has no linkedin_url")
+
+    provider = get_provider()
+    peers = [q.name for q in ev.prospects if q.id != p.id and
+             q.status in ("approved", "contacted", "rsvp")]
+    msg = compose(p, ev, peers=peers)
+    lead = provider.build_lead_payload(p, ev, note=msg.note, message=msg.message)
+    res = provider.send_connection(lead)
+
+    if res.linkedin_provider_id:
+        p.linkedin_provider_id = res.linkedin_provider_id
+
+    db.add(models.OutreachLog(
+        prospect_id=p.id,
+        channel="linkedin",
+        state=res.state,
+        body=_json.dumps(res.payload, default=str)[:8000],
+        ts=datetime.now(timezone.utc),
+        provider=res.provider,
+        provider_lead_id=res.provider_lead_id,
+    ))
+    if not provider.dry_run and res.state == "invite_sent":
+        p.status = "contacted"
+    db.commit()
+
+    return {
+        "prospect_id": p.id,
+        "prospect_name": p.name,
+        "linkedin_url": p.linkedin_url,
+        "provider": res.provider,
+        "dry_run": res.dry_run,
+        "state": res.state,
+        "provider_lead_id": res.provider_lead_id,
+        "error": res.error,
+        "note_preview": msg.note,
+        "message_preview": msg.message,
+    }
+
+
+@router.post("/{event_id}/prospects/{prospect_id}/dm")
+def send_direct_message(event_id: int, prospect_id: int,
+                        db: Session = Depends(get_db)):
+    """
+    Send a direct LinkedIn DM to ONE prospect, skipping the connection-invite
+    step. Use this when you're already connected to the recipient — the
+    composed `personalized_message` goes straight to their DMs.
+
+    In DRY_RUN: builds the exact Unipile /chats payload and logs it, no
+    network call. In LIVE: resolves linkedin_provider_id (if not cached),
+    POSTs to Unipile /api/v1/chats, returns the result.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    ev = db.get(models.Event, event_id)
+    if not ev:
+        raise HTTPException(404, "event not found")
+    p = db.get(models.Prospect, prospect_id)
+    if not p or p.event_id != event_id:
+        raise HTTPException(404, "prospect not found on this event")
+    if not p.linkedin_url:
+        raise HTTPException(409, "prospect has no linkedin_url")
+
+    provider = get_provider()
+
+    # Resolve & cache the linkedin provider id. We re-resolve when going
+    # live if the cached id is a leftover dry-run placeholder ("dry_li_..."),
+    # since those aren't valid Unipile ids.
+    needs_resolve = (
+        not p.linkedin_provider_id
+        or (not provider.dry_run and p.linkedin_provider_id.startswith("dry_"))
+    )
+    if needs_resolve:
+        try:
+            li_id = provider.resolve_linkedin_user(p.linkedin_url)
+            if li_id:
+                p.linkedin_provider_id = li_id
+                db.commit()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"linkedin lookup failed: {exc}")
+
+    peers = [q.name for q in ev.prospects if q.id != p.id and
+             q.status in ("approved", "contacted", "rsvp")]
+    msg = compose(p, ev, peers=peers)
+    lead = provider.build_lead_payload(p, ev, note=msg.note, message=msg.message)
+
+    res = provider.send_message(lead, linkedin_provider_id=p.linkedin_provider_id)
+
+    db.add(models.OutreachLog(
+        prospect_id=p.id,
+        channel="linkedin",
+        state=res.state,
+        body=_json.dumps(res.payload, default=str)[:8000],
+        ts=datetime.now(timezone.utc),
+        provider=res.provider,
+        provider_lead_id=res.provider_lead_id,
+    ))
+    if not provider.dry_run and res.state == "message_sent":
+        p.status = "contacted"
+    db.commit()
+
+    return {
+        "prospect_id": p.id,
+        "prospect_name": p.name,
+        "linkedin_url": p.linkedin_url,
+        "provider": res.provider,
+        "dry_run": res.dry_run,
+        "state": res.state,
+        "provider_lead_id": res.provider_lead_id,
+        "error": res.error,
+        "message_preview": msg.message,
+        "payload": res.payload,
+    }
 
 
 @router.get("/{event_id}/outreach/log", response_model=schemas.OutreachLogResult)

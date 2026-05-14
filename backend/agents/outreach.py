@@ -59,11 +59,21 @@ def _truncate_note(text: str, limit: int = NOTE_CHAR_LIMIT) -> str:
     return cut.rstrip() + "…"
 
 
-def _peer_reveal(peers: list[str], n: int = 2) -> str:
-    """' Theo and Nadia are already in.' (or empty string if no peers)."""
+def _peer_reveal(peers: list[str], n: int = 2, exclude_first_name: str | None = None) -> str:
+    """' Theo and Nadia are already in.' (or empty string if no peers).
+
+    `exclude_first_name` filters peers whose first name collides with the
+    target's, so a "Daniel" doesn't end up reading "Daniel is already in"
+    in their own outreach.
+    """
     if not peers:
         return ""
-    firsts = [p.split()[0] for p in peers[:n]]
+    firsts = [p.split()[0] for p in peers if p.split()]
+    if exclude_first_name:
+        firsts = [f for f in firsts if f != exclude_first_name]
+    firsts = firsts[:n]
+    if not firsts:
+        return ""
     if len(firsts) == 1:
         names = firsts[0]
     elif len(firsts) == 2:
@@ -132,7 +142,7 @@ def compose(
         )
     if reveal:
         msg_lines.append("")
-        msg_lines.append(f"Confirmed so far:{reveal.strip()}")
+        msg_lines.append(f"Confirmed so far: {reveal.strip()}")
     msg_lines.append("")
     msg_lines.append("Worth a closer look? Happy to share details.")
 

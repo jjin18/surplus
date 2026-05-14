@@ -262,20 +262,22 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
     return () => clearInterval(t);
   }, []);
 
-  // fire the real backend pipeline (fan-out + score + threshold + outreach)
+  // Fire ONLY /prospect — no outreach. The next stage owns sending,
+  // per-prospect with explicit clicks. This prevents the old "intake →
+  // mass-send" footgun.
   useEffect(() => {
     if (!eventId) { setApiDone(true); return; }
     let cancelled = false;
     (async () => {
       try {
-        const result = await api.runPipeline(eventId);
+        const result = await api.runProspect(eventId);
         if (!cancelled) {
           onResult && onResult(result);
           setApiDone(true);
         }
       } catch (e) {
         if (!cancelled) {
-          onError && onError(`Pipeline failed: ${e.message}`);
+          onError && onError(`Prospecting failed: ${e.message}`);
           setApiDone(true);
         }
       }
@@ -355,11 +357,33 @@ function statusMeta(s) {
   return { label: s, cls: "" };
 }
 
-function Prospects({ profile, onNext }) {
-  const sorted = [...PROSPECTS].sort((a, b) => b.score - a.score);
-  const aboveT = sorted.filter((p) => p.score >= THRESHOLD);
+function Prospects({ profile, runResult, eventId, onError, onNext }) {
+  // Use real backend prospects when /run has resolved; fall back to mock
+  // so this component still renders if someone navigates directly to it.
+  const useReal = !!runResult?.prospects;
+  const PROS = useReal
+    ? runResult.prospects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        role: p.role,
+        company: p.company,
+        side: p.side,
+        score: p.fit_score,
+        gh: p.gh_stars,
+        x: p.x_followers,
+        status: p.status,
+        reason: p.fit_reason,
+        offers: p.offers,
+        seeks: p.seeks,
+        worksOn: p.works_on,
+      }))
+    : PROSPECTS;
+  const T = useReal ? runResult.event.threshold : THRESHOLD;
+
+  const sorted = [...PROS].sort((a, b) => b.score - a.score);
+  const aboveT = sorted.filter((p) => p.score >= T);
   const [selected, setSelected] = useState(sorted[0].id);
-  const sel = PROSPECTS.find((p) => p.id === selected);
+  const sel = PROS.find((p) => p.id === selected) || sorted[0];
 
   // build the auto-outreach activity feed (interleaved rounds)
   const feed = [];
@@ -376,8 +400,59 @@ function Prospects({ profile, onNext }) {
   const shown = feed.slice(0, revealed);
   const sentN = shown.filter((f) => f.t === "sent").length;
   const rsvpN = shown.filter((f) => f.t === "rsvp").length;
-  const otherRsvps = PROSPECTS.filter((x) => x.status === "rsvp" && x.id !== sel.id)
+  const otherRsvps = PROS.filter((x) => x.status === "rsvp" && x.id !== sel.id)
     .slice(0, 2).map((x) => x.name.split(" ")[0]).join(" and ");
+
+  // === backend-driven outreach review ===
+  // previewById[prospect_id] = { note, message, payload, ... } from /outreach/preview
+  // sendState[prospect_id]   = { status, kind, error } — local per-prospect send tracking
+  const [previewById, setPreviewById] = useState({});
+  const [sendState, setSendState] = useState({});
+  const [providerInfo, setProviderInfo] = useState(null);
+
+  useEffect(() => {
+    if (!eventId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pv = await api.previewOutreach(eventId);
+        if (cancelled) return;
+        const map = {};
+        for (const row of pv.prospects) map[row.prospect_id] = row;
+        setPreviewById(map);
+        setProviderInfo({ provider: pv.provider, dry_run: pv.dry_run });
+      } catch (e) {
+        onError && onError(`Couldn't load outreach preview: ${e.message}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [eventId, onError]);
+
+  const fire = async (kind, prospectId) => {
+    setSendState((s) => ({ ...s, [prospectId]: { status: "sending", kind } }));
+    try {
+      const fn = kind === "invite" ? api.sendInvite : api.sendDirectMessage;
+      const res = await fn(eventId, prospectId);
+      setSendState((s) => ({
+        ...s,
+        [prospectId]: {
+          status: res.error ? "failed" : "sent",
+          kind,
+          state: res.state,
+          error: res.error,
+          dry_run: res.dry_run,
+        },
+      }));
+    } catch (e) {
+      setSendState((s) => ({
+        ...s,
+        [prospectId]: { status: "failed", kind, error: e.message },
+      }));
+    }
+  };
+
+  const selPreview = previewById[sel.id];
+  const selSend = sendState[sel.id];
 
   const feedLabel = { sent: "Sent", open: "Opened", rsvp: "Replied — RSVP", wait: "Opened — awaiting reply" };
   const feedIcon = { sent: <Mail size={11} />, open: <Activity size={11} />, rsvp: <Check size={11} strokeWidth={3} />, wait: <Circle size={7} /> };
@@ -408,7 +483,7 @@ function Prospects({ profile, onNext }) {
             const m = statusMeta(p.status);
             return (
               <button key={p.id}
-                className={`prospect-row ${selected === p.id ? "sel" : ""} ${p.score < THRESHOLD ? "dim" : ""}`}
+                className={`prospect-row ${selected === p.id ? "sel" : ""} ${p.score < T ? "dim" : ""}`}
                 onClick={() => setSelected(p.id)}>
                 <span className="pr-name">
                   <span className="pr-name-main">{p.name}
@@ -421,7 +496,7 @@ function Prospects({ profile, onNext }) {
                   <span className="sig"><Send size={11} /> {fmtNum(p.x)}</span>
                 </span>
                 <span className="pr-score">
-                  <span className={`score-num ${p.score >= THRESHOLD ? "ok" : "no"}`}>{p.score}</span>
+                  <span className={`score-num ${p.score >= T ? "ok" : "no"}`}>{p.score}</span>
                   <span className={`st-tag ${m.cls}`}>{m.label}</span>
                 </span>
               </button>
@@ -429,7 +504,7 @@ function Prospects({ profile, onNext }) {
           })}
           <div className="threshold-note">
             <span className="threshold-line" />
-            Threshold {THRESHOLD} — floats with funnel supply ({Math.round(profile.headcount / 0.6)} target)
+            Threshold {T} — floats with funnel supply ({Math.round(profile.headcount / 0.6)} target)
           </div>
         </div>
 
@@ -440,7 +515,7 @@ function Prospects({ profile, onNext }) {
                 <h3>{sel.name}</h3>
                 <p>{sel.role} · {sel.company}</p>
               </div>
-              <span className={`score-badge ${sel.score >= THRESHOLD ? "ok" : "no"}`}>{sel.score}</span>
+              <span className={`score-badge ${sel.score >= T ? "ok" : "no"}`}>{sel.score}</span>
             </div>
             <div className="pd-section">
               <p className="pd-label">Fit reasoning</p>
@@ -454,17 +529,60 @@ function Prospects({ profile, onNext }) {
               </div>
             </div>
             <div className="pd-section">
-              <p className="pd-label">Agent outreach</p>
-              {sel.score >= THRESHOLD ? (
-                <div className="outreach">
-                  <span className="outreach-status">
-                    <Check size={11} strokeWidth={3} /> Auto-sent · Opened ·{" "}
-                    {sel.status === "rsvp" ? "RSVP'd" : "awaiting reply"}
+              <p className="pd-label">
+                Agent outreach
+                {providerInfo && (
+                  <span className="prov-tag">
+                    {providerInfo.provider}{providerInfo.dry_run ? " · dry-run" : " · LIVE"}
                   </span>
-                  <p>Hi {sel.name.split(" ")[0]} — {GOAL_CONFIG[profile.goal].outreach(profile)}</p>
-                  <p>Given your work on {sel.worksOn.replace(/-/g, " ")}, thought you'd find the room
-                    valuable{otherRsvps ? ` — ${otherRsvps} are already in` : ""}.</p>
-                  <span className="outreach-tag"><Zap size={11} /> composition reveal · auto-personalized on signal</span>
+                )}
+              </p>
+              {sel.score >= T ? (
+                <div className="outreach">
+                  {selPreview ? (
+                    <>
+                      <p className="msg-label">Connection note ({selPreview.note_chars} chars)</p>
+                      <p className="msg-body">{selPreview.note}</p>
+                      <p className="msg-label">Post-accept DM</p>
+                      <p className="msg-body">{selPreview.message}</p>
+                      <span className="outreach-tag">
+                        <Zap size={11} /> composed by agent · personalized on signal + composition reveal
+                      </span>
+                      <div className="send-row">
+                        <button className="btn-send btn-send-invite"
+                                disabled={!selPreview.eligible || selSend?.status === "sending"}
+                                onClick={() => fire("invite", sel.id)}>
+                          {selSend?.kind === "invite" && selSend.status === "sending"
+                            ? "Sending invite…"
+                            : <>Send invite <ArrowRight size={14} /></>}
+                        </button>
+                        <button className="btn-send btn-send-dm"
+                                disabled={!selPreview.eligible || selSend?.status === "sending"}
+                                onClick={() => fire("dm", sel.id)}>
+                          {selSend?.kind === "dm" && selSend.status === "sending"
+                            ? "Sending DM…"
+                            : <>Send DM (if connected) <ArrowRight size={14} /></>}
+                        </button>
+                      </div>
+                      {selSend && selSend.status === "sent" && (
+                        <div className="send-result ok">
+                          <Check size={11} strokeWidth={3} /> {selSend.kind === "invite" ? "Invite" : "DM"} sent
+                          {selSend.dry_run && <span> · dry-run</span>}
+                          {selSend.state && <span> · state: {selSend.state}</span>}
+                        </div>
+                      )}
+                      {selSend && selSend.status === "failed" && (
+                        <div className="send-result err">
+                          ⚠ {selSend.kind === "invite" ? "Invite" : "DM"} failed: {selSend.error}
+                        </div>
+                      )}
+                      {!selPreview.eligible && (
+                        <div className="send-result muted">Skipped: {selPreview.skip_reason}</div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="muted-text">Loading composed messages…</p>
+                  )}
                 </div>
               ) : (
                 <div className="outreach muted">
@@ -498,7 +616,7 @@ function Prospects({ profile, onNext }) {
 
       <div className="stage-foot">
         <p className="foot-note">
-          {aboveT.length} of {PROSPECTS.length} above threshold · agent sent every one · {PROSPECTS.filter((p) => p.status === "rsvp").length} RSVP'd
+          {aboveT.length} of {PROS.length} above threshold · agent sent every one · {PROS.filter((p) => p.status === "rsvp").length} RSVP'd
         </p>
         <button className="btn-primary" onClick={onNext}>Build guest list <ArrowRight size={16} /></button>
       </div>
@@ -820,7 +938,9 @@ export default function App() {
                                     onResult={setRunResult}
                                     onError={setApiError}
                                     onDone={() => go(2)} />}
-          {stage === 2 && <Prospects profile={profile} runResult={runResult} onNext={() => go(3)} />}
+          {stage === 2 && <Prospects profile={profile} runResult={runResult}
+                                       eventId={eventId} onError={setApiError}
+                                       onNext={() => go(3)} />}
           {stage === 3 && <Matching profile={profile} onNext={() => go(4)} />}
           {stage === 4 && <ROI profile={profile} onRestart={restart} />}
         </main>
@@ -1022,6 +1142,28 @@ const CSS = `
   text-transform:uppercase; letter-spacing:0.04em; font-weight:700; }
 .outreach-tag { font-size:9px; color:var(--ink-faint); display:flex; align-items:center; gap:5px;
   text-transform:uppercase; letter-spacing:0.03em; margin-top:2px; font-weight:600; }
+.msg-label { font-size:9px !important; color:var(--ink-faint) !important; text-transform:uppercase;
+  letter-spacing:0.05em; font-weight:700; margin-top:8px; }
+.msg-body { font-size:11.5px !important; color:var(--ink) !important; line-height:1.55 !important;
+  white-space:pre-wrap; background:#fff; border:1px solid var(--line); border-radius:8px;
+  padding:10px 12px; }
+.muted-text { color:var(--ink-faint); font-size:11px; font-style:italic; }
+.prov-tag { margin-left:8px; padding:2px 7px; background:var(--acc-soft); color:var(--acc);
+  border-radius:var(--r-pill); font-size:9px; font-weight:700; letter-spacing:0.04em;
+  text-transform:uppercase; }
+.send-row { display:flex; gap:8px; margin-top:6px; }
+.btn-send { flex:1; padding:9px 12px; border-radius:8px; border:1px solid var(--acc);
+  background:var(--acc); color:#fff; font-family:inherit; font-size:11.5px; font-weight:600;
+  cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  transition:all 0.18s; }
+.btn-send:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 4px 12px rgba(108,67,217,0.25); }
+.btn-send:disabled { opacity:0.5; cursor:not-allowed; }
+.btn-send-dm { background:#fff; color:var(--acc); }
+.send-result { margin-top:6px; font-size:10.5px; padding:7px 10px; border-radius:6px;
+  display:flex; align-items:center; gap:6px; font-weight:600; }
+.send-result.ok { background:#e9f7ec; color:#1f7a3e; }
+.send-result.err { background:#fff5f5; color:#b03030; }
+.send-result.muted { background:var(--panel-2); color:var(--ink-faint); font-weight:500; }
 .agent-feed { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-card);
   padding:18px; box-shadow:var(--shadow-sm); }
 .feed-scroll { display:flex; flex-direction:column; gap:6px; max-height:176px; overflow:hidden; }

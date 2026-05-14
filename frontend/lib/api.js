@@ -36,7 +36,13 @@ export const api = {
   runOutreach: (id) => request(`/events/${id}/outreach`, { method: "POST" }),
   getOutreachLog: (id) => request(`/events/${id}/outreach/log`),
 
-  // convenience — full pipeline in one call
+  // per-prospect, one-at-a-time. Safer than the batch /outreach for live.
+  sendInvite: (eid, pid) =>
+    request(`/events/${eid}/prospects/${pid}/invite`, { method: "POST" }),
+  sendDirectMessage: (eid, pid) =>
+    request(`/events/${eid}/prospects/${pid}/dm`, { method: "POST" }),
+
+  // convenience — full pipeline in one call (BLOCKED in live without confirm)
   runPipeline: (id) => request(`/events/${id}/run`, { method: "POST" }),
 
   // 04 matching

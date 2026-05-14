@@ -211,6 +211,18 @@ class UnipileProvider(LinkedInProvider):
             "attendees_ids": [provider_id],
         }
 
+    def resolve_linkedin_user(self, linkedin_url: str) -> str:
+        """
+        Resolve a LinkedIn profile URL to Unipile's internal provider_id.
+
+        In dry-run, returns a deterministic fake id so the rest of the
+        pipeline can be exercised without HTTP.
+        """
+        handle = _linkedin_handle(linkedin_url)
+        if self._dry_run:
+            return f"dry_li_{handle}"
+        return self._lookup_provider_id(handle)
+
     def send_message(self, lead: LeadPayload, linkedin_provider_id: Optional[str] = None) -> ProviderResult:
         provider_id = linkedin_provider_id
         if not provider_id and not self._dry_run:
