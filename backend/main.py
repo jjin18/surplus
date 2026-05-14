@@ -116,6 +116,40 @@ def anthropic_diagnostics():
     return out
 
 
+@app.get("/api/diagnostics/exa/discover", tags=["meta"])
+def exa_discover_probe(
+    source: str = "linkedin",
+    role: str = "ML platform engineer",
+    seniority: str = "Senior",
+    co_stage: str = "Seed",
+    max_candidates: int = 10,
+):
+    """
+    Probe Exa discovery directly for any source + ICP combo and return the
+    raw parsed candidates. Useful when /prospect feels like a black box —
+    this is the exact list our SourceAdapter would feed into the merge.
+
+    Example:
+        /api/diagnostics/exa/discover?source=linkedin&role=ML+engineer&seniority=Senior
+    """
+    from .agents import exa
+    if source not in ("linkedin", "github", "x"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "source must be one of: linkedin, github, x")
+    icp = {"role": role, "seniority": seniority, "co_stage": co_stage}
+    available = exa.exa_available()
+    query = exa._build_query(source, icp)
+    candidates = exa.discover_via_exa(source, icp, max_candidates=max_candidates) if available else []
+    return {
+        "exa_configured": available,
+        "source": source,
+        "icp": icp,
+        "exa_query": query,
+        "count": len(candidates),
+        "candidates": candidates,
+    }
+
+
 @app.get("/api/diagnostics/exa", tags=["meta"])
 def exa_diagnostics():
     """
