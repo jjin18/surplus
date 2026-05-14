@@ -118,6 +118,14 @@ class PipelineResult(BaseModel):
 
 
 # ── stage 03b: outreach run + preview + log ───────────────────────────────
+
+class OutreachOverride(BaseModel):
+    """Optional human edits to the agent-composed note/message before send."""
+    note: str | None = None
+    message: str | None = None
+
+
+
 class OutreachActionResult(BaseModel):
     prospect_id: int
     state: str

@@ -1,24 +1,12 @@
 """
 agents/outreach.py — stage 03b, message composition + simulated funnel.
 
-Two responsibilities, kept separate so the provider layer can reuse compose()
-without dragging the simulator along:
-
   compose(prospect, event, peers=?, host_bio=?) -> Message
-      Produces both the LinkedIn-format connection note (≤280 chars, hard
-      LinkedIn cap is 300) and the longer post-accept first message.
-
-      The signature is LLM-ready — adding an Anthropic-backed implementation
-      later is a pure function-body change. `host_bio` is accepted now so
-      call sites don't churn when the LLM upgrade lands.
+      Produces the LinkedIn connection note (≤280 chars) and the longer
+      post-accept DM. host_bio param is reserved for the eventual LLM swap.
 
   run_outreach(prospects, event, rng=?) -> [(prospect, events, status)]
-      The original RNG-seeded simulator. Used in DRY_RUN mode for demo
-      continuity (so /match and /roi still have RSVPs to work with). Picks
-      `msg.note` as the "first touch" body for OutreachLog.
-
-The provider layer (backend/providers/*) calls compose() directly and does
-NOT call run_outreach(). The simulator is strictly the local-only fallback.
+      RNG-seeded simulator used in DRY_RUN mode for demo continuity.
 """
 from __future__ import annotations
 import random

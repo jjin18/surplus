@@ -405,8 +405,10 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
 
   // === backend-driven outreach review ===
   // previewById[prospect_id] = { note, message, payload, ... } from /outreach/preview
-  // sendState[prospect_id]   = { status, kind, error } — local per-prospect send tracking
+  // editsById[prospect_id]   = { note, message } — operator's in-flight edits
+  // sendState[prospect_id]   = { status, kind, error } — per-prospect send tracking
   const [previewById, setPreviewById] = useState({});
+  const [editsById, setEditsById] = useState({});
   const [sendState, setSendState] = useState({});
   const [providerInfo, setProviderInfo] = useState(null);
 
@@ -418,8 +420,14 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
         const pv = await api.previewOutreach(eventId);
         if (cancelled) return;
         const map = {};
-        for (const row of pv.prospects) map[row.prospect_id] = row;
+        const edits = {};
+        for (const row of pv.prospects) {
+          map[row.prospect_id] = row;
+          // seed the editable state with the agent's composition
+          edits[row.prospect_id] = { note: row.note, message: row.message };
+        }
         setPreviewById(map);
+        setEditsById((cur) => ({ ...edits, ...cur }));  // don't clobber in-flight edits
         setProviderInfo({ provider: pv.provider, dry_run: pv.dry_run });
       } catch (e) {
         onError && onError(`Couldn't load outreach preview: ${e.message}`);
@@ -428,11 +436,31 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
     return () => { cancelled = true; };
   }, [eventId, onError]);
 
+  const updateEdit = (prospectId, field, value) => {
+    setEditsById((s) => ({
+      ...s,
+      [prospectId]: { ...s[prospectId], [field]: value },
+    }));
+  };
+
+  const resetEdit = (prospectId) => {
+    const orig = previewById[prospectId];
+    if (!orig) return;
+    setEditsById((s) => ({
+      ...s,
+      [prospectId]: { note: orig.note, message: orig.message },
+    }));
+  };
+
   const fire = async (kind, prospectId) => {
     setSendState((s) => ({ ...s, [prospectId]: { status: "sending", kind } }));
     try {
       const fn = kind === "invite" ? api.sendInvite : api.sendDirectMessage;
-      const res = await fn(eventId, prospectId);
+      const edits = editsById[prospectId] || {};
+      const res = await fn(eventId, prospectId, {
+        note: edits.note,
+        message: edits.message,
+      });
       setSendState((s) => ({
         ...s,
         [prospectId]: {
@@ -452,7 +480,12 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   };
 
   const selPreview = previewById[sel.id];
+  const selEdits = editsById[sel.id] || { note: "", message: "" };
   const selSend = sendState[sel.id];
+  const isDirty = selPreview && (
+    selEdits.note !== selPreview.note ||
+    selEdits.message !== selPreview.message
+  );
 
   const feedLabel = { sent: "Sent", open: "Opened", rsvp: "Replied — RSVP", wait: "Opened — awaiting reply" };
   const feedIcon = { sent: <Mail size={11} />, open: <Activity size={11} />, rsvp: <Check size={11} strokeWidth={3} />, wait: <Circle size={7} /> };
@@ -541,12 +574,28 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
                 <div className="outreach">
                   {selPreview ? (
                     <>
-                      <p className="msg-label">Connection note ({selPreview.note_chars} chars)</p>
-                      <p className="msg-body">{selPreview.note}</p>
+                      <p className="msg-label">
+                        Connection note ({selEdits.note?.length || 0} / 300 chars)
+                        {selEdits.note?.length > 300 && (
+                          <span className="msg-warn"> · over LinkedIn's 300-char limit</span>
+                        )}
+                      </p>
+                      <textarea className="msg-edit"
+                                value={selEdits.note || ""}
+                                onChange={(e) => updateEdit(sel.id, "note", e.target.value)}
+                                rows={4} maxLength={400} />
                       <p className="msg-label">Post-accept DM</p>
-                      <p className="msg-body">{selPreview.message}</p>
+                      <textarea className="msg-edit msg-edit-long"
+                                value={selEdits.message || ""}
+                                onChange={(e) => updateEdit(sel.id, "message", e.target.value)}
+                                rows={8} />
                       <span className="outreach-tag">
-                        <Zap size={11} /> composed by agent · personalized on signal + composition reveal
+                        <Zap size={11} /> composed by agent · edit before sending
+                        {isDirty && (
+                          <button className="btn-reset" onClick={() => resetEdit(sel.id)}>
+                            reset to agent text
+                          </button>
+                        )}
                       </span>
                       <div className="send-row">
                         <button className="btn-send btn-send-invite"
@@ -1147,6 +1196,18 @@ const CSS = `
 .msg-body { font-size:11.5px !important; color:var(--ink) !important; line-height:1.55 !important;
   white-space:pre-wrap; background:#fff; border:1px solid var(--line); border-radius:8px;
   padding:10px 12px; }
+.msg-edit { width:100%; font-family:'Inter',system-ui,sans-serif; font-size:11.5px;
+  color:var(--ink); line-height:1.55; background:#fff; border:1px solid var(--line);
+  border-radius:8px; padding:10px 12px; resize:vertical; box-sizing:border-box;
+  transition:border-color 0.15s, box-shadow 0.15s; }
+.msg-edit:focus { outline:none; border-color:var(--acc);
+  box-shadow:0 0 0 3px rgba(108,67,217,0.12); }
+.msg-edit-long { min-height:120px; }
+.msg-warn { color:#b03030; font-weight:600; }
+.btn-reset { margin-left:auto; background:transparent; border:none; color:var(--acc);
+  font-family:inherit; font-size:9px; font-weight:600; cursor:pointer;
+  text-transform:uppercase; letter-spacing:0.04em; padding:0; }
+.btn-reset:hover { text-decoration:underline; }
 .muted-text { color:var(--ink-faint); font-size:11px; font-style:italic; }
 .prov-tag { margin-left:8px; padding:2px 7px; background:var(--acc-soft); color:var(--acc);
   border-radius:var(--r-pill); font-size:9px; font-weight:700; letter-spacing:0.04em;
