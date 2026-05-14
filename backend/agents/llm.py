@@ -33,12 +33,12 @@ except ImportError:
     _SDK_AVAILABLE = False
 
 
-# Discovery runs Haiku 4.5. Web search itself is the wall-clock floor
-# — each call fans out to real HTTP fetches inside Anthropic's tool
-# (5-15s per round) — but Haiku trims the *between-search* reasoning
-# time vs Sonnet/Opus, and for "fill in the emit_candidate fields from
-# what you just read" Haiku is plenty. Judge stays on Haiku too.
-MODEL = "claude-haiku-4-5"
+# Discovery runs Sonnet 4.6 — Haiku 4.5 was attempted but doesn't appear
+# to support web_search_20260209 (every discover_candidates call started
+# 400ing). Sonnet supports the newer tool with dynamic filtering and is
+# still the fastest model that works end-to-end. Judge stays on Haiku
+# because it's plain text-in / verdict-out, no web_search tool.
+MODEL = "claude-sonnet-4-6"
 JUDGE_MODEL = "claude-haiku-4-5"
 # Cap each adapter's web_search iterations. 2 is plenty for finding a
 # handful of candidates and is the biggest single latency lever on
