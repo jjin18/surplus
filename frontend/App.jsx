@@ -255,12 +255,32 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   const steps = ["Prospecting", "Fit scoring", "Auto-outreach"];
   const [progress, setProgress] = useState(0);
   const [apiDone, setApiDone] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
 
-  // visual progress bar — purely cosmetic, runs alongside the real call
+  // Cosmetic progress: walks up to 95% in ~2s, then sits there waiting on
+  // the real /prospect call. In LLM mode that call can take 60-120s, so
+  // jumping to 100% in 2s and looking "done" is misleading.
   useEffect(() => {
-    const t = setInterval(() => setProgress((p) => (p >= 100 ? (clearInterval(t), 100) : p + 2)), 45);
+    const t = setInterval(() => {
+      setProgress((p) => {
+        const cap = 95;
+        if (p >= cap) { clearInterval(t); return cap; }
+        return p + 2;
+      });
+    }, 45);
     return () => clearInterval(t);
   }, []);
+
+  // Wall-clock since mount, used to surface "still working" copy.
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Snap to 100% the moment the API call returns.
+  useEffect(() => {
+    if (apiDone) setProgress(100);
+  }, [apiDone]);
 
   // Fire ONLY /prospect — no outreach. The next stage owns sending,
   // per-prospect with explicit clicks. This prevents the old "intake →
@@ -345,6 +365,16 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
         <span className="pipe-counter-num">{found}</span>
         <span className="pipe-counter-lbl">candidates surfaced · target {funnelTarget} good-fits</span>
       </div>
+
+      {progress >= 95 && !apiDone && (
+        <div className="pipe-counter" style={{ opacity: 0.8, fontSize: "0.95rem" }}>
+          <span className="pipe-counter-lbl">
+            Still gathering ({elapsed}s elapsed). LLM-mode prospecting can take 60–120s
+            — web_search across GitHub / LinkedIn / X plus a per-candidate ICP verdict.
+            {elapsed > 90 && " Check the backend logs if this keeps growing."}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -751,11 +781,20 @@ function Matching({ profile, onNext }) {
         <p className="eyebrow">Stage 04 — Symbiotic matching market</p>
         <h1>Guest list as a value graph</h1>
         <p className="lede">
-          Edges aren't friendship — they're <em>predicted total value created</em> by a
-          pairing. Two kinds: <em>symbiotic</em> (one side's offer meets another's seek —
-          a builder and someone who can hire them, a founder and an investor) and{" "}
-          <em>affinity</em> (worked on similar things). {groupWord}s are formed to
-          maximize the first. {FORMAT_CONFIG[profile.format].topo}.
+          Edges aren't friendship — they're <em>predicted mutual value</em>. Nodes
+          are people; edges split into <em>symbiotic</em> (offer meets seek — a
+          builder and someone hiring them, a founder and an investor) and{" "}
+          <em>affinity</em> (worked on similar things). The objective is{" "}
+          <em>multi-sided</em>: a weighted sum across attendees <em>and</em> the
+          host/sponsor side, not just attendee-to-attendee gain.
+        </p>
+        <p className="lede">
+          Two passes. <em>Pre-RSVP</em> — community detection over the value
+          graph picks who to even invite. <em>Post-RSVP</em> — given who actually
+          said yes, a seating/assignment optimizer decides who sits near whom.
+          Different inputs, different timing; the second can't run until RSVPs
+          land. {groupWord}s are formed to maximize the multi-sided objective.{" "}
+          {FORMAT_CONFIG[profile.format].topo}.
         </p>
       </header>
 
@@ -843,7 +882,7 @@ function Matching({ profile, onNext }) {
 
       <div className="stage-foot">
         <p className="foot-note">
-          {attending.length} confirmed · {groups.length} {groupWord.toLowerCase()}s · objective = Σ symbiotic value, affinity as tiebreak
+          {attending.length} confirmed · {groups.length} {groupWord.toLowerCase()}s · objective = weighted Σ over attendees + host side · affinity as tiebreak
         </p>
         <button className="btn-primary" onClick={onNext}>Settle ROI <ArrowRight size={16} /></button>
       </div>
