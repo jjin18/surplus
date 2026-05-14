@@ -79,9 +79,10 @@ _CLIENT: Optional["anthropic.Anthropic"] = None
 def _client() -> "anthropic.Anthropic":
     global _CLIENT
     if _CLIENT is None:
-        # max_retries=5 lets the SDK absorb transient 429s and 5xx without
-        # crashing the whole prospecting run on a single spike.
-        _CLIENT = anthropic.Anthropic(api_key=_api_key(), max_retries=5)
+        # max_retries=2: enough to absorb a single 429 / 5xx blip without
+        # making the user wait through 5 silent backoff rounds (which can
+        # add 30-60s of invisible latency on first-run discovery).
+        _CLIENT = anthropic.Anthropic(api_key=_api_key(), max_retries=2)
     return _CLIENT
 
 
