@@ -382,8 +382,11 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
 
   const sorted = [...PROS].sort((a, b) => b.score - a.score);
   const aboveT = sorted.filter((p) => p.score >= T);
-  const [selected, setSelected] = useState(sorted[0].id);
-  const sel = PROS.find((p) => p.id === selected) || sorted[0];
+  // PROS can be empty when LLM mode is on and the relevance gate drops
+  // every candidate. Seed `selected` from an optional chain so the hook
+  // doesn't crash; the empty-state early return below catches the rest.
+  const [selected, setSelected] = useState(sorted[0]?.id ?? null);
+  const sel = PROS.find((p) => p.id === selected) || sorted[0] || null;
 
   // build the auto-outreach activity feed (interleaved rounds)
   const feed = [];
@@ -400,8 +403,10 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   const shown = feed.slice(0, revealed);
   const sentN = shown.filter((f) => f.t === "sent").length;
   const rsvpN = shown.filter((f) => f.t === "rsvp").length;
-  const otherRsvps = PROS.filter((x) => x.status === "rsvp" && x.id !== sel.id)
-    .slice(0, 2).map((x) => x.name.split(" ")[0]).join(" and ");
+  const otherRsvps = sel
+    ? PROS.filter((x) => x.status === "rsvp" && x.id !== sel.id)
+        .slice(0, 2).map((x) => x.name.split(" ")[0]).join(" and ")
+    : "";
 
   // === backend-driven outreach review ===
   // previewById[prospect_id] = { note, message, payload, ... } from /outreach/preview
@@ -479,9 +484,9 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
     }
   };
 
-  const selPreview = previewById[sel.id];
-  const selEdits = editsById[sel.id] || { note: "", message: "" };
-  const selSend = sendState[sel.id];
+  const selPreview = sel ? previewById[sel.id] : null;
+  const selEdits = sel ? (editsById[sel.id] || { note: "", message: "" }) : { note: "", message: "" };
+  const selSend = sel ? sendState[sel.id] : null;
   const isDirty = selPreview && (
     selEdits.note !== selPreview.note ||
     selEdits.message !== selPreview.message
@@ -489,6 +494,29 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
 
   const feedLabel = { sent: "Sent", open: "Opened", rsvp: "Replied — RSVP", wait: "Opened — awaiting reply" };
   const feedIcon = { sent: <Mail size={11} />, open: <Activity size={11} />, rsvp: <Check size={11} strokeWidth={3} />, wait: <Circle size={7} /> };
+
+  // Empty state: prospecting completed but nothing passed the ICP gate.
+  // Common cause is LLM mode dropping every candidate via judge_relevance,
+  // or the LLM web_search calls erroring out. Render a useful explanation
+  // instead of the (white-screen) crash that used to happen on sel.id.
+  if (PROS.length === 0) {
+    return (
+      <div className="stage">
+        <header className="stage-head">
+          <p className="eyebrow">Stage 03 — Auto-outreach</p>
+          <h1>No candidates surfaced</h1>
+          <p className="lede">
+            Prospecting completed but the ICP gate dropped every result. If you're
+            running with an <code>ANTHROPIC_API_KEY</code> set, the relevance verdict
+            judged none of the discovered profiles to be a strong match — try
+            broadening the event's ICP (role, seniority, co-stage), or unset the key
+            to fall back to the curated mock pool. Check the backend logs for
+            per-candidate drop reasons.
+          </p>
+        </header>
+      </div>
+    );
+  }
 
   return (
     <div className="stage">
