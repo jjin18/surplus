@@ -255,12 +255,32 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   const steps = ["Prospecting", "Fit scoring", "Auto-outreach"];
   const [progress, setProgress] = useState(0);
   const [apiDone, setApiDone] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
 
-  // visual progress bar — purely cosmetic, runs alongside the real call
+  // Cosmetic progress: walks up to 95% in ~2s, then sits there waiting on
+  // the real /prospect call. In LLM mode that call can take 60-120s, so
+  // jumping to 100% in 2s and looking "done" is misleading.
   useEffect(() => {
-    const t = setInterval(() => setProgress((p) => (p >= 100 ? (clearInterval(t), 100) : p + 2)), 45);
+    const t = setInterval(() => {
+      setProgress((p) => {
+        const cap = 95;
+        if (p >= cap) { clearInterval(t); return cap; }
+        return p + 2;
+      });
+    }, 45);
     return () => clearInterval(t);
   }, []);
+
+  // Wall-clock since mount, used to surface "still working" copy.
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Snap to 100% the moment the API call returns.
+  useEffect(() => {
+    if (apiDone) setProgress(100);
+  }, [apiDone]);
 
   // Fire ONLY /prospect — no outreach. The next stage owns sending,
   // per-prospect with explicit clicks. This prevents the old "intake →
@@ -345,6 +365,16 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
         <span className="pipe-counter-num">{found}</span>
         <span className="pipe-counter-lbl">candidates surfaced · target {funnelTarget} good-fits</span>
       </div>
+
+      {progress >= 95 && !apiDone && (
+        <div className="pipe-counter" style={{ opacity: 0.8, fontSize: "0.95rem" }}>
+          <span className="pipe-counter-lbl">
+            Still gathering ({elapsed}s elapsed). LLM-mode prospecting can take 60–120s
+            — web_search across GitHub / LinkedIn / X plus a per-candidate ICP verdict.
+            {elapsed > 90 && " Check the backend logs if this keeps growing."}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
