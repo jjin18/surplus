@@ -80,7 +80,13 @@ class UnipileProvider(LinkedInProvider):
         dry_run: bool = True,
         require_signature: bool = True,
     ) -> None:
-        self.dsn = (dsn or "").rstrip("/")
+        # Normalize the DSN — Unipile's dashboard shows it as
+        # `api40.unipile.com:17054` without a scheme, so prepend https://
+        # if the caller forgot. Also strip trailing slash.
+        raw_dsn = (dsn or "").strip().rstrip("/")
+        if raw_dsn and not raw_dsn.startswith(("http://", "https://")):
+            raw_dsn = f"https://{raw_dsn}"
+        self.dsn = raw_dsn
         self.api_key = api_key
         self.account_id = account_id
         self.webhook_secret = webhook_secret
