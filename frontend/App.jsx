@@ -169,12 +169,6 @@ function Intake({ profile, setProfile, onRun }) {
     <div className="stage">
       <header className="stage-head">
         <h1>Define the event mechanism</h1>
-        <p className="lede">
-          Three blocks of private information. The <em>goal</em> becomes the matcher's
-          objective function and the conversion definition; the <em>budget</em> is the
-          constraint it optimizes against and the denominator for ROI. Works the same
-          for a dinner or a hackathon — only the topology changes.
-        </p>
       </header>
 
       <div className="form-grid">
@@ -238,7 +232,6 @@ function Intake({ profile, setProfile, onRun }) {
       </div>
 
       <div className="stage-foot">
-        <p className="foot-note">On submit, the agent pipeline fans out concurrently — then auto-sends outreach.</p>
         <button className="btn-primary" onClick={onRun}>Run agent pipeline <ArrowRight size={16} /></button>
       </div>
     </div>
@@ -257,30 +250,29 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   const [apiDone, setApiDone] = useState(false);
   const [elapsed, setElapsed] = useState(0);
 
-  // Cosmetic progress: walks up to 95% in ~2s, then sits there waiting on
-  // the real /prospect call. In LLM mode that call can take 60-120s, so
-  // jumping to 100% in 2s and looking "done" is misleading.
+  // Cosmetic progress: crawl slowly while /prospect runs (often 60–120s in
+  // LLM mode). Hold below 100% until the API returns, then finish the bars.
   useEffect(() => {
     const t = setInterval(() => {
       setProgress((p) => {
-        const cap = 95;
-        if (p >= cap) { clearInterval(t); return cap; }
-        return p + 2;
+        if (apiDone) {
+          if (p >= 100) return 100;
+          return Math.min(100, p + 3);
+        }
+        const cap = 90;
+        if (p >= cap) return cap;
+        const step = p < 40 ? 0.45 : p < 70 ? 0.3 : 0.18;
+        return Math.min(cap, p + step);
       });
-    }, 45);
+    }, 220);
     return () => clearInterval(t);
-  }, []);
+  }, [apiDone]);
 
   // Wall-clock since mount, used to surface "still working" copy.
   useEffect(() => {
     const t = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(t);
   }, []);
-
-  // Snap to 100% the moment the API call returns.
-  useEffect(() => {
-    if (apiDone) setProgress(100);
-  }, [apiDone]);
 
   // Fire ONLY /prospect — no outreach. The next stage owns sending,
   // per-prospect with explicit clicks. This prevents the old "intake →
@@ -328,17 +320,12 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
     <div className="stage">
       <header className="stage-head">
         <h1>Agents working the funnel</h1>
-        <p className="lede">
-          Per-prospect stages run concurrently across the pool. The final stage hands
-          off to the outreach agent, which sends without a human in the loop. Matching
-          and ROI wait as barriers until the pool resolves.
-        </p>
       </header>
 
       <div className="pipe-sources">
         {sources.map((s, i) => {
           const Icon = s.icon;
-          const local = Math.max(0, Math.min(100, progress * 1.1 - i * 6));
+          const local = Math.max(0, Math.min(100, progress * 1.05 - i * 14));
           return (
             <div className="pipe-card" key={s.key}>
               <div className="pipe-card-top">
@@ -373,7 +360,7 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
         <span className="pipe-counter-lbl">candidates surfaced · target {funnelTarget} good-fits</span>
       </div>
 
-      {progress >= 95 && !apiDone && (
+      {progress >= 75 && !apiDone && (
         <div className="pipe-counter" style={{ opacity: 0.8, fontSize: "0.95rem" }}>
           <span className="pipe-counter-lbl">
             Still gathering ({elapsed}s elapsed). LLM-mode prospecting can take 60–120s
@@ -629,11 +616,6 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
     <div className="stage">
       <header className="stage-head">
         <h1>Scored pool, agent sends itself</h1>
-        <p className="lede">
-          Fit is a score with reasoning, not a binary — the threshold floats to hit
-          funnel supply. Everything above it goes to the outreach agent, which
-          personalizes on source signal, reveals composition, and sends. No manual step.
-        </p>
       </header>
 
       <div className="agent-bar">
@@ -1016,7 +998,6 @@ function Matching({ profile, eventId, onError, onNext }) {
       <div className="stage">
         <header className="stage-head">
           <h1>Building the value graph…</h1>
-          <p className="lede">Pairing confirmed guests by what they offer and seek.</p>
         </header>
       </div>
     );
@@ -1049,20 +1030,6 @@ function Matching({ profile, eventId, onError, onNext }) {
     <div className="stage">
       <header className="stage-head">
         <h1>Guest list as a value graph</h1>
-        <p className="lede">
-          Edges aren't friendship — they're <em>predicted mutual value</em>, scored
-          by an LLM over each guest's enriched profile (LinkedIn history, GitHub,
-          conviction themes, what they're working on). Edges split into{" "}
-          <em>complementary</em> (different strengths that fit together) and{" "}
-          <em>similar</em> (overlap in domain or background). The LLM decides
-          which is which — no pre-built market-side bucketing.
-        </p>
-        <p className="lede">
-          {groupWord}s are formed by greedily maximizing the sum of pairwise LLM
-          scores. Click <em>"Why?"</em> on any top pair to get an on-demand,
-          profile-grounded explanation of what makes the pairing valuable.{" "}
-          {FORMAT_CONFIG[profile.format].topo}.
-        </p>
       </header>
 
       <div className="match-layout">
@@ -1235,9 +1202,6 @@ function Matching({ profile, eventId, onError, onNext }) {
       </div>
 
       <div className="stage-foot">
-        <p className="foot-note">
-          {totalAttending} confirmed · {groups.length} {groupWord.toLowerCase()}{groups.length === 1 ? "" : "s"} · objective = weighted Σ over attendees + host side · affinity as tiebreak
-        </p>
         <button className="btn-primary" onClick={onNext}>Settle ROI <ArrowRight size={16} /></button>
       </div>
     </div>
@@ -1273,11 +1237,6 @@ function ROI({ profile, onRestart }) {
     <div className="stage">
       <header className="stage-head">
         <h1>Who actually converted</h1>
-        <p className="lede">
-          ROI settles against the goal set in intake — here, <em>{profile.goal.toLowerCase()}</em>.
-          Check-in data confirms attendance; 30/60/90-day follow-up verifies each guest's
-          outcome. The ledger is the deliverable: a guest list, scored by what they converted to.
-        </p>
       </header>
 
       <div className="roi-top">
@@ -1325,9 +1284,6 @@ function ROI({ profile, onRestart }) {
       </div>
 
       <div className="stage-foot">
-        <p className="foot-note">
-          Per-guest outcomes feed reputation scores — staking who gets invited to the next event.
-        </p>
         <button className="btn-primary" onClick={onRestart}><RotateCw size={15} /> Run another event</button>
       </div>
     </div>
@@ -1528,7 +1484,7 @@ const CSS = `
 .pipe-pct { font-size:13px; color:var(--acc); font-weight:700; }
 .bar { height:5px; background:var(--panel-3); border-radius:var(--r-pill); overflow:hidden; }
 .bar-fill { height:100%; background:linear-gradient(90deg,var(--acc-light),var(--acc));
-  border-radius:var(--r-pill); transition:width 0.2s linear; }
+  border-radius:var(--r-pill); transition:width 0.55s ease-out; }
 .pipe-steps { display:flex; gap:10px; flex-wrap:wrap; }
 .pipe-step { display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--ink-faint);
   border:1px solid var(--line); border-radius:var(--r-pill); padding:9px 14px;
