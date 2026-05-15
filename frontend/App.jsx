@@ -1605,6 +1605,9 @@ const CSS = `
 .pd-section { margin-top:15px; }
 .pd-label { font-size:9px; letter-spacing:0.08em; text-transform:uppercase;
   color:var(--ink-faint); margin-bottom:8px; font-weight:700; }
+.pd-link { font-size:10px; line-height:1.4; color:var(--hire); font-weight:500;
+  word-break:break-all; }
+.pd-link:hover { text-decoration:underline; }
 .pd-reason { font-size:12px; line-height:1.65; color:var(--ink-dim); }
 .vectors { display:flex; flex-direction:column; gap:7px; }
 .vectors > div { display:flex; gap:10px; align-items:baseline; }
