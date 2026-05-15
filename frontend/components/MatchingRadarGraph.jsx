@@ -67,6 +67,7 @@ export default function MatchingRadarGraph({
   groupWord = "Table",
   picked = [],
   onNodeClick,
+  loading = false,
   height = 420,
 }) {
   const wrapRef = useRef(null);
@@ -85,34 +86,33 @@ export default function MatchingRadarGraph({
     [nodes, groups, size.w, size.h]
   );
 
-  // Sync positions when nodes/layout change
-  useEffect(() => {
-    setPositions((prev) => {
-      const next = { ...prev };
-      nodes.forEach((n) => {
-        const a = layout.anchors[n.id];
-        if (!a) return;
-        if (next[n.id] == null) {
-          next[n.id] = { x: a.x, y: a.y, vx: 0, vy: 0 };
-        }
-      });
-      Object.keys(next).forEach((id) => {
-        if (!nodes.find((n) => n.id === Number(id) || String(n.id) === id)) {
-          delete next[id];
-        }
-      });
-      return next;
-    });
-  }, [nodes, layout.anchors]);
+  const nodeKey = useMemo(
+    () => nodes.map((n) => n.id).sort().join(","),
+    [nodes]
+  );
 
-  // Resize observer
+  // Seed positions from radar anchors whenever the guest set changes.
+  useEffect(() => {
+    const next = {};
+    nodes.forEach((n) => {
+      const a = layout.anchors[n.id];
+      if (a) next[n.id] = { x: a.x, y: a.y };
+    });
+    setPositions(next);
+    setPan({ x: 0, y: 0 });
+    setZoom(1);
+  }, [nodeKey, layout.anchors, nodes]);
+
+  // Resize observer + initial measure
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const { width } = entries[0].contentRect;
-      setSize({ w: Math.max(320, width), h: height });
-    });
+    const measure = () => {
+      const w = Math.max(320, el.clientWidth || 600);
+      setSize({ w, h: height });
+    };
+    measure();
+    const ro = new ResizeObserver(() => measure());
     ro.observe(el);
     return () => ro.disconnect();
   }, [height]);
@@ -128,9 +128,9 @@ export default function MatchingRadarGraph({
     [positions, layout]
   );
 
-  // Gentle spring toward radar anchors when not dragging
+  // Gentle spring toward radar anchors when not dragging (only if dragged off-anchor).
   useEffect(() => {
-    if (drag) return;
+    if (drag || loading || nodes.length === 0) return;
     let raf;
     const tick = () => {
       setPositions((prev) => {
@@ -142,12 +142,8 @@ export default function MatchingRadarGraph({
           if (!a || !p) return;
           const dx = a.x - p.x;
           const dy = a.y - p.y;
-          if (Math.abs(dx) > 0.4 || Math.abs(dy) > 0.4) {
-            next[n.id] = {
-              ...p,
-              x: p.x + dx * 0.08,
-              y: p.y + dy * 0.08,
-            };
+          if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) {
+            next[n.id] = { x: p.x + dx * 0.12, y: p.y + dy * 0.12 };
             moved = true;
           }
         });
@@ -157,7 +153,7 @@ export default function MatchingRadarGraph({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [drag, nodes, layout.anchors]);
+  }, [drag, loading, nodes, layout.anchors]);
 
   const screenToWorld = useCallback(
     (clientX, clientY) => {
@@ -256,7 +252,7 @@ export default function MatchingRadarGraph({
       const dim = e.cross;
       const hi =
         hoverId === e.a || hoverId === e.b ||
-        picked.includes(e.a) || picked.includes(e.b);
+        picked.some((id) => id === e.a || id === e.b);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
@@ -284,7 +280,7 @@ export default function MatchingRadarGraph({
     nodes.forEach((n) => {
       const p = getPos(n.id);
       const colors = SIDE_COLORS[n.side] || SIDE_COLORS.Builds;
-      const isPicked = picked.includes(n.id);
+      const isPicked = picked.some((id) => id === n.id);
       const isHover = hoverId === n.id;
 
       ctx.beginPath();
@@ -396,20 +392,30 @@ export default function MatchingRadarGraph({
   };
 
   return (
-    <div className="radar-graph-wrap" ref={wrapRef}>
+    <div className="radar-graph-wrap" ref={wrapRef} style={{ minHeight: height }}>
       <canvas
         ref={canvasRef}
         className="radar-graph-canvas"
-        style={{ touchAction: "none", cursor: drag ? "grabbing" : hoverId ? "pointer" : "default" }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-        onWheel={onWheel}
+        style={{
+          touchAction: "none",
+          minHeight: height,
+          cursor: loading ? "wait" : drag ? "grabbing" : hoverId ? "pointer" : "default",
+        }}
+        onPointerDown={loading ? undefined : onPointerDown}
+        onPointerMove={loading ? undefined : onPointerMove}
+        onPointerUp={loading ? undefined : onPointerUp}
+        onPointerLeave={loading ? undefined : onPointerUp}
+        onWheel={loading ? undefined : onWheel}
       />
-      <button type="button" className="radar-graph-reset" onClick={resetView}>
-        Reset view
-      </button>
+      {loading && <div className="radar-graph-loading">Building graph…</div>}
+      {!loading && nodes.length === 0 && (
+        <div className="radar-graph-empty">No confirmed guests to chart yet.</div>
+      )}
+      {!loading && (
+        <button type="button" className="radar-graph-reset" onClick={resetView}>
+          Reset view
+        </button>
+      )}
     </div>
   );
 }

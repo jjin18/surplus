@@ -169,7 +169,7 @@ function Intake({ profile, setProfile, onRun }) {
   return (
     <div className="stage">
       <header className="stage-head">
-        <h1>Define the event mechanism</h1>
+        <h1>Define the event</h1>
       </header>
 
       <div className="form-grid">
@@ -940,9 +940,10 @@ function Matching({ profile, eventId, onError, onNext }) {
       });
     });
 
+    const symTypes = new Set(["symbiotic", "complementary"]);
     edges = matchResult.edges.map((e) => ({
       a: e.a_id, b: e.b_id,
-      type: e.edge_type === "symbiotic" ? "sym" : "aff",
+      type: symTypes.has(e.edge_type) ? "sym" : "aff",
       cross: memberLookup[e.a_id]?.grp !== memberLookup[e.b_id]?.grp,
       w: e.weight,
     }));
@@ -1000,6 +1001,16 @@ function Matching({ profile, eventId, onError, onNext }) {
         <header className="stage-head">
           <h1>Building the value graph…</h1>
         </header>
+        <div className="graph-wrap graph-wrap--loading">
+          <MatchingRadarGraph
+            nodes={[]}
+            edges={[]}
+            groups={[1]}
+            groupWord={groupWord}
+            loading
+            height={480}
+          />
+        </div>
       </div>
     );
   }
@@ -1034,7 +1045,8 @@ function Matching({ profile, eventId, onError, onNext }) {
       </header>
 
       <div className="match-layout">
-        <div className="graph-wrap">
+        <div className="graph-wrap graph-wrap--main">
+          <p className="graph-wrap-title">Value graph</p>
           <MatchingRadarGraph
             nodes={nodes}
             edges={edges}
@@ -1052,7 +1064,7 @@ function Matching({ profile, eventId, onError, onNext }) {
                   }
                 : undefined
             }
-            height={440}
+            height={520}
           />
           <div className="legend">
             <span><i className="lg-sym" /> complementary</span>
@@ -1462,7 +1474,7 @@ function SurplusApp({ user, onLogout }) {
 
 // ---- styles -------------------------------------------------
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap');
 * { box-sizing:border-box; margin:0; padding:0; }
 .root {
   --bg:#f6f7f9; --panel:#ffffff; --panel-2:#fbfcfd; --panel-3:#f1f3f6;
@@ -1512,9 +1524,10 @@ const CSS = `
 .canvas { animation:fade 0.4s ease; }
 @keyframes fade { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:none;} }
 .stage { display:flex; flex-direction:column; gap:22px; }
-.stage-head { max-width:730px; }
-.stage-head h1 { font-family:'Playfair Display',Georgia,serif; font-weight:600; font-size:40px;
-  line-height:1.1; letter-spacing:-0.01em; margin-bottom:12px; color:var(--ink); }
+.stage-head { max-width:560px; margin-bottom:2px; }
+.stage-head h1 { font-family:inherit; font-weight:700;
+  font-size:clamp(1.35rem, 2.2vw, 1.75rem); line-height:1.22; letter-spacing:-0.03em;
+  margin:0; color:var(--ink); }
 .lede { font-size:13.5px; line-height:1.7; color:var(--ink-dim); }
 .lede em { color:var(--acc); font-style:normal; font-weight:600; }
 .form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
@@ -1703,11 +1716,22 @@ const CSS = `
 .fr-rsvp .feed-icon, .fr-rsvp .feed-text { color:var(--ok); }
 .fr-wait { border-left-color:var(--ink-faint); opacity:0.7; }
 .fr-pending { opacity:0.5; border-left-style:dashed; }
-.match-layout { display:grid; grid-template-columns:1.35fr 1fr; gap:16px; }
+.match-layout { display:flex; flex-direction:column; gap:16px; }
+.match-side { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px; }
 .graph-wrap { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-card);
-  padding:12px; box-shadow:var(--shadow-sm); position:relative; }
-.radar-graph-wrap { position:relative; width:100%; min-height:440px; }
-.radar-graph-canvas { display:block; width:100%; border-radius:12px; background:var(--panel-2); }
+  padding:12px; box-shadow:var(--shadow-sm); position:relative; width:100%; }
+.graph-wrap--main { min-height:520px; }
+.graph-wrap--loading { margin-top:8px; }
+.graph-wrap-title { margin:0 0 10px; font-size:10px; font-weight:700; letter-spacing:0.08em;
+  text-transform:uppercase; color:var(--ink-faint); }
+.radar-graph-wrap { position:relative; width:100%; min-height:inherit; }
+.radar-graph-canvas { display:block; width:100%; height:100%; min-height:inherit;
+  border-radius:12px; background:var(--panel-2); }
+.radar-graph-empty { position:absolute; inset:0; display:grid; place-items:center;
+  font-size:13px; color:var(--ink-dim); pointer-events:none; }
+.radar-graph-loading { position:absolute; inset:0; display:grid; place-items:center;
+  font-size:13px; color:var(--acc); font-weight:600; background:rgba(255,255,255,0.72);
+  border-radius:12px; pointer-events:none; }
 .radar-graph-reset { position:absolute; top:10px; right:10px; z-index:2;
   font-family:inherit; font-size:10px; font-weight:600; padding:6px 10px;
   border-radius:999px; border:1px solid var(--line); background:var(--panel);
@@ -1739,7 +1763,6 @@ const CSS = `
   border:1.5px solid var(--build); }
 .lg-hire { width:9px; height:9px; border-radius:50%; background:rgba(63,127,214,0.15);
   border:1.5px solid var(--hire); }
-.match-side { display:flex; flex-direction:column; gap:14px; }
 .sym-panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--r-card);
   padding:16px; box-shadow:var(--shadow-sm); }
 .sym-pair { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--r-panel);
@@ -1804,10 +1827,11 @@ const CSS = `
 .ledger-total { font-size:17px; font-weight:800; color:var(--acc); letter-spacing:-0.01em; }
 @media (max-width:880px) {
   .form-grid, .pipe-sources { grid-template-columns:1fr; }
-  .prospect-layout, .match-layout, .roi-top { grid-template-columns:1fr; }
+  .prospect-layout, .roi-top { grid-template-columns:1fr; }
+  .match-side { grid-template-columns:1fr; }
   .ledger-head, .ledger-row { grid-template-columns:1.4fr 1.4fr 0.7fr; }
   .ledger-head span:nth-child(2), .ledger-row > span:nth-child(2) { display:none; }
-  .stage-head h1 { font-size:31px; }
+  .stage-head h1 { font-size:1.35rem; }
 }
 
 /* ─── User menu in topbar ─────────────────────────────────── */
