@@ -80,13 +80,36 @@ def build_edges(attending: list, event=None) -> list[dict]:
 
 def form_groups(attending: list, event) -> dict[int, list]:
     """
-    Pack confirmed guests into the format's groups, balancing market sides.
+    Pack confirmed guests into the format's groups.
 
-    Strategy: round-robin the non-builder sides (Hires / Operates) across the
-    groups first — they're the scarce counterpart — then round-robin the
-    builders. Every group ends up with offers and seeks in the room.
+    Two backends:
+
+    1. LLM-driven (preferred) — when build_edges just ran the library, its
+       per-pair composite matrix is cached. We assign each prospect to the
+       group that maximizes the sum of composite scores to existing members,
+       with a soft same-side penalty. This is the "post-RSVP seating
+       optimizer" the UI copy references — pairs are chosen because the LLM
+       judged them mutually valuable, not because round-robin landed them.
+
+    2. Round-robin fallback — if the library didn't run (no API key, or
+       library failed) we fall back to the original side-balanced
+       round-robin so the stage still produces a sensible room.
     """
     size = config.format_cfg(event.format)["group_size"]
+
+    # Try the LLM-driven path first.
+    try:
+        from . import matcher_lib
+        matrix = matcher_lib.get_cached_matrix(event, attending)
+        if matrix is not None:
+            scored = matcher_lib.form_groups_from_matrix(attending, matrix, size)
+            if scored is not None:
+                return scored
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [matcher] LLM-driven grouping failed, falling back: "
+              f"{type(exc).__name__}: {exc}")
+
+    # Round-robin fallback.
     n_groups = max(1, round(len(attending) / size))
     groups: dict[int, list] = {i: [] for i in range(1, n_groups + 1)}
 
