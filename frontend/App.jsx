@@ -167,7 +167,6 @@ function Intake({ profile, setProfile, onRun }) {
   return (
     <div className="stage">
       <header className="stage-head">
-        <p className="eyebrow">Stage 01 — Elicitation</p>
         <h1>Define the event mechanism</h1>
         <p className="lede">
           Three blocks of private information. The <em>goal</em> becomes the matcher's
@@ -327,7 +326,6 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   return (
     <div className="stage">
       <header className="stage-head">
-        <p className="eyebrow">Stage 02 — Concurrent fan-out</p>
         <h1>Agents working the funnel</h1>
         <p className="lede">
           Per-prospect stages run concurrently across the pool. The final stage hands
@@ -590,7 +588,6 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
     return (
       <div className="stage">
         <header className="stage-head">
-          <p className="eyebrow">Stage 03 — Auto-outreach</p>
           <h1>No candidates surfaced</h1>
           <p className="lede">
             Prospecting completed but returned an empty pool. Check the backend
@@ -630,7 +627,6 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   return (
     <div className="stage">
       <header className="stage-head">
-        <p className="eyebrow">Stage 03 — Fit scoring &amp; autonomous outreach</p>
         <h1>Scored pool, agent sends itself</h1>
         <p className="lede">
           Fit is a score with reasoning, not a binary — the threshold floats to hit
@@ -1018,7 +1014,6 @@ function Matching({ profile, eventId, onError, onNext }) {
     return (
       <div className="stage">
         <header className="stage-head">
-          <p className="eyebrow">Stage 04 — Symbiotic matching market</p>
           <h1>Building the value graph…</h1>
           <p className="lede">Pairing confirmed guests by what they offer and seek.</p>
         </header>
@@ -1030,7 +1025,6 @@ function Matching({ profile, eventId, onError, onNext }) {
     return (
       <div className="stage">
         <header className="stage-head">
-          <p className="eyebrow">Stage 04 — Symbiotic matching market</p>
           <h1>Can't build the room yet</h1>
           <p className="lede">{matchError}</p>
           {canManualRsvp && (
@@ -1053,7 +1047,6 @@ function Matching({ profile, eventId, onError, onNext }) {
   return (
     <div className="stage">
       <header className="stage-head">
-        <p className="eyebrow">Stage 04 — Value graph</p>
         <h1>Guest list as a value graph</h1>
         <p className="lede">
           Edges aren't friendship — they're <em>predicted mutual value</em>, scored
@@ -1284,7 +1277,6 @@ function ROI({ profile, onRestart }) {
   return (
     <div className="stage">
       <header className="stage-head">
-        <p className="eyebrow">Stage 05 — Verified settlement</p>
         <h1>Who actually converted</h1>
         <p className="lede">
           ROI settles against the goal set in intake — here, <em>{profile.goal.toLowerCase()}</em>.
@@ -1489,9 +1481,6 @@ const CSS = `
 @keyframes fade { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:none;} }
 .stage { display:flex; flex-direction:column; gap:22px; }
 .stage-head { max-width:730px; }
-.eyebrow { display:inline-block; font-size:10.5px; letter-spacing:0.12em; color:var(--acc);
-  text-transform:uppercase; font-weight:700; margin-bottom:14px; background:var(--acc-soft);
-  padding:6px 12px; border-radius:var(--r-pill); }
 .stage-head h1 { font-family:'Playfair Display',Georgia,serif; font-weight:600; font-size:40px;
   line-height:1.1; letter-spacing:-0.01em; margin-bottom:12px; color:var(--ink); }
 .lede { font-size:13.5px; line-height:1.7; color:var(--ink-dim); }
