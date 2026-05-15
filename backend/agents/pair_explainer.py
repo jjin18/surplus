@@ -63,14 +63,67 @@ def _components_summary(pair: dict[str, Any]) -> str:
     return "\n".join(f"  {k}: {v:.2f}" for k, v in top)
 
 
-async def explain_pair(person_a, person_b, pair: Optional[dict[str, Any]] = None) -> str:
+def _structured_fallback(person_a, person_b, pair: Optional[dict[str, Any]]) -> str:
+    """Profile-grounded explanation built from cached signal alone — no LLM.
+
+    Used when the API call fails (no key, network, auth). Better than a
+    raw error string: shows the matcher's actual reasoning surface.
+    """
+    comp = (pair or {}).get("components") or {}
+    similar = {k: v for k, v in (comp.get("similar") or {}).items() if v > 0.2}
+    complementary = {k: v for k, v in (comp.get("complementary") or {}).items() if v > 0.2}
+    parts: list[str] = []
+
+    def _shared(a_set, b_set, label):
+        common = sorted(set(a_set or []) & set(b_set or []))
+        if common:
+            parts.append(f"shared {label}: {', '.join(common[:4])}")
+
+    _shared(person_a.domains, person_b.domains, "domains")
+    _shared(person_a.tech_stack, person_b.tech_stack, "tech")
+    _shared(person_a.conviction_themes, person_b.conviction_themes, "conviction themes")
+
+    if complementary:
+        top = sorted(complementary.items(), key=lambda kv: -kv[1])[:2]
+        parts.append("complementary signal: " + ", ".join(
+            f"{k.replace('_', ' ')} ({v:.2f})" for k, v in top))
+    if similar:
+        top = sorted(similar.items(), key=lambda kv: -kv[1])[:2]
+        parts.append("similar signal: " + ", ".join(
+            f"{k.replace('_', ' ')} ({v:.2f})" for k, v in top))
+
+    if pair:
+        comp_score = pair.get("composite")
+        if comp_score is not None:
+            parts.append(f"composite {round(comp_score, 2)}")
+
+    if not parts:
+        return ("No structured signal recorded for this pair — enrichment may "
+                "have been thin. Try re-running /match.")
+    return f"{person_a.name} ⟷ {person_b.name}: " + " · ".join(parts)
+
+
+async def explain_pair(person_a, person_b, pair: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Generate one short paragraph on why this pair is worth connecting.
 
     Grounded on enriched profile data + the structured component scores.
-    Two-to-three sentences, concrete, second-person. No fluff.
+    Returns {text, source}:
+      - source="llm"      LLM prose
+      - source="cached"   structured fallback (LLM call failed)
+      - source="error"    both paths failed
     """
     if person_a is None or person_b is None:
-        return "Couldn't find enrichment data for one of these people."
+        return {"text": "Couldn't find enrichment data for one of these people.",
+                "source": "error"}
+
+    key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    if not key:
+        return {
+            "text": ("LLM unavailable — ANTHROPIC_API_KEY is not set on this "
+                     "server. Showing structured signal instead.\n\n"
+                     + _structured_fallback(person_a, person_b, pair)),
+            "source": "cached",
+        }
 
     prompt = f"""You're an event organizer briefing a guest on why we seated them near a specific other guest. Be concrete, factual, and short — two to three sentences. Cite the specific overlap or asymmetry that creates value. No generic platitudes.
 
@@ -85,8 +138,8 @@ The structured matcher already scored this pair on several axes (0-1). The stron
 
 Write the explanation as if telling Person A: "Worth meeting B because…". 2-3 sentences max. Do not enumerate the scores; use them to ground your reasoning, but speak in plain language."""
 
-    client = AsyncAnthropic()
     try:
+        client = AsyncAnthropic(api_key=key)
         resp = await client.messages.create(
             model=_MODEL,
             max_tokens=240,
@@ -96,6 +149,21 @@ Write the explanation as if telling Person A: "Worth meeting B because…". 2-3 
             block.text for block in resp.content
             if getattr(block, "type", None) == "text"
         ).strip()
-        return text or "(no explanation produced)"
+        if text:
+            return {"text": text, "source": "llm"}
+        # Empty response — fall through to structured fallback
+        return {
+            "text": "(LLM returned an empty response)\n\n" +
+                    _structured_fallback(person_a, person_b, pair),
+            "source": "cached",
+        }
     except Exception as exc:  # noqa: BLE001
-        return f"Explanation failed: {type(exc).__name__}: {exc}"
+        kind = type(exc).__name__
+        # Surface the failure mode + always show the structured fallback so
+        # the user still gets useful info even when the LLM is unreachable.
+        return {
+            "text": (f"LLM call failed ({kind}: {exc}). Showing structured "
+                     f"signal from the cached matcher output instead.\n\n"
+                     + _structured_fallback(person_a, person_b, pair)),
+            "source": "cached",
+        }

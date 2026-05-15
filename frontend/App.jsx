@@ -875,7 +875,7 @@ function Matching({ profile, eventId, onError, onNext }) {
     try {
       const r = await api.explainPair(eventId, a_id, b_id);
       setPairExplanations((s) => ({
-        ...s, [key]: { status: "ok", text: r.explanation },
+        ...s, [key]: { status: "ok", text: r.explanation, source: r.source },
       }));
     } catch (e) {
       setPairExplanations((s) => ({
@@ -1179,9 +1179,16 @@ function Matching({ profile, eventId, onError, onNext }) {
                   </div>
                 )}
                 {state?.status === "ok" && (
-                  <div className="sym-flow" style={{marginTop: 8, fontStyle: "normal"}}>
-                    {state.text}
-                  </div>
+                  <>
+                    <div className="sym-flow" style={{marginTop: 8, fontStyle: "normal", whiteSpace: "pre-wrap"}}>
+                      {state.text}
+                    </div>
+                    <div className="muted-text" style={{marginTop: 4, fontSize: 11}}>
+                      source: {state.source === "llm" ? "Claude (live)"
+                        : state.source === "cached" ? "structured cache (LLM unreachable)"
+                        : "error"}
+                    </div>
+                  </>
                 )}
                 {state?.status === "err" && (
                   <div className="sym-flow" style={{marginTop: 8, color: "#c33"}}>

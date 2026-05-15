@@ -114,7 +114,7 @@ class ExplainResponse(BaseModel):
     a_id: int
     b_id: int
     explanation: str
-    grounded_in_llm: bool   # False when the cache miss forces a fallback path
+    source: str   # "llm" | "cached" | "error"
 
 
 @router.post("/{event_id}/pairs/explain", response_model=ExplainResponse)
@@ -156,11 +156,11 @@ def explain_pair_endpoint(event_id: int, payload: ExplainRequest,
         None,
     )
 
-    text = asyncio.run(pair_explainer.explain_pair(a_person, b_person, pair))
-    grounded = not text.startswith("Explanation failed")
+    result = asyncio.run(pair_explainer.explain_pair(a_person, b_person, pair))
     return ExplainResponse(
         a_id=payload.a_id, b_id=payload.b_id,
-        explanation=text, grounded_in_llm=grounded,
+        explanation=result["text"],
+        source=result["source"],
     )
 
 
