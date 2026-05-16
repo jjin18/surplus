@@ -204,3 +204,41 @@ def test_discover_via_exa_returns_empty_on_http_error(monkeypatch):
 def test_discover_via_exa_no_key_returns_empty(monkeypatch):
     monkeypatch.delenv("EXA_API_KEY", raising=False)
     assert exa.discover_via_exa("linkedin", {"role": "x"}) == []
+
+
+# ---- _build_query: city threading ----------------------------------------
+
+def test_build_query_includes_city_when_present():
+    q = exa._build_query("linkedin", {
+        "role": "Infra engineer",
+        "seniority": "Senior",
+        "co_stage": "Seed",
+        "city": "San Francisco",
+    })
+    assert "san francisco" in q
+    # city should land after the stage clause so the natural reading is
+    # "...at seed startups in san francisco"
+    assert q.index("seed startups") < q.index("san francisco")
+
+
+def test_build_query_omits_city_when_blank():
+    q = exa._build_query("linkedin", {
+        "role": "Infra engineer",
+        "seniority": "Senior",
+        "co_stage": "Seed",
+        "city": "",
+    })
+    assert " in " not in q  # no trailing "in <city>" clause
+
+    q_missing = exa._build_query("linkedin", {
+        "role": "Infra engineer",
+        "seniority": "Senior",
+        "co_stage": "Seed",
+    })
+    assert " in " not in q_missing
+
+
+def test_build_query_city_applies_to_all_sources():
+    for src in ("linkedin", "github", "x"):
+        q = exa._build_query(src, {"role": "engineer", "city": "Brooklyn"})
+        assert "brooklyn" in q

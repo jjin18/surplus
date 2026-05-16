@@ -76,9 +76,11 @@ def _judge_timeout() -> float:
 
 
 def _icp_cache_key(icp: dict) -> str:
-    # Only the fields the LLM actually conditions on. Sorted for stable bytes.
+    # Only the fields the LLM / Exa search actually conditions on. Sorted for
+    # stable bytes. `city` is included so a re-run with a different location
+    # doesn't return the previous city's cached pool.
     return json.dumps(
-        {k: icp.get(k) for k in ("role", "seniority", "co_stage")},
+        {k: icp.get(k) for k in ("role", "seniority", "co_stage", "city")},
         sort_keys=True,
     )
 

@@ -135,6 +135,7 @@ def _build_query(source: str, icp: dict) -> str:
     role = (icp.get("role") or "").strip()
     seniority = (icp.get("seniority") or "").strip().rstrip("+")
     co_stage = (icp.get("co_stage") or "").strip()
+    city = (icp.get("city") or "").strip()
 
     # Seniority adjective: "Senior", "Staff", "Principal", "Mid", "Leadership"
     # → folds Staff+ to "Staff" for natural reading.
@@ -159,6 +160,14 @@ def _build_query(source: str, icp: dict) -> str:
     if co_stage:
         stage_phrase = co_stage.lower().replace("-stage", "").strip()
         base = f"{base} at {stage_phrase} startups"
+
+    # Anchor by city when present. Exa's neural index matches against the
+    # profile page text, where LinkedIn typically surfaces the location
+    # near the headline ("San Francisco Bay Area"). Without this, every
+    # search returned the global pool and the city field on intake had no
+    # effect on who got surfaced.
+    if city:
+        base = f"{base} in {city.lower()}"
 
     # Source-specific prefix that anchors the platform without forcing
     # singular grammar.

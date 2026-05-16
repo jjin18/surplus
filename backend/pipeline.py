@@ -40,7 +40,12 @@ async def run_prospect(
     Use it when the user explicitly asks for new results (e.g. via
     `?fresh=true` on the route); default reuses the cached pool.
     """
-    icp = {"role": event.role, "seniority": event.seniority, "co_stage": event.co_stage}
+    icp = {
+        "role": event.role,
+        "seniority": event.seniority,
+        "co_stage": event.co_stage,
+        "city": event.city,
+    }
 
     raw = await prospect(icp, force_fresh=force_fresh)
     prospects: list[models.Prospect] = []
