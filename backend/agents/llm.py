@@ -243,6 +243,7 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
         f"  role: {icp.get('role')}\n"
         f"  seniority: {icp.get('seniority')}\n"
         f"  co_stage: {icp.get('co_stage')}\n"
+        f"  city: {icp.get('city') or '(any)'}\n"
         f"\n"
         f"Source: {source}\n"
         f"\n"
