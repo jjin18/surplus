@@ -44,6 +44,149 @@ _X_RE = re.compile(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)/?(?:$|\?)", re.I)
 _LI_TITLE_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:\|\s*LinkedIn)?\s*$")
 
 
+# ---- city normalization --------------------------------------------------
+#
+# LinkedIn locations are written many different ways for the same place
+# ("San Francisco", "San Francisco Bay Area", "SF", "Bay Area", "Oakland").
+# Three things rely on this:
+#
+#   (1) Query phrasing  — we want "in the san francisco bay area" because
+#       that's literally what LinkedIn profile pages say.
+#   (2) includeText     — Exa's server-side hard filter (1 phrase, ≤5 words).
+#       Pick the *shortest substring that appears in every alias* so we
+#       don't over-prune. "San Francisco" matches "San Francisco" AND
+#       "San Francisco Bay Area"; "San Francisco Bay Area" would miss the
+#       former.
+#   (3) Post-filter     — broader set of aliases scanned against the
+#       returned snippet text so we drop NYC profiles that snuck through
+#       ranking even after includeText.
+#
+# Entries are keyed by the lowercase form of what the user typed on intake.
+# `canonical_phrase` goes into the query, `include_text` into the Exa filter,
+# `aliases` into the post-filter scan.
+
+_CITY_ALIASES: dict[str, dict] = {
+    "sf": {
+        "canonical_phrase": "the san francisco bay area",
+        "include_text": "San Francisco",
+        "aliases": ("san francisco", "bay area", "oakland", "berkeley",
+                    "palo alto", "mountain view", "menlo park", "sf"),
+    },
+    "san francisco": {
+        "canonical_phrase": "the san francisco bay area",
+        "include_text": "San Francisco",
+        "aliases": ("san francisco", "bay area", "oakland", "berkeley",
+                    "palo alto", "mountain view", "menlo park", "sf"),
+    },
+    "bay area": {
+        "canonical_phrase": "the san francisco bay area",
+        "include_text": "San Francisco",
+        "aliases": ("san francisco", "bay area", "oakland", "berkeley",
+                    "palo alto", "mountain view", "menlo park", "sf"),
+    },
+    "nyc": {
+        "canonical_phrase": "new york city",
+        "include_text": "New York",
+        "aliases": ("new york", "nyc", "brooklyn", "manhattan", "queens"),
+    },
+    "new york": {
+        "canonical_phrase": "new york city",
+        "include_text": "New York",
+        "aliases": ("new york", "nyc", "brooklyn", "manhattan", "queens"),
+    },
+    "new york city": {
+        "canonical_phrase": "new york city",
+        "include_text": "New York",
+        "aliases": ("new york", "nyc", "brooklyn", "manhattan", "queens"),
+    },
+    "la": {
+        "canonical_phrase": "the los angeles area",
+        "include_text": "Los Angeles",
+        "aliases": ("los angeles", "la", "santa monica", "pasadena", "venice"),
+    },
+    "los angeles": {
+        "canonical_phrase": "the los angeles area",
+        "include_text": "Los Angeles",
+        "aliases": ("los angeles", "la", "santa monica", "pasadena", "venice"),
+    },
+    "seattle": {
+        "canonical_phrase": "the seattle area",
+        "include_text": "Seattle",
+        "aliases": ("seattle", "bellevue", "redmond"),
+    },
+    "austin": {
+        "canonical_phrase": "austin, texas",
+        "include_text": "Austin",
+        "aliases": ("austin", "texas"),
+    },
+    "boston": {
+        "canonical_phrase": "the boston area",
+        "include_text": "Boston",
+        "aliases": ("boston", "cambridge", "somerville"),
+    },
+    "london": {
+        "canonical_phrase": "london, united kingdom",
+        "include_text": "London",
+        "aliases": ("london", "united kingdom"),
+    },
+}
+
+
+def _resolve_city(raw: str) -> Optional[dict]:
+    """Return city config for a raw user-typed city, or None for an unknown
+    city. Unknown cities still work — caller falls back to using the raw
+    string as both the query phrase and the includeText (best-effort).
+    """
+    key = (raw or "").strip().lower()
+    if not key:
+        return None
+    if key in _CITY_ALIASES:
+        return _CITY_ALIASES[key]
+    # Unknown city — synthesize a config so the rest of the pipeline still
+    # works. include_text is the user's literal input; aliases include just
+    # the input itself.
+    return {
+        "canonical_phrase": key,
+        "include_text": raw.strip(),
+        "aliases": (key,),
+    }
+
+
+# A "location-like" line in a LinkedIn snippet — used by the post-filter to
+# decide whether a snippet HAS location information at all. If a profile
+# snippet has zero location-looking lines we keep it (don't over-prune);
+# if it has one and our city's aliases don't appear anywhere in the snippet,
+# we drop it.
+_LOCATION_HINT_RE = re.compile(
+    r"\([A-Z]{2}\)\s*$|"                       # "...United States (US)"
+    r",\s*(california|new york|texas|"         # state names
+    r"washington|massachusetts|illinois|"
+    r"colorado|georgia|florida)\b|"
+    r"\b(bay area|metropolitan area)\b",       # "Greater Boston Area"
+    re.IGNORECASE,
+)
+
+
+def _location_matches(snippet: str, aliases: tuple[str, ...]) -> bool:
+    """True if the snippet either:
+      - mentions any of the city aliases anywhere, OR
+      - contains no location-looking line at all (can't disprove — keep).
+    False only when there's a location line AND none of the aliases match.
+    """
+    if not snippet:
+        return True  # nothing to check; keep
+    lower = snippet.lower()
+    for alias in aliases:
+        if alias in lower:
+            return True
+    # No alias matched — but if the snippet has no location signal we can't
+    # confidently reject. Only drop when there's an actual location line.
+    has_location_line = any(
+        _LOCATION_HINT_RE.search(line) for line in snippet.split("\n")
+    )
+    return not has_location_line
+
+
 def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[dict]:
     """
     Search Exa for one source's candidates matching the ICP.
@@ -61,7 +204,8 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
     if source not in ("linkedin", "github", "x"):
         return []
 
-    query = _build_query(source, icp)
+    city_cfg = _resolve_city(icp.get("city") or "")
+    query = _build_query(source, icp, city_cfg)
     domain = {
         "linkedin": "linkedin.com",
         "github": "github.com",
@@ -79,11 +223,19 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
         "category": category,
         # over-fetch — even with category filter, some results won't yield a
         # parseable handle (snippets, archives, etc.). Exa caps at 100 per
-        # request so clamp there even when max_candidates is high.
-        "numResults": min(100, max(max_candidates * 3, 10)),
+        # request so clamp there even when max_candidates is high. Bump the
+        # multiplier when city is set so the post-filter has headroom to
+        # drop wrong-city results without starving max_candidates.
+        "numResults": min(100, max(max_candidates * (5 if city_cfg else 3), 10)),
         "includeDomains": [domain],
         "contents": {"text": True},
     }
+    # Exa server-side hard filter — only return pages whose text contains
+    # this phrase. Massively cuts wrong-geo results before they hit our
+    # parser. Only do this for LinkedIn since github/x profile pages rarely
+    # carry a clean location string Exa can match.
+    if city_cfg and source == "linkedin":
+        body["includeText"] = [city_cfg["include_text"]]
     headers = {
         "x-api-key": _api_key(),
         "content-type": "application/json",
@@ -110,7 +262,7 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
     out: list[dict] = []
     seen_identities: set[str] = set()
     for r in results:
-        cand = _parse_result(source, r)
+        cand = _parse_result(source, r, city_cfg)
         if cand is None:
             continue
         if cand["identity"] in seen_identities:
@@ -124,7 +276,7 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
 
 # ---- query construction --------------------------------------------------
 
-def _build_query(source: str, icp: dict) -> str:
+def _build_query(source: str, icp: dict, city_cfg: Optional[dict] = None) -> str:
     """
     Compose a semantic query Exa can match. Reads like a description, not
     a database query — Exa's neural search responds best to natural
@@ -135,7 +287,15 @@ def _build_query(source: str, icp: dict) -> str:
     role = (icp.get("role") or "").strip()
     seniority = (icp.get("seniority") or "").strip().rstrip("+")
     co_stage = (icp.get("co_stage") or "").strip()
-    city = (icp.get("city") or "").strip()
+    # Use the resolved canonical city phrase when available — "the san
+    # francisco bay area" matches LinkedIn's literal location strings much
+    # better than raw user input like "sf". Fall back to raw text for
+    # unknown cities (and tests that pass icp without going through
+    # discover_via_exa).
+    if city_cfg:
+        city = city_cfg["canonical_phrase"]
+    else:
+        city = (icp.get("city") or "").strip()
 
     # Seniority adjective: "Senior", "Staff", "Principal", "Mid", "Leadership"
     # → folds Staff+ to "Staff" for natural reading.
@@ -182,7 +342,7 @@ def _build_query(source: str, icp: dict) -> str:
 
 # ---- per-source parsing --------------------------------------------------
 
-def _parse_result(source: str, r: dict) -> Optional[dict]:
+def _parse_result(source: str, r: dict, city_cfg: Optional[dict] = None) -> Optional[dict]:
     url = (r.get("url") or "").strip()
     title = (r.get("title") or "").strip()
     text = (r.get("text") or "").strip()
@@ -201,6 +361,13 @@ def _parse_result(source: str, r: dict) -> Optional[dict]:
         # filter helps but isn't bulletproof — e.g., "UCD Sociology",
         # "Supreme Incubator" came back for a Senior+ engineer query).
         if _looks_like_org(name):
+            return None
+        # Belt-and-suspenders geo filter. includeText already drops most
+        # wrong-city results at Exa, but Exa's text-match is fuzzy enough
+        # that "San Francisco, the band" or stale education entries can
+        # slip through. Re-scan the snippet for our city's aliases and
+        # drop the result if there's a location line that doesn't match.
+        if city_cfg and not _location_matches(text, city_cfg["aliases"]):
             return None
         # When title parsing didn't yield role/company, mine the page
         # snippet text. Exa returns ~500-1000 chars of page text with
