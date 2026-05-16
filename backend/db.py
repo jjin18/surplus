@@ -1,18 +1,38 @@
 """
-db.py — SQLite engine + session.
+db.py — DB engine + session.
 
-One file SQLite database at backend/data/surplus.db. Swap the URL for Postgres
-in production; nothing else in the codebase needs to change.
+In production, reads DATABASE_URL (Railway provides a Postgres URL when a
+Postgres service is attached). In local dev or when DATABASE_URL is unset,
+falls back to a SQLite file at backend/data/surplus.db.
+
+Why this matters: Railway's container filesystem is ephemeral by default —
+every deploy gets a fresh disk, so the SQLite DB (and every Session/User
+row in it) is wiped on each redeploy. Postgres survives deploys, so user
+sessions don't get invalidated every time we push.
 """
+import os
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-DB_PATH = Path(__file__).parent / "data" / "surplus.db"
-ENGINE = create_engine(
-    f"sqlite:///{DB_PATH}",
-    connect_args={"check_same_thread": False},  # FastAPI uses a threadpool
-)
+_RAW_DB_URL = (os.environ.get("DATABASE_URL") or "").strip()
+
+if _RAW_DB_URL:
+    # Railway / Heroku style: postgres://... — SQLAlchemy 2.x wants postgresql://
+    if _RAW_DB_URL.startswith("postgres://"):
+        _RAW_DB_URL = _RAW_DB_URL.replace("postgres://", "postgresql://", 1)
+    DB_URL = _RAW_DB_URL
+    DB_PATH = None  # not used in Postgres mode
+    ENGINE = create_engine(DB_URL, pool_pre_ping=True)
+else:
+    DB_PATH = Path(__file__).parent / "data" / "surplus.db"
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DB_URL = f"sqlite:///{DB_PATH}"
+    ENGINE = create_engine(
+        DB_URL,
+        connect_args={"check_same_thread": False},  # FastAPI uses a threadpool
+    )
+
 SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False)
 
 
