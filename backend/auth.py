@@ -66,6 +66,17 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(key=SESSION_COOKIE, path="/")
 
 
+def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Postgres returns DateTime columns as tz-naive; SQLite returns whatever
+    was stored. Coerce both to tz-aware UTC so comparisons with _utcnow() don't
+    raise 'can't compare offset-naive and offset-aware datetimes'."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _load_user_by_session(db: DbSession, token: Optional[str]) -> Optional[User]:
     if not token:
         return None
@@ -74,7 +85,8 @@ def _load_user_by_session(db: DbSession, token: Optional[str]) -> Optional[User]
         return None
     if sess.revoked_at is not None:
         return None
-    if sess.expires_at < _utcnow():
+    expires = _as_aware_utc(sess.expires_at)
+    if expires and expires < _utcnow():
         return None
     sess.last_seen_at = _utcnow()
     db.commit()
