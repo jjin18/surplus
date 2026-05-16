@@ -7,6 +7,9 @@ import {
 import { api } from "./lib/api.js";
 import MatchingRadarGraph from "./components/MatchingRadarGraph.jsx";
 import SignIn from "./SignIn.jsx";
+import pipeGithubIcon from "./src/assets/pipe/github-icon.png";
+import pipeXIcon from "./src/assets/pipe/x-icon.png";
+import pipeLinkedinIcon from "./src/assets/pipe/linkedin-icon.png";
 
 // ============================================================
 // Event ROI MVP — browser demo
