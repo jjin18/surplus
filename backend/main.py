@@ -49,32 +49,11 @@ app.include_router(roi.router)
 app.include_router(webhooks.router)
 
 
-# Temporary verbose 500 handler — surfaces the actual exception in the
-# response body so production 500s are debuggable from the browser.
-# REMOVE before any real customer uses surplus (this leaks tracebacks).
-import traceback
-from fastapi import Request
-from fastapi.responses import JSONResponse as _Json
-from starlette.exceptions import HTTPException as _Starlette_HTTPEx
-from fastapi.exceptions import HTTPException as _FastAPI_HTTPEx
-
-
-@app.exception_handler(Exception)
-async def _verbose_500(request: Request, exc: Exception):
-    # Let actual HTTPExceptions (401, 404, etc.) flow through normally.
-    if isinstance(exc, (_Starlette_HTTPEx, _FastAPI_HTTPEx)):
-        raise exc
-    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    return _Json(
-        status_code=500,
-        content={
-            "error_type": type(exc).__name__,
-            "error_message": str(exc),
-            "path": request.url.path,
-            "method": request.method,
-            "traceback": "".join(tb).splitlines()[-20:],
-        },
-    )
+# NB: previously had a verbose 500 exception handler here that leaked
+# tracebacks in response bodies — used to debug the multi-tenant
+# datetime bug. Removed once the bug was fixed since leaking internals
+# is a security smell. If we hit another mysterious 500, add it back
+# temporarily — see git blame for the exact handler.
 
 
 @app.get("/api/health", tags=["meta"])
