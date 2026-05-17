@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .db import init_db
-from .routes import auth, events, pipeline, matching, roi, webhooks
+from .routes import auth, demo, events, pipeline, matching, roi, webhooks
 
 
 @asynccontextmanager
@@ -42,6 +42,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(demo.router)
 app.include_router(events.router)
 app.include_router(pipeline.router)
 app.include_router(matching.router)
