@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import MatchingRadarGraph from "./components/MatchingRadarGraph.jsx";
-import SignIn from "./SignIn.jsx";
 import pipeGithubIcon from "./src/assets/pipe/github-icon.png";
 import pipeXIcon from "./src/assets/pipe/x-icon.png";
 import pipeLinkedinIcon from "./src/assets/pipe/linkedin-icon.png";
@@ -1538,6 +1537,65 @@ export default function App() {
   );
 }
 
+function needsSignIn(err) {
+  if (!err) return false;
+  const status = typeof err === "object" ? err.status : undefined;
+  const msg = (typeof err === "string" ? err : err.message || "").toLowerCase();
+  return status === 401 || msg.includes("not signed in");
+}
+
+function LinkedInMark({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.13 1.45-2.13 2.94v5.67H9.37V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.38-1.85 3.61 0 4.28 2.38 4.28 5.47v6.27ZM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13ZM7.12 20.45H3.56V9h3.56v11.45ZM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0Z" />
+    </svg>
+  );
+}
+
+function SignInModal({ open, onClose, onSignIn }) {
+  const [busy, setBusy] = useState(false);
+  if (!open) return null;
+
+  const handleSignIn = async () => {
+    setBusy(true);
+    try {
+      await onSignIn();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="signin-modal-backdrop"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="signin-modal"
+        role="dialog"
+        aria-labelledby="signin-modal-title"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p id="signin-modal-title" className="signin-modal-title">
+          Please sign in with LinkedIn
+        </p>
+        <p className="signin-modal-sub">
+          You need to connect LinkedIn before surplus can create an event and run outreach.
+        </p>
+        <button type="button" className="signin-modal-cta" onClick={handleSignIn} disabled={busy}>
+          <LinkedInMark size={18} />
+          <span>{busy ? "Redirecting…" : "Sign in with LinkedIn"}</span>
+        </button>
+        <button type="button" className="signin-modal-dismiss" onClick={onClose}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SurplusApp({ user, onLogout, onSignIn }) {
   const [stage, setStage] = useState(0);
   const [maxReached, setMaxReached] = useState(0);
@@ -1557,7 +1615,17 @@ function SurplusApp({ user, onLogout, onSignIn }) {
   const [eventId, setEventId] = useState(null);
   const [runResult, setRunResult] = useState(null);
   const [apiError, setApiError] = useState(null);
+  const [signInModalOpen, setSignInModalOpen] = useState(false);
   const go = (s) => { setStage(s); setMaxReached((m) => Math.max(m, s)); };
+
+  const reportError = (err) => {
+    if (needsSignIn(err)) {
+      setSignInModalOpen(true);
+      return;
+    }
+    const msg = typeof err === "string" ? err : err?.message || "Something went wrong";
+    setApiError(msg);
+  };
 
   const handleIntakeRun = async () => {
     setApiError(null);
@@ -1575,7 +1643,7 @@ function SurplusApp({ user, onLogout, onSignIn }) {
       setEventId(ev.id);
       go(1);
     } catch (e) {
-      setApiError(`Couldn't create event: ${e.message}`);
+      reportError(e);
     }
   };
 
@@ -1583,6 +1651,7 @@ function SurplusApp({ user, onLogout, onSignIn }) {
     setEventId(null);
     setRunResult(null);
     setApiError(null);
+    setSignInModalOpen(false);
     go(0);
   };
 
@@ -1611,20 +1680,25 @@ function SurplusApp({ user, onLogout, onSignIn }) {
             </button>
           )}
         </header>
-        {apiError && (
+        {apiError && !signInModalOpen && (
           <div className="api-error">{apiError}</div>
         )}
+        <SignInModal
+          open={signInModalOpen}
+          onClose={() => setSignInModalOpen(false)}
+          onSignIn={onSignIn}
+        />
         <main className="canvas" key={stage}>
           {stage === 0 && <Intake profile={profile} setProfile={setProfile} onRun={handleIntakeRun} />}
           {stage === 1 && <Pipeline profile={profile} eventId={eventId}
                                     onResult={setRunResult}
-                                    onError={setApiError}
+                                    onError={reportError}
                                     onDone={() => go(2)} />}
           {stage === 2 && <Prospects profile={profile} runResult={runResult}
-                                       eventId={eventId} onError={setApiError}
+                                       eventId={eventId} onError={reportError}
                                        onNext={() => go(3)} />}
           {stage === 3 && <Matching profile={profile} eventId={eventId}
-                                     onError={setApiError}
+                                     onError={reportError}
                                      onNext={() => go(4)} />}
           {stage === 4 && <ROI profile={profile} onRestart={restart} />}
         </main>
@@ -1670,6 +1744,31 @@ const CSS = `
   border:1px solid rgba(108,67,217,0.18); }
 .api-error { padding:10px 18px; background:#fff5f5; color:#b03030;
   border-bottom:1px solid #f3d6d6; font-size:13px; font-weight:500; }
+.signin-modal-backdrop {
+  position:fixed; inset:0; z-index:1000;
+  display:flex; align-items:center; justify-content:center;
+  padding:24px; background:rgba(31,28,46,0.45);
+}
+.signin-modal {
+  width:100%; max-width:400px; background:var(--panel);
+  border:1px solid var(--line); border-radius:var(--r-card);
+  box-shadow:var(--shadow); padding:28px 26px; text-align:center;
+}
+.signin-modal-title { font-size:18px; font-weight:700; letter-spacing:-0.02em; margin-bottom:8px; }
+.signin-modal-sub { font-size:13px; line-height:1.55; color:var(--ink-dim); margin-bottom:22px; }
+.signin-modal-cta {
+  display:inline-flex; align-items:center; justify-content:center; gap:10px;
+  width:100%; padding:13px 20px; border-radius:var(--r-pill); border:0;
+  background:#0a66c2; color:white; font-family:inherit; font-weight:600;
+  font-size:14px; cursor:pointer; transition:background 0.15s;
+}
+.signin-modal-cta:hover:not(:disabled) { background:#084e96; }
+.signin-modal-cta:disabled { opacity:0.75; cursor:wait; }
+.signin-modal-dismiss {
+  margin-top:12px; background:transparent; border:0; color:var(--ink-faint);
+  font-family:inherit; font-size:12px; cursor:pointer; padding:6px 10px;
+}
+.signin-modal-dismiss:hover { color:var(--ink-dim); }
 .rail { display:flex; gap:5px; flex-wrap:wrap; }
 .rail-item { display:flex; align-items:center; gap:7px; background:transparent;
   border:1px solid transparent; color:var(--ink-faint); padding:7px 12px; cursor:pointer;
