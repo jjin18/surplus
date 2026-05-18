@@ -1,5 +1,5 @@
 """
-End-to-end API test — the full five-stage flow over HTTP, including the
+End-to-end API test : the full five-stage flow over HTTP, including the
 Unipile-backed outreach layer and the /webhooks/unipile auto-DM trigger.
 """
 import hmac
@@ -62,7 +62,7 @@ def test_full_flow(client):
 
     r = client.post(f"/events/{eid}/match")
     if r.status_code == 409:
-        pytest.skip("no RSVPs in this seeded run — outreach funnel produced none")
+        pytest.skip("no RSVPs in this seeded run : outreach funnel produced none")
     assert r.status_code == 200
     match = r.json()
     members = {m["id"]: m for g in match["groups"] for m in g["members"]}

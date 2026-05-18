@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { api } from "./lib/api.js";
 
-// LinkedIn mark — official brand glyph, white-on-blue. Lucide doesn't ship it.
+// LinkedIn mark : official brand glyph, white-on-blue. Lucide doesn't ship it.
 const LinkedInIcon = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.13 1.45-2.13 2.94v5.67H9.37V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.38-1.85 3.61 0 4.28 2.38 4.28 5.47v6.27ZM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13ZM7.12 20.45H3.56V9h3.56v11.45ZM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0Z"/>
@@ -10,7 +10,7 @@ const LinkedInIcon = ({ size = 18 }) => (
 );
 
 // ============================================================
-// Sign in with LinkedIn — surplus auth
+// Sign in with LinkedIn : surplus auth
 //
 // surplus has no separate email/password layer. The user's
 // LinkedIn account IS their identity. They click "Sign in with
@@ -18,14 +18,14 @@ const LinkedInIcon = ({ size = 18 }) => (
 // handles 2FA + captcha), and on return they're authenticated.
 //
 // The same Unipile connection that auth uses is the connection
-// surplus sends DMs through downstream — one consent, one cost.
+// surplus sends DMs through downstream : one consent, one cost.
 // ============================================================
 
 const ERROR_MESSAGES = {
   linkedin_auth_failed: "LinkedIn rejected the connection. Please try again.",
   linkedin_callback_failed: "Sign-in didn't complete. Please try again.",
   linkedin_pending:
-    "LinkedIn is still finishing the connection — give it a few seconds and refresh.",
+    "LinkedIn is still finishing the connection : give it a few seconds and refresh.",
 };
 
 export default function SignIn() {
@@ -37,7 +37,7 @@ export default function SignIn() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("error");
     if (code) {
-      setError(ERROR_MESSAGES[code] || "Something went wrong — please try again.");
+      setError(ERROR_MESSAGES[code] || "Something went wrong : please try again.");
       // Clean the URL so the error doesn't stick around on subsequent renders
       const url = new URL(window.location.href);
       url.searchParams.delete("error");
@@ -51,7 +51,7 @@ export default function SignIn() {
     try {
       const res = await api.startLinkedinAuth();
       if (!res?.url) throw new Error("Backend didn't return a hosted-auth URL");
-      // Top-level navigation — the cookie set on /api/auth/linkedin/callback
+      // Top-level navigation : the cookie set on /api/auth/linkedin/callback
       // needs to be set during a top-level redirect, not a fetch.
       window.location.href = res.url;
     } catch (e) {
@@ -78,7 +78,7 @@ export default function SignIn() {
         </h1>
         <p className="signin-sub">
           Surplus runs on the connections you already have. Sign in with
-          LinkedIn once — we use that same connection to draft and send
+          LinkedIn once : we use that same connection to draft and send
           intros on your behalf.
         </p>
 
@@ -108,7 +108,7 @@ export default function SignIn() {
         </button>
 
         <ul className="signin-bullets">
-          <li>Handled by Unipile — 2FA, captcha, and unusual-sign-in prompts all work.</li>
+          <li>Handled by Unipile : 2FA, captcha, and unusual-sign-in prompts all work.</li>
           <li>Your credentials never touch surplus.</li>
           <li>Disconnect any time from Settings.</li>
         </ul>

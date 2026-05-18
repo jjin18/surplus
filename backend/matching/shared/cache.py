@@ -1,7 +1,7 @@
 """Brief-keyed cache for expensive LLM calls.
 
 Saves serialized JSON results under .cache/<key>.json keyed by a hash of
-(prompt content, model, version). Re-running the same brief is free — no
+(prompt content, model, version). Re-running the same brief is free : no
 LLM call, no web search.
 
 Cache is intentionally local-only (gitignored) and easy to clear:

@@ -1,5 +1,5 @@
 """
-agents/matcher_lib.py — bridge from surplus's matcher to the vendored
+agents/matcher_lib.py : bridge from surplus's matcher to the vendored
 `backend.matching` library (the real AI-driven matcher).
 
 Surplus already has Prospects in the DB after /prospect runs. The library
@@ -13,7 +13,7 @@ expects `EnrichedPerson` dataclasses. This module:
      surplus group-formation step to consume
 
 Output stays compatible with `backend.agents.matcher.build_edges` shape so
-the route handler doesn't need to change — same edge dicts, same group
+the route handler doesn't need to change : same edge dicts, same group
 formation, just better-weighted edges driven by the library's composite
 score instead of `(avg_fit ± const)`.
 
@@ -33,7 +33,7 @@ from ..matching.schema import EnrichedPerson, Person
 
 
 def library_available() -> bool:
-    """True when ANTHROPIC_API_KEY is set — the library needs it for both
+    """True when ANTHROPIC_API_KEY is set : the library needs it for both
     enrichment and rubric synthesis. Returns False on any missing dep."""
     return bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
 
@@ -68,7 +68,7 @@ def get_cached_enriched(event, attending: list) -> Optional[dict[str, Any]]:
 # the mapping should communicate role intent, not raw side labels.
 _SIDE_TO_TICKET = {
     "Builds":   "Attendee",     # builders go in as general attendees
-    "Hires":    "Hiring Lead",  # hirer side — looking to add to team
+    "Hires":    "Hiring Lead",  # hirer side : looking to add to team
     "Operates": "Founder",      # operators are usually founders / GTM ops
 }
 
@@ -86,7 +86,7 @@ def prospect_to_person(p) -> Person:
     """Map a surplus Prospect ORM row to a library Person dataclass.
 
     Identifier fields not stored on Prospect (x_handle, github_username,
-    email) are left blank — the library's enrichment step won't have those
+    email) are left blank : the library's enrichment step won't have those
     inputs to work with, but it can still scrape from linkedin_url and the
     GitHub API will skip when no username is provided.
     """
@@ -209,7 +209,7 @@ def build_edges_from_matrix(matrix: dict[str, Any], attending: list) -> list[dic
 # that maximizes the sum of library-derived composite scores within each
 # group, with a soft penalty against same-side concentration.
 
-# Side framing intentionally dropped — the LLM judges complementarity
+# Side framing intentionally dropped : the LLM judges complementarity
 # from enriched profile signal (skills, domains, conviction, experience
 # asymmetry, role complement from the rubric). Bucketing people as
 # Builds/Hires/Operates was a forced taxonomy that pre-decided who's
@@ -219,7 +219,7 @@ def build_edges_from_matrix(matrix: dict[str, Any], attending: list) -> list[dic
 def _pair_score_map(matrix: dict[str, Any]) -> dict[frozenset, float]:
     """Flatten matrix['pairs'] into {frozenset({a_id, b_id}): composite}.
 
-    Uses the *prospect* ids (ints), not library person ids — caller already
+    Uses the *prospect* ids (ints), not library person ids : caller already
     holds Prospect rows, so the inner code should never have to think about
     the "prospect-42" string form again.
     """
@@ -232,7 +232,7 @@ def _pair_score_map(matrix: dict[str, Any]) -> dict[frozenset, float]:
             continue
         a = pair["a_id"]
         b = pair["b_id"]
-        # ids are "prospect-N" — strip the prefix back to int
+        # ids are "prospect-N" : strip the prefix back to int
         try:
             ai = int(a.split("-", 1)[1])
             bi = int(b.split("-", 1)[1])
@@ -311,7 +311,7 @@ def form_groups_from_matrix(attending: list, matrix: dict[str, Any],
             if s > best_score:
                 best_score, best_gid = s, gid
         if best_gid is None:
-            # all groups at cap — pick the smallest
+            # all groups at cap : pick the smallest
             best_gid = min(groups, key=lambda g: len(groups[g]))
         groups[best_gid].append(p)
 

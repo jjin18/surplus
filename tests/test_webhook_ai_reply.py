@@ -154,7 +154,7 @@ def test_inbound_body_is_capped_at_max(db):
 
 
 def test_short_circuits_when_event_is_missing(db):
-    """A prospect with no event should not blow up the webhook — return None
+    """A prospect with no event should not blow up the webhook : return None
     silently rather than crashing the whole handler."""
     p = models.Prospect(
         event_id=999999, identity="ghost", name="Ghost", role="?", company="?",

@@ -1,4 +1,4 @@
-"""routes/matching.py — stage 04. Build the symbiotic value graph + groups."""
+"""routes/matching.py : stage 04. Build the symbiotic value graph + groups."""
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -89,9 +89,9 @@ def match(
 
     attending = _confirmed(ev)
     if not attending:
-        raise HTTPException(409, "no confirmed guests — run the pipeline first")
+        raise HTTPException(409, "no confirmed guests : run the pipeline first")
 
-    # idempotent — clear prior edges + group assignments
+    # idempotent : clear prior edges + group assignments
     for e in list(ev.edges):
         db.delete(e)
     for p in attending:
@@ -147,7 +147,7 @@ def explain_pair_endpoint(
     if enriched is None or matrix is None:
         raise HTTPException(
             409,
-            "no cached enrichment for this event — re-run /match first "
+            "no cached enrichment for this event : re-run /match first "
             "(the in-process cache is lost on server restart)"
         )
 

@@ -1,11 +1,11 @@
 """
-seed.py — run the whole mechanism end to end, no HTTP.
+seed.py : run the whole mechanism end to end, no HTTP.
 
     python -m backend.seed
 
 Resets the database, creates a sample event, runs all five stages in order,
 and prints what each one produced. The fastest way to confirm the engine is
-wired correctly — and a readable trace of the flow.
+wired correctly : and a readable trace of the flow.
 """
 from __future__ import annotations
 import asyncio
@@ -17,7 +17,7 @@ from .agents.matcher import build_edges, form_groups
 from .agents.roi import settle
 
 # headcount kept modest so the floating threshold actually floats against the
-# 20-person mock pool — see README. Production swaps in real, deep-pool adapters.
+# 20-person mock pool : see README. Production swaps in real, deep-pool adapters.
 SAMPLE_EVENT = dict(
     role="Infrastructure / ML platform engineers",
     seniority="Senior",
@@ -64,7 +64,7 @@ async def main() -> None:
         _h("STAGE 04 · symbiotic matching")
         attending = [p for p in prospects if p.status == "rsvp"]
         if not attending:
-            print("  no RSVPs this run — re-run to reseed the outreach funnel")
+            print("  no RSVPs this run : re-run to reseed the outreach funnel")
             return
         edges = build_edges(attending)
         groups = form_groups(attending, ev)
@@ -87,7 +87,7 @@ async def main() -> None:
               f"·  budget: ${metrics['budget']:,}")
         print(f"  net ROI: {metrics['net_roi_pct']}%  ·  "
               f"{metrics['converted']}/{metrics['attended']} converted to goal")
-        print(f"\n  done — database at backend/data/surplus.db\n")
+        print(f"\n  done : database at backend/data/surplus.db\n")
     finally:
         db.close()
 

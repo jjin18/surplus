@@ -1,5 +1,5 @@
 """
-jsonx.py — JSON-from-LLM-output extraction.
+jsonx.py : JSON-from-LLM-output extraction.
 
 Models love to wrap JSON in markdown fences or leak prose around it.
 `extract_json` is the recovery strategy: strip ```json fences, try a

@@ -1,4 +1,4 @@
-"""routes/roi.py — stage 05. Settle the verified conversion ledger + net ROI."""
+"""routes/roi.py : stage 05. Settle the verified conversion ledger + net ROI."""
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -25,7 +25,7 @@ def get_roi(
 
     attending = [p for p in ev.prospects if p.status == "rsvp"]
     if not attending:
-        raise HTTPException(409, "no confirmed guests to settle — run the pipeline first")
+        raise HTTPException(409, "no confirmed guests to settle : run the pipeline first")
 
     ledger, metrics = settle(ev, attending)
 

@@ -6,7 +6,7 @@ Those numbers tell you *how strongly* the model judged this pair, but not
 why a human should walk over and shake the other person's hand.
 
 This module turns the cached EnrichedPerson + the cached pair components
-into one short paragraph, on demand — so we only pay for the LLM call
+into one short paragraph, on demand : so we only pay for the LLM call
 when a user clicks "Why?".
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _components_summary(pair: dict[str, Any]) -> str:
 
 
 def _structured_fallback(person_a, person_b, pair: Optional[dict[str, Any]]) -> str:
-    """Profile-grounded explanation built from cached signal alone — no LLM.
+    """Profile-grounded explanation built from cached signal alone : no LLM.
 
     Used when the API call fails (no key, network, auth). Better than a
     raw error string: shows the matcher's actual reasoning surface.
@@ -98,7 +98,7 @@ def _structured_fallback(person_a, person_b, pair: Optional[dict[str, Any]]) -> 
             parts.append(f"composite {round(comp_score, 2)}")
 
     if not parts:
-        return ("No structured signal recorded for this pair — enrichment may "
+        return ("No structured signal recorded for this pair : enrichment may "
                 "have been thin. Try re-running /match.")
     return f"{person_a.name} ⟷ {person_b.name}: " + " · ".join(parts)
 
@@ -119,13 +119,13 @@ async def explain_pair(person_a, person_b, pair: Optional[dict[str, Any]] = None
     key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not key:
         return {
-            "text": ("LLM unavailable — ANTHROPIC_API_KEY is not set on this "
+            "text": ("LLM unavailable : ANTHROPIC_API_KEY is not set on this "
                      "server. Showing structured signal instead.\n\n"
                      + _structured_fallback(person_a, person_b, pair)),
             "source": "cached",
         }
 
-    prompt = f"""You're an event organizer briefing a guest on why we seated them near a specific other guest. Be concrete, factual, and short — two to three sentences. Cite the specific overlap or asymmetry that creates value. No generic platitudes.
+    prompt = f"""You're an event organizer briefing a guest on why we seated them near a specific other guest. Be concrete, factual, and short : two to three sentences. Cite the specific overlap or asymmetry that creates value. No generic platitudes.
 
 PERSON A:
 {_profile_lines(person_a)}
@@ -151,7 +151,7 @@ Write the explanation as if telling Person A: "Worth meeting B because…". 2-3 
         ).strip()
         if text:
             return {"text": text, "source": "llm"}
-        # Empty response — fall through to structured fallback
+        # Empty response : fall through to structured fallback
         return {
             "text": "(LLM returned an empty response)\n\n" +
                     _structured_fallback(person_a, person_b, pair),

@@ -1,8 +1,8 @@
 """
-agents/exa.py — Exa-backed prospect discovery.
+agents/exa.py : Exa-backed prospect discovery.
 
-Same contract as `llm.discover_candidates(source, icp)` — returns a list of
-candidate dicts in the per-source shape — but uses Exa's semantic search
+Same contract as `llm.discover_candidates(source, icp)` : returns a list of
+candidate dicts in the per-source shape : but uses Exa's semantic search
 instead of Claude + web_search. Cheaper, faster, and Exa's index has good
 LinkedIn / GitHub / X coverage so we can extract the canonical profile URL
 straight from the result without an extra parsing step.
@@ -10,14 +10,14 @@ straight from the result without an extra parsing step.
 Gated by EXA_API_KEY. When unset, callers fall back to llm.discover_candidates
 (Claude) and ultimately the mock pool.
 
-Result shapes per source — matching what the existing SourceAdapter expects:
+Result shapes per source : matching what the existing SourceAdapter expects:
 
   linkedin: {identity, name, linkedin_url, role?, company?, contact_resolved: True}
   github  : {identity, name, github_url, gh_stars: 0}
   x       : {identity, name, x_url, x_followers: 0}
 
 The 0s for gh_stars / x_followers are because Exa's index returns metadata
-about the page, not live API data. The scorer accepts 0 gracefully — the
+about the page, not live API data. The scorer accepts 0 gracefully : the
 prospect just won't get the signal bonus.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ _LINKEDIN_RE = re.compile(r"linkedin\.com/in/([A-Za-z0-9_-]+)", re.I)
 _GITHUB_RE = re.compile(r"github\.com/([A-Za-z0-9_-]+)/?$", re.I)
 _X_RE = re.compile(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)/?(?:$|\?)", re.I)
 
-# Title parsing — LinkedIn page titles follow a consistent format
+# Title parsing : LinkedIn page titles follow a consistent format
 _LI_TITLE_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:\|\s*LinkedIn)?\s*$")
 
 
@@ -50,14 +50,14 @@ _LI_TITLE_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:\|\s*LinkedIn)?\s*$")
 # ("San Francisco", "San Francisco Bay Area", "SF", "Bay Area", "Oakland").
 # Three things rely on this:
 #
-#   (1) Query phrasing  — we want "in the san francisco bay area" because
+#   (1) Query phrasing  : we want "in the san francisco bay area" because
 #       that's literally what LinkedIn profile pages say.
-#   (2) includeText     — Exa's server-side hard filter (1 phrase, ≤5 words).
+#   (2) includeText     : Exa's server-side hard filter (1 phrase, ≤5 words).
 #       Pick the *shortest substring that appears in every alias* so we
 #       don't over-prune. "San Francisco" matches "San Francisco" AND
 #       "San Francisco Bay Area"; "San Francisco Bay Area" would miss the
 #       former.
-#   (3) Post-filter     — broader set of aliases scanned against the
+#   (3) Post-filter     : broader set of aliases scanned against the
 #       returned snippet text so we drop NYC profiles that snuck through
 #       ranking even after includeText.
 #
@@ -134,7 +134,7 @@ _CITY_ALIASES: dict[str, dict] = {
 
 def _resolve_city(raw: str) -> Optional[dict]:
     """Return city config for a raw user-typed city, or None for an unknown
-    city. Unknown cities still work — caller falls back to using the raw
+    city. Unknown cities still work : caller falls back to using the raw
     string as both the query phrase and the includeText (best-effort).
     """
     key = (raw or "").strip().lower()
@@ -142,7 +142,7 @@ def _resolve_city(raw: str) -> Optional[dict]:
         return None
     if key in _CITY_ALIASES:
         return _CITY_ALIASES[key]
-    # Unknown city — synthesize a config so the rest of the pipeline still
+    # Unknown city : synthesize a config so the rest of the pipeline still
     # works. include_text is the user's literal input; aliases include just
     # the input itself.
     return {
@@ -152,7 +152,7 @@ def _resolve_city(raw: str) -> Optional[dict]:
     }
 
 
-# A "location-like" line in a LinkedIn snippet — used by the post-filter to
+# A "location-like" line in a LinkedIn snippet : used by the post-filter to
 # decide whether a snippet HAS location information at all. If a profile
 # snippet has zero location-looking lines we keep it (don't over-prune);
 # if it has one and our city's aliases don't appear anywhere in the snippet,
@@ -170,7 +170,7 @@ _LOCATION_HINT_RE = re.compile(
 def _location_matches(snippet: str, aliases: tuple[str, ...]) -> bool:
     """True if the snippet either:
       - mentions any of the city aliases anywhere, OR
-      - contains no location-looking line at all (can't disprove — keep).
+      - contains no location-looking line at all (can't disprove : keep).
     False only when there's a location line AND none of the aliases match.
     """
     if not snippet:
@@ -179,7 +179,7 @@ def _location_matches(snippet: str, aliases: tuple[str, ...]) -> bool:
     for alias in aliases:
         if alias in lower:
             return True
-    # No alias matched — but if the snippet has no location signal we can't
+    # No alias matched : but if the snippet has no location signal we can't
     # confidently reject. Only drop when there's an actual location line.
     has_location_line = any(
         _LOCATION_HINT_RE.search(line) for line in snippet.split("\n")
@@ -191,7 +191,7 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
     """
     Search Exa for one source's candidates matching the ICP.
 
-    Uses Exa's `category` filter to scope to actual profile pages — this is
+    Uses Exa's `category` filter to scope to actual profile pages : this is
     more precise than `includeDomains` alone (which would also surface
     LinkedIn job posts, company pages, etc.). We pass both as belt-and-
     suspenders so we don't pay tokens reading pages we'll discard anyway.
@@ -221,7 +221,7 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
         "query": query,
         "type": "neural",
         "category": category,
-        # over-fetch — even with category filter, some results won't yield a
+        # over-fetch : even with category filter, some results won't yield a
         # parseable handle (snippets, archives, etc.). Exa caps at 100 per
         # request so clamp there even when max_candidates is high. Bump the
         # multiplier when city is set so the post-filter has headroom to
@@ -230,7 +230,7 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
         "includeDomains": [domain],
         "contents": {"text": True},
     }
-    # Exa server-side hard filter — only return pages whose text contains
+    # Exa server-side hard filter : only return pages whose text contains
     # this phrase. Massively cuts wrong-geo results before they hit our
     # parser. Only do this for LinkedIn since github/x profile pages rarely
     # carry a clean location string Exa can match.
@@ -305,19 +305,19 @@ def _seniority_word(s: str) -> list[str]:
 def _build_query(source: str, icp: dict, city_cfg: Optional[dict] = None) -> str:
     """
     Compose a semantic query Exa can match. Reads like a description, not
-    a database query — Exa's neural search responds best to natural
+    a database query : Exa's neural search responds best to natural
     phrasing without articles. "Senior ML engineers at seed startups"
     pulls way more profiles than "LinkedIn profile of a Senior ML
     engineer working at a Seed-stage startup" (awkward "a + plural").
 
-    Seniority and co_stage are multi-select — emitted as OR-clauses
+    Seniority and co_stage are multi-select : emitted as OR-clauses
     ("senior or staff or principal engineers at seed or series a startups")
     so one Exa request covers all selected chips.
     """
     role = (icp.get("role") or "").strip()
     seniorities = _as_list(icp.get("seniority"))
     co_stages = _as_list(icp.get("co_stage"))
-    # Use the resolved canonical city phrase when available — "the san
+    # Use the resolved canonical city phrase when available : "the san
     # francisco bay area" matches LinkedIn's literal location strings much
     # better than raw user input like "sf". Fall back to raw text for
     # unknown cities (and tests that pass icp without going through
@@ -342,7 +342,7 @@ def _build_query(source: str, icp: dict, city_cfg: Optional[dict] = None) -> str
 
     base = f"{seniority_word} {role_phrase}".strip()
 
-    # Anchor by stage when present. Drop the article — "seed startups"
+    # Anchor by stage when present. Drop the article : "seed startups"
     # reads naturally; "a Seed-stage startup" introduces grammar friction
     # that hurts neural matching.
     if co_stages:
@@ -391,7 +391,7 @@ def _parse_result(source: str, r: dict, city_cfg: Optional[dict] = None) -> Opti
         if not name:
             return None
         # Filter out org/company pages that snuck through (the category
-        # filter helps but isn't bulletproof — e.g., "UCD Sociology",
+        # filter helps but isn't bulletproof : e.g., "UCD Sociology",
         # "Supreme Incubator" came back for a Senior+ engineer query).
         if _looks_like_org(name):
             return None
@@ -419,7 +419,7 @@ def _parse_result(source: str, r: dict, city_cfg: Optional[dict] = None) -> Opti
             "company": company,
             "contact_resolved": True,
             # Inferred from role + headline text. The scorer uses this to
-            # decide the seniority bonus vs the event's target — without it
+            # decide the seniority bonus vs the event's target : without it
             # everyone defaults to 'Mid' and gets a -8 penalty against any
             # Senior+ ICP, which is exactly what was wrong before.
             "seniority": _infer_seniority(role, headline),
@@ -471,7 +471,7 @@ def _normalize_linkedin_url(url: str, handle: str) -> str:
 
 def _parse_linkedin_title(title: str) -> tuple[str, str, str]:
     """
-    LinkedIn page titles come in many shapes in practice — sometimes:
+    LinkedIn page titles come in many shapes in practice : sometimes:
       "Daniel Wang - Software Engineer at Acme | LinkedIn"
       "Daniel Wang - Software Engineer | LinkedIn"
       "Daniel Wang | LinkedIn"
@@ -499,7 +499,7 @@ def _parse_linkedin_title(title: str) -> tuple[str, str, str]:
         name, rest = base.split(" | ", 1)
         return _split_role_company(name.strip(), rest.strip())
 
-    # No separator — title is just the name (or unparseable garbage).
+    # No separator : title is just the name (or unparseable garbage).
     # Heuristic: if it looks like a person name (≤4 words, no digits-heavy),
     # take it; otherwise treat as empty so we drop the result.
     if _looks_like_person_name(base):
@@ -558,8 +558,8 @@ _HEADER_RE = re.compile(r"^#+\s+")
 _AT_LINE_RE = re.compile(
     # Strip leading markdown header (## / ### / ####)
     r"^(?:#+\s+)?"
-    # "<Role> at [<Company>](url)" — markdown link form
-    # "<Role> at <Company>"       — plain form, greedy (terminates at newline)
+    # "<Role> at [<Company>](url)" : markdown link form
+    # "<Role> at <Company>"       : plain form, greedy (terminates at newline)
     r"(?P<role>.+?)\s+at\s+"
     r"(?:\[(?P<company_link>[^\]]+)\]\([^)]*\)|(?P<company_plain>[^|()\n]+))",
     re.IGNORECASE,
@@ -570,7 +570,7 @@ _SECTION_KEYWORDS = ("about", "experience", "education", "skills",
 # Role-keyword → seniority bucket. The scorer (backend/agents/scorer.py)
 # expects one of: Mid / Senior / Staff+ / Leadership. Exa's structured
 # fields don't carry seniority, so we infer from the role + headline text.
-# Order matters — first match wins, most senior bucket first.
+# Order matters : first match wins, most senior bucket first.
 _SENIORITY_HINTS: tuple[tuple[str, str], ...] = (
     ("Leadership", "founder"),
     ("Leadership", "ceo"),
@@ -602,7 +602,7 @@ _SENIORITY_HINTS: tuple[tuple[str, str], ...] = (
 def _infer_seniority(*texts: str) -> str:
     """Pick a seniority bucket from one or more role/headline strings.
 
-    Defaults to 'Senior' when no keyword matches — most LinkedIn-discovered
+    Defaults to 'Senior' when no keyword matches : most LinkedIn-discovered
     professionals are at least Senior, and 'Mid' would mean a -8 hit
     against any Senior+ ICP target which we don't want by default.
     """
@@ -635,7 +635,7 @@ def _extract_role_company_from_text(text: str) -> tuple[str, str]:
     We walk every line (no early break on `## Section`), skipping noise
     lines (location, follower counts, pure section headers), and return
     the first "Role at Company" match. The headline is also skipped
-    because it's typically pipe-separated bio text — `_extract_headline_
+    because it's typically pipe-separated bio text : `_extract_headline_
     from_text` captures it separately.
     """
     if not text:
@@ -645,7 +645,7 @@ def _extract_role_company_from_text(text: str) -> tuple[str, str]:
     # Drop the leading "# Name" header
     if lines and _HEADER_RE.match(lines[0]) and not lines[0].startswith("##"):
         lines = lines[1:]
-    # Skip the headline line — usually pipe-separated buzzwords or has
+    # Skip the headline line : usually pipe-separated buzzwords or has
     # "@" but not " at ". Don't skip if it already matches our pattern.
     if lines and " at " not in lines[0].lower() and (
         "|" in lines[0] or "@" in lines[0]
@@ -667,7 +667,7 @@ def _extract_role_company_from_text(text: str) -> tuple[str, str]:
         # Skip total-experience summaries
         if lower.startswith("total experience"):
             continue
-        # Skip lines that are too long to be a role — likely descriptive
+        # Skip lines that are too long to be a role : likely descriptive
         if len(line) > 200:
             continue
 
@@ -706,7 +706,7 @@ def _extract_headline_from_text(text: str) -> str:
             continue
         if s.startswith("##"):
             break
-        # Skip Role-at-Company structured lines — we capture those elsewhere
+        # Skip Role-at-Company structured lines : we capture those elsewhere
         if _AT_LINE_RE.match(s) and "|" not in s:
             continue
         return s[:200]

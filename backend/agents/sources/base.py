@@ -1,10 +1,10 @@
 """
-sources/base.py — the adapter contract.
+sources/base.py : the adapter contract.
 
 Every prospect source (GitHub, X, LinkedIn, and whatever you add next) is a
 SourceAdapter. The prospector fans them out *concurrently* and merges their
 partial records on `identity`. Each adapter only returns the fields it can
-actually see — that asymmetry is the point:
+actually see : that asymmetry is the point:
 
     github   -> identity, name, gh_stars, works_on, side
     x        -> identity, name, x_followers

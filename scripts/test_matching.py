@@ -1,5 +1,5 @@
 """
-scripts/test_matching.py — exercise the matcher algorithm with synthetic data.
+scripts/test_matching.py : exercise the matcher algorithm with synthetic data.
 
 No HTTP, no DB. Builds a fake event + 15 fake confirmed guests across a mix
 of market sides + domains, runs build_edges() and form_groups() directly,
@@ -41,7 +41,7 @@ SAMPLE_ATTENDEES = [
 
 def main() -> None:
     # Build fake Prospect-like objects (the matcher only reads the attributes
-    # it cares about, so a SimpleNamespace is enough — no DB roundtrip).
+    # it cares about, so a SimpleNamespace is enough : no DB roundtrip).
     attending = [
         SimpleNamespace(
             id=i, name=name, side=side, works_on=works_on,
@@ -69,7 +69,7 @@ def main() -> None:
         aff = [e for e in edges if e["edge_type"] == "affinity"]
         print(f"\n  EDGES: {len(sym)} symbiotic  ·  {len(aff)} affinity")
 
-        # top symbiotic pairs — the ones the room exists to manufacture
+        # top symbiotic pairs : the ones the room exists to manufacture
         by_id = {p.id: p for p in attending}
         top_sym = sorted(sym, key=lambda e: -e["weight"])[:5]
         print("\n  TOP SYMBIOTIC PAIRS (highest predicted mutual value):")

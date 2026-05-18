@@ -1,7 +1,7 @@
 """Build and query the full N×N pair-score matrix.
 
 Given enriched people + rubric, produce:
-  - pairs: list of all unique pair-score records (sparse — only ones that pass gates)
+  - pairs: list of all unique pair-score records (sparse : only ones that pass gates)
   - top_k_per_person: each person's top-K matches with full breakdown
   - mutual_pairs: pairs where each person is in the other's top-K (gold matches)
 
@@ -33,7 +33,7 @@ def compute_matrix(
 ) -> dict[str, Any]:
     """Score every unique pair + derive top-K + mutual flags.
 
-    Returns the full matrix dict (see schema below) — ready to JSON-serialize.
+    Returns the full matrix dict (see schema below) : ready to JSON-serialize.
 
     Schema:
       {
@@ -178,7 +178,7 @@ def _denorm_person(p: EnrichedPerson) -> dict[str, Any]:
 
 
 def _match_entry_for_view(pair: dict[str, Any], from_perspective: str) -> dict[str, Any]:
-    """Render a per-person top-K entry. `from_perspective` is 'a' or 'b' —
+    """Render a per-person top-K entry. `from_perspective` is 'a' or 'b' :
     which side of the pair is asking for matches."""
     other_id = pair["b_id"] if from_perspective == "b" else pair["a_id"]
     return {

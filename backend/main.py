@@ -1,5 +1,5 @@
 """
-main.py — FastAPI app.
+main.py : FastAPI app.
 
 Serves the API and (when present) the built React frontend at the same origin
 so production deploys hit one URL: GET / returns the SPA, /api/* + /events/*
@@ -52,10 +52,10 @@ app.include_router(admin.router)
 
 
 # NB: previously had a verbose 500 exception handler here that leaked
-# tracebacks in response bodies — used to debug the multi-tenant
+# tracebacks in response bodies : used to debug the multi-tenant
 # datetime bug. Removed once the bug was fixed since leaking internals
 # is a security smell. If we hit another mysterious 500, add it back
-# temporarily — see git blame for the exact handler.
+# temporarily : see git blame for the exact handler.
 
 
 @app.get("/api/health", tags=["meta"])
@@ -74,7 +74,7 @@ def anthropic_diagnostics():
     """
     Tests outbound connectivity to api.anthropic.com from inside the
     container. Useful when prospecting is silently returning 0 candidates
-    on a deployed instance — the answer here tells you whether the SDK
+    on a deployed instance : the answer here tells you whether the SDK
     can even reach Claude. Does NOT make a real `messages.create` call,
     so it doesn't cost tokens or require web_search entitlement.
 
@@ -136,7 +136,7 @@ def exa_discover_probe(
 ):
     """
     Probe Exa discovery directly for any source + ICP combo and return the
-    raw parsed candidates. Useful when /prospect feels like a black box —
+    raw parsed candidates. Useful when /prospect feels like a black box :
     this is the exact list our SourceAdapter would feed into the merge.
 
     Example:
@@ -166,7 +166,7 @@ def exa_discover_probe(
 
 def _exa_raw_results(source: str, icp: dict, max_candidates: int) -> list:
     """Tap the same Exa request but return the raw response items (title +
-    text snippet) — exposes what the parser is working with."""
+    text snippet) : exposes what the parser is working with."""
     from .agents import exa as _exa
     import httpx
     query = _exa._build_query(source, icp)
@@ -205,7 +205,7 @@ def _exa_raw_results(source: str, icp: dict, max_candidates: int) -> list:
 def exa_diagnostics():
     """
     Tests outbound connectivity to api.exa.ai from inside the container.
-    Useful when /prospect is silently returning 0 LinkedIn candidates —
+    Useful when /prospect is silently returning 0 LinkedIn candidates :
     the answer here tells you whether the Exa backend can even reach
     their API and whether the key is valid.
 
@@ -268,7 +268,7 @@ def exa_diagnostics():
 
 # --- Serve the built React frontend ---------------------------------------
 # In prod (Docker build): /app/frontend/dist exists and is mounted at "/".
-# Locally without a build, this branch is skipped — visit /docs for the API
+# Locally without a build, this branch is skipped : visit /docs for the API
 # or run `cd frontend && npm run dev` for hot-reload development.
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():

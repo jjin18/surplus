@@ -1,11 +1,11 @@
 """
-db.py — DB engine + session.
+db.py : DB engine + session.
 
 In production, reads DATABASE_URL (Railway provides a Postgres URL when a
 Postgres service is attached). In local dev or when DATABASE_URL is unset,
 falls back to a SQLite file at backend/data/surplus.db.
 
-Why this matters: Railway's container filesystem is ephemeral by default —
+Why this matters: Railway's container filesystem is ephemeral by default :
 every deploy gets a fresh disk, so the SQLite DB (and every Session/User
 row in it) is wiped on each redeploy. Postgres survives deploys, so user
 sessions don't get invalidated every time we push.
@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 _RAW_DB_URL = (os.environ.get("DATABASE_URL") or "").strip()
 
 if _RAW_DB_URL:
-    # Railway / Heroku style: postgres://... — SQLAlchemy 2.x wants postgresql://
+    # Railway / Heroku style: postgres://... : SQLAlchemy 2.x wants postgresql://
     if _RAW_DB_URL.startswith("postgres://"):
         _RAW_DB_URL = _RAW_DB_URL.replace("postgres://", "postgresql://", 1)
     DB_URL = _RAW_DB_URL
@@ -41,7 +41,7 @@ class Base(DeclarativeBase):
 
 
 def get_db():
-    """FastAPI dependency — yields a session, always closes it."""
+    """FastAPI dependency : yields a session, always closes it."""
     db = SessionLocal()
     try:
         yield db
@@ -67,7 +67,7 @@ def init_db() -> None:
 def _migrate_prospect_connection_status() -> None:
     """Add prospects.connection_status + connection_checked_at to legacy DBs.
 
-    Same idea as _migrate_event_user_id — create_all doesn't ALTER existing
+    Same idea as _migrate_event_user_id : create_all doesn't ALTER existing
     tables, so we hand-roll the additions. Both columns nullable / defaulted
     so old rows just become "unknown" until the first Unipile relation
     check stamps them.
@@ -93,7 +93,7 @@ def _migrate_prospect_connection_status() -> None:
 def _migrate_event_user_id() -> None:
     """Add events.user_id to legacy DBs that pre-date multi-tenant.
 
-    SQLAlchemy's create_all only creates missing tables — it doesn't ALTER
+    SQLAlchemy's create_all only creates missing tables : it doesn't ALTER
     existing ones to add columns. For the single column we needed to add this
     week, hand-rolling the ALTER is simpler than introducing alembic.
     """
@@ -125,7 +125,7 @@ def _ensure_operator_user_and_backfill() -> None:
         - The webhook handler has a deterministic fallback when an event's
           user is the operator (it just uses the env-var provider)
 
-    Idempotent — safe to run on every startup. No-op when:
+    Idempotent : safe to run on every startup. No-op when:
       - UNIPILE_ACCOUNT_ID env var is unset (e.g. fresh dev machine)
       - The operator User already exists (subsequent startups)
       - There are no orphan events

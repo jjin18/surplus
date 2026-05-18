@@ -1,5 +1,5 @@
 """
-sources/x.py — reach signal.
+sources/x.py : reach signal.
 
 Two modes:
   - LLM mode (when ANTHROPIC_API_KEY is set): Claude + web_search finds X

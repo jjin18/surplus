@@ -17,7 +17,7 @@ from typing import Any, Optional
 # normalized into one of these by the ingest layer.
 EXP_LEVELS = ("beginner", "intermediate", "advanced", "expert", "unknown")
 
-# Note: ticket_type is event-agnostic free-text — values depend on the event
+# Note: ticket_type is event-agnostic free-text : values depend on the event
 # (e.g. Luma uses Attendee/Investor/Judge; a salon might use VIP/General/Speaker).
 # The per-event rubric synthesizer decides how to interpret the values.
 
@@ -46,9 +46,9 @@ class Person:
     # Event-context fields (informational; values vary per event)
     ticket_type: str = "unknown"  # free-text from the CSV; meaning is event-specific
     exp_level: str = "unknown"    # normalized: beginner/intermediate/advanced/expert/unknown
-    checked_in: bool = False      # informational — NOT used as a matching input
+    checked_in: bool = False      # informational : NOT used as a matching input
 
-    # Provenance — which CSV columns mapped to what
+    # Provenance : which CSV columns mapped to what
     raw_row: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,11 +59,11 @@ class Person:
 class EnrichedPerson:
     """Person + fields extracted from X / LinkedIn / GitHub enrichment.
 
-    All enrichment fields are optional — degrade gracefully when a source fails.
+    All enrichment fields are optional : degrade gracefully when a source fails.
     `enrichment_sources` records per-source status so downstream code can reason
     about data quality per person.
     """
-    # Everything from Person — flatten rather than nest for downstream simplicity
+    # Everything from Person : flatten rather than nest for downstream simplicity
     id: str
     name: str
     email: str = ""
@@ -91,14 +91,14 @@ class EnrichedPerson:
     domains: list[str] = field(default_factory=list)
     # e.g. ["robotics-manipulation", "ml-infra", "fintech-b2b"]
 
-    # What they obsess about (from X bio + recent posts) — the conviction signal
+    # What they obsess about (from X bio + recent posts) : the conviction signal
     conviction_themes: list[str] = field(default_factory=list)
     # e.g. ["humanoid robotics", "vertical AI evals", "sim-to-real"]
 
     # Notable shipped things, exits, prior wins
     previous_experiences: list[str] = field(default_factory=list)
 
-    # Synthesized bio paragraph — used for embedding
+    # Synthesized bio paragraph : used for embedding
     bio_text: str = ""
 
     # GitHub specifics (from direct API)

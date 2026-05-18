@@ -1,5 +1,5 @@
 """
-routes/admin.py — cron / operator-triggered tasks.
+routes/admin.py : cron / operator-triggered tasks.
 
     POST /admin/run-followups   shared-secret auth (X-Admin-Token)
 
@@ -47,7 +47,7 @@ class PendingReplyOut(BaseModel):
 
 
 class ApproveBody(BaseModel):
-    """Optional edited text — when present, sent instead of the draft."""
+    """Optional edited text : when present, sent instead of the draft."""
     edited_text: Optional[str] = None
 
 
@@ -62,7 +62,7 @@ def _require_admin_token(x_admin_token: Optional[str] = Header(default=None)) ->
     """Constant-time compare the X-Admin-Token header against ADMIN_TOKEN env.
 
     Returns 404 (not 401/403) on missing-or-wrong, matching the demo route's
-    no-fingerprinting posture — an attacker scanning shouldn't learn this
+    no-fingerprinting posture : an attacker scanning shouldn't learn this
     endpoint exists.
     """
     expected = (os.environ.get("ADMIN_TOKEN") or "").strip()
@@ -122,7 +122,7 @@ def run_followups(
 ) -> dict:
     """Send a follow-up DM to every prospect currently due for one.
 
-    Designed for hourly cron — running it more often is harmless (the
+    Designed for hourly cron : running it more often is harmless (the
     eligibility window won't shift inside an hour and follow-up rows would
     just exceed FOLLOWUP_MAX_PER_PROSPECT on the second run).
     """
@@ -174,7 +174,7 @@ def run_followups(
     }
 
 
-# ── Pending AI replies — list, approve, reject ──────────────────────────
+# ── Pending AI replies : list, approve, reject ──────────────────────────
 
 @router.get("/pending-replies", response_model=list[PendingReplyOut])
 def list_pending_replies(

@@ -1,5 +1,5 @@
 """
-config.py — the mechanism levers.
+config.py : the mechanism levers.
 
 Everything here is *policy*, not data. These two tables are what make the
 engine adapt: FORMAT_CONFIG decides the matching topology, GOAL_CONFIG decides
@@ -14,7 +14,7 @@ ABS_FLOOR = 55            # the floating threshold never drops below this fit sc
 # --- follow-ups ------------------------------------------------------------
 # Wait this many hours after the first post-accept DM before sending the
 # follow-up. Tuned so a recipient gets ~2 weekday windows to reply before we
-# nudge — set lower for shorter ramps, higher for less aggressive sequences.
+# nudge : set lower for shorter ramps, higher for less aggressive sequences.
 FOLLOWUP_DELAY_HOURS = 48
 # Hard cap on how many follow-ups a single prospect can receive. Currently
 # only one is composed by compose_followup(); raise this AND extend the
@@ -25,23 +25,23 @@ FOLLOWUP_MAX_PER_PROSPECT = 1
 FORMAT_CONFIG = {
     "Sit-down dinner": {
         "group_word": "Table", "group_size": 5,
-        "topology": "fixed seating — composition locked before doors open",
+        "topology": "fixed seating : composition locked before doors open",
     },
     "Hackathon": {
         "group_word": "Team", "group_size": 4,
-        "topology": "team formation — complementary skills balanced per team",
+        "topology": "team formation : complementary skills balanced per team",
     },
     "Workshop": {
         "group_word": "Breakout", "group_size": 6,
-        "topology": "fluid breakouts — groups regroup between sessions",
+        "topology": "fluid breakouts : groups regroup between sessions",
     },
     "Mixer": {
         "group_word": "Cluster", "group_size": 8,
-        "topology": "soft clusters — seeded, not enforced",
+        "topology": "soft clusters : seeded, not enforced",
     },
     "Roundtable": {
         "group_word": "Seat", "group_size": 10,
-        "topology": "single ring — seating order is the lever",
+        "topology": "single ring : seating order is the lever",
     },
 }
 DEFAULT_FORMAT = FORMAT_CONFIG["Sit-down dinner"]
@@ -52,7 +52,7 @@ DEFAULT_FORMAT = FORMAT_CONFIG["Sit-down dinner"]
 # `value` prices each outcome state.
 GOAL_CONFIG = {
     "Hiring pipeline": {
-        "outreach": "a {headcount}-person {format} in {city} — {seniority} {role} and the teams hiring them",
+        "outreach": "a {headcount}-person {format} in {city} : {seniority} {role} and the teams hiring them",
         "ledger_head": "Hiring outcome",
         "tiers": {
             "high": {"label": "Hired",       "state": "won",     "detail": "signed offer"},
@@ -62,7 +62,7 @@ GOAL_CONFIG = {
         "value": {"won": 28000, "partial": 8000, "lost": 0},
     },
     "Fundraising": {
-        "outreach": "a {format} in {city} — founders raising at {co_stage} and the investors who back them",
+        "outreach": "a {format} in {city} : founders raising at {co_stage} and the investors who back them",
         "ledger_head": "Raise outcome",
         "tiers": {
             "high": {"label": "Term sheet", "state": "won",     "detail": "in diligence"},
@@ -82,7 +82,7 @@ GOAL_CONFIG = {
         "value": {"won": 54000, "partial": 11000, "lost": 0},
     },
     "Product testing": {
-        "outreach": "a {format} in {city} — hands-on {seniority} {role} to stress-test an early build",
+        "outreach": "a {format} in {city} : hands-on {seniority} {role} to stress-test an early build",
         "ledger_head": "Testing outcome",
         "tiers": {
             "high": {"label": "Active tester", "state": "won",     "detail": "12 issues filed, weekly"},
@@ -92,7 +92,7 @@ GOAL_CONFIG = {
         "value": {"won": 16000, "partial": 4000, "lost": 0},
     },
     "Community density": {
-        "outreach": "a recurring {format} in {city} — the {seniority} {role} crowd, same room every month",
+        "outreach": "a recurring {format} in {city} : the {seniority} {role} crowd, same room every month",
         "ledger_head": "Community outcome",
         "tiers": {
             "high": {"label": "Core member", "state": "won",     "detail": "returning + bringing others"},

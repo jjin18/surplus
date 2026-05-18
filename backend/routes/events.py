@@ -1,8 +1,8 @@
-"""routes/events.py — stage 01, intake. Create and read the event profile.
+"""routes/events.py : stage 01, intake. Create and read the event profile.
 
 Both routes require auth. Events are owned by the signed-in user; other users
 cannot read or write someone else's event (404 in both not-found and
-not-owned cases — see auth.get_owned_event).
+not-owned cases : see auth.get_owned_event).
 """
 from __future__ import annotations
 from fastapi import APIRouter, Depends

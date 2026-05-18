@@ -55,7 +55,7 @@ def _summarize_people(people: list[Person], top_n: int = 30) -> dict[str, Any]:
     tickets = Counter(_norm(p.ticket_type) or "unknown" for p in people)
     exp = Counter(_norm(p.exp_level) or "unknown" for p in people)
 
-    # Role keywords — tokenize titles, count occurrences of meaningful tokens
+    # Role keywords : tokenize titles, count occurrences of meaningful tokens
     role_tokens: Counter = Counter()
     for p in people:
         text = f"{p.role} {p.title}".lower()
@@ -222,7 +222,7 @@ async def synthesize_rubric(
 ) -> dict[str, Any]:
     """Return a rubric dict for this event. Caches by (event_name, description) hash.
 
-    Never raises — falls back to a sensible default rubric on any failure so
+    Never raises : falls back to a sensible default rubric on any failure so
     the pipeline can always proceed.
     """
     event_id = _event_id(event_name, event_description)
@@ -249,7 +249,7 @@ async def synthesize_rubric(
         text = "\n".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
         parsed = _extract_json(text)
     except Exception as e:
-        print(f"[rubric] LLM error: {e!r} — using fallback")
+        print(f"[rubric] LLM error: {e!r} : using fallback")
         rubric = _fallback_rubric(summary)
         rubric["_telemetry"] = {**telemetry, "error": repr(e)}
         rubric["_event_id"] = event_id
@@ -259,14 +259,14 @@ async def synthesize_rubric(
         return rubric
 
     if not parsed or not _validate_rubric(parsed):
-        print("[rubric] invalid LLM output — using fallback")
+        print("[rubric] invalid LLM output : using fallback")
         rubric = _fallback_rubric(summary)
         rubric["_telemetry"] = {**telemetry, "parse_failed": True}
     else:
         rubric = parsed
         rubric["_telemetry"] = telemetry
 
-    # Safety clamp on min_similar_score — the geometric/weighted-sum blend
+    # Safety clamp on min_similar_score : the geometric/weighted-sum blend
     # already ranks shared-context pairs higher, so the gate is mainly there
     # to drop pairs with truly zero signal. Cap at 0.03 so it doesn't
     # over-filter cross-role matches where complementarity is the point.

@@ -1,5 +1,5 @@
 """
-agents/outreach.py — stage 03b, message composition + simulated funnel.
+agents/outreach.py : stage 03b, message composition + simulated funnel.
 
   compose(prospect, event, peers=?, host_bio=?) -> Message
       Produces the LinkedIn connection note (≤280 chars) and the longer
@@ -59,7 +59,7 @@ def _csv_first(v) -> str:
 
 def _framing(event) -> str:
     """Render the per-goal outreach framing for one event. Picks the first
-    goal when several are selected — keeps the demo coherent rather than
+    goal when several are selected : keeps the demo coherent rather than
     awkwardly stuffing two goals into one sentence."""
     goal = _csv_first(event.goal) or "Hiring pipeline"
     seniority = _csv_first(event.seniority).lower() or "senior"
@@ -112,7 +112,7 @@ def compose(
     prospect : the Prospect ORM row (or any object with the same attrs)
     event    : the Event ORM row
     peers    : confirmed peer names (for the composition reveal)
-    host_bio : optional host's blurb — used by the longer follow-up when
+    host_bio : optional host's blurb : used by the longer follow-up when
                available. Accepted now so the LLM upgrade is a no-churn swap.
 
     Returns
@@ -127,7 +127,7 @@ def compose(
 
     # --- connection note: short, specific, no hard pitch --------------------
     note_body = (
-        f"Hi {first} — pulling together {framing}. "
+        f"Hi {first} : pulling together {framing}. "
         f"Your {domain} work caught my eye.{reveal} "
         f"Worth your time?"
     )
@@ -159,17 +159,17 @@ def compose(
 
 def compose_followup(prospect, event) -> str:
     """The follow-up DM sent N hours after the first post-accept message
-    when the prospect hasn't replied. Lighter touch than the first DM —
+    when the prospect hasn't replied. Lighter touch than the first DM :
     no re-pitch, explicit off-ramp."""
     first = (prospect.name or "there").split()[0]
     framing = _framing(event)
     lines = [
-        f"Hey {first} — circling back on the {event.format.lower()}.",
+        f"Hey {first} : circling back on the {event.format.lower()}.",
         "",
         f"Quick recap: {framing}. Seats are filling so wanted to make sure "
         f"this didn't get lost.",
         "",
-        "If it's not the right fit or timing, totally fine — just let me know "
+        "If it's not the right fit or timing, totally fine : just let me know "
         "and I'll close the loop. Otherwise happy to share details.",
     ]
     return "\n".join(lines).strip()

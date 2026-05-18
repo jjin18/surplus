@@ -1,5 +1,5 @@
 """
-schemas.py — API request/response shapes.
+schemas.py : API request/response shapes.
 
 Pydantic models with `build()` / `from_*` classmethods that assemble a clean
 response from ORM objects. Keeping the assembly here means routes stay thin and
@@ -25,7 +25,7 @@ def _split_csv(v) -> list[str]:
 class EventCreate(BaseModel):
     """Intake profile. Defaults match the demo so `POST /events {}` just works.
 
-    `seniority`, `co_stage`, and `goal` are multi-select — the frontend sends
+    `seniority`, `co_stage`, and `goal` are multi-select : the frontend sends
     lists; storage is CSV-joined in the existing String columns to avoid a
     schema migration.
     """
@@ -322,7 +322,7 @@ class MatchResult(BaseModel):
                 counterparts=sum(m.side != "Builds" for m in members),
             ))
 
-        # Top edges by weight, regardless of type — the LLM-derived weight
+        # Top edges by weight, regardless of type : the LLM-derived weight
         # is the source of truth. (Old behavior filtered to symbiotic which
         # could leave this list empty for one-side pools.)
         top = sorted(edges, key=lambda e: -e["weight"])[:6]

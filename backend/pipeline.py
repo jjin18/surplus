@@ -1,5 +1,5 @@
 """
-pipeline.py — stage 02-03 orchestrator, split into two halves.
+pipeline.py : stage 02-03 orchestrator, split into two halves.
 
     run_prospect(db, event)        stage 02 + 03a
         fan-out -> persist -> score -> floating threshold ->
@@ -8,13 +8,13 @@ pipeline.py — stage 02-03 orchestrator, split into two halves.
     run_outreach_stage(db, event)  stage 03b
         for every approved prospect:
           1. compose() the (note, message)
-          2. provider.send_connection(lead) — DRY_RUN by default
+          2. provider.send_connection(lead) : DRY_RUN by default
           3. write an OutreachLog row capturing the result
         In DRY_RUN, additionally roll the RNG simulator so /match and /roi
         still have RSVPs to work with. In LIVE mode, status changes come
         only via real webhook events.
 
-    run_pipeline(db, event)        facade — does both, in order.
+    run_pipeline(db, event)        facade : does both, in order.
 """
 from __future__ import annotations
 import json
@@ -78,7 +78,7 @@ async def run_prospect(
     funnel_target = round(event.headcount / config.FUNNEL_CONVERSION)
     event.threshold = floating_threshold([p.fit_score for p in prospects], funnel_target)
 
-    # Threshold gating intentionally disabled — every discovered prospect is
+    # Threshold gating intentionally disabled : every discovered prospect is
     # marked "approved" so the user can message anyone, regardless of fit
     # score. The score + computed threshold are still surfaced in the UI for
     # context (sort order, "above threshold" badge), they just don't block
@@ -123,7 +123,7 @@ def run_outreach_stage(
 
     `provider` argument lets the caller pass a per-user provider (the
     LinkedIn account of the signed-in user). If omitted, falls back to the
-    env-var operator account — used by the dry-run simulator and by callers
+    env-var operator account : used by the dry-run simulator and by callers
     that don't have a user in scope (e.g. tests).
     """
     if provider is None:
@@ -177,7 +177,7 @@ def run_outreach_stage(
             provider=res.provider,
             provider_lead_id=res.provider_lead_id,
         ))
-        # In dry-run we don't update prospect.status here — the simulator
+        # In dry-run we don't update prospect.status here : the simulator
         # below will set it to contacted/rsvp for demo continuity. In live
         # mode, a successful send_connection means we're now waiting on
         # invite_accepted / message_replied webhooks; we update status now
@@ -195,7 +195,7 @@ def run_outreach_stage(
         for p, sim_events, status in run_outreach(sim_targets, event):
             p.status = status
             for e in sim_events:
-                # skip the redundant 'sent' entry — provider's dry_run_queued
+                # skip the redundant 'sent' entry : provider's dry_run_queued
                 # log already captures the first touch.
                 if e["state"] == "sent":
                     continue
@@ -215,7 +215,7 @@ def run_outreach_stage(
 
 
 async def run_pipeline(db: Session, event: models.Event, provider=None):
-    """Facade — run /prospect then /outreach back-to-back. Same provider=
+    """Facade : run /prospect then /outreach back-to-back. Same provider=
     fallthrough as run_outreach_stage."""
     await run_prospect(db, event)
     run_outreach_stage(db, event, provider=provider)

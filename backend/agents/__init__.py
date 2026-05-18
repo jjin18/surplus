@@ -1,5 +1,5 @@
 """
-Agents — one module per mechanism stage.
+Agents : one module per mechanism stage.
 
     prospector  stage 02   concurrent fan-out across source adapters
     scorer      stage 03a  fit score + floating threshold

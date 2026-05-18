@@ -1,5 +1,5 @@
 """
-agents/roi.py — stage 05, verified settlement.
+agents/roi.py : stage 05, verified settlement.
 
 ROI settles against the goal set at intake. For each confirmed guest it derives
 a conversion tier from verified fit, maps that to the goal's outcome
@@ -7,10 +7,10 @@ a conversion tier from verified fit, maps that to the goal's outcome
 ledger + aggregate metrics.
 
 settle() -> (ledger, metrics)
-  ledger  : one row per guest — the deliverable. "Who actually converted."
+  ledger  : one row per guest : the deliverable. "Who actually converted."
   metrics : net ROI %, value generated vs budget, the invited->converted funnel.
 
-NOTE — open design question: tier_of() maps fit score straight to outcome
+NOTE : open design question: tier_of() maps fit score straight to outcome
 tier. That is a *prediction*, not verification. The trustworthy version reads
 real 30/60/90-day follow-up data per guest; this is the placeholder that lets
 the rest of the pipeline run end to end.

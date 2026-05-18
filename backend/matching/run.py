@@ -67,7 +67,7 @@ async def run_pipeline(
     """
     t_start = time.time()
 
-    # Per-run model override — works because packages.enrich reads MODEL at
+    # Per-run model override : works because packages.enrich reads MODEL at
     # call time from the module-level constant via os.environ.get default.
     if enrich_model:
         os.environ["ENRICH_MODEL"] = enrich_model
@@ -94,7 +94,7 @@ async def run_pipeline(
 
     # ---- 2. Rubric synthesis (kicked off in parallel with enrich start) ----
     # Emit rubric_done the moment the task resolves rather than after enrich
-    # finishes — otherwise the UI shows "synthesizing…" for the full enrich
+    # finishes : otherwise the UI shows "synthesizing…" for the full enrich
     # duration even though the rubric finished ~20 sec earlier.
     await emit("rubric_started", {})
 
@@ -195,7 +195,7 @@ async def run_pipeline(
 
     # pipeline_done is emitted by the API layer after state.matrix is committed,
     # so the client's matrix fetch can't race a 202 "still running" response.
-    # CLI callers won't see pipeline_done — they use the returned tuple instead.
+    # CLI callers won't see pipeline_done : they use the returned tuple instead.
 
     # Return matrix + by_id (for lazy explain) + rubric (also for lazy explain)
     return matrix, by_id, rubric

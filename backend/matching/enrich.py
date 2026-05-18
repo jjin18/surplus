@@ -41,7 +41,7 @@ CACHE_VERSION = "v1"
 
 # ---- Prompts ----
 
-# Cache the system prompt at module load — it's ~3KB of static text we'll
+# Cache the system prompt at module load : it's ~3KB of static text we'll
 # send with every enrich call. Anthropic prompt caching gives 90% discount
 # on cached tokens after the first hit.
 _SYSTEM_PROMPT_CACHE: Optional[str] = None
@@ -56,7 +56,7 @@ def _load_system_prompt() -> str:
 def _format_github_summary(gh: Optional[dict[str, Any]]) -> str:
     """One-paragraph human summary of GitHub for the prompt context."""
     if not gh:
-        return "(no GitHub data — username missing or fetch failed)"
+        return "(no GitHub data : username missing or fetch failed)"
     parts = [
         f"  username: {gh.get('username', '')}",
         f"  bio: {gh.get('bio') or '(empty)'}",
@@ -90,7 +90,7 @@ def _build_user_message(person: Person, github_profile: Optional[dict[str, Any]]
 # ---- Cache (shared namespace-keyed cache; mirrors event-v1's convention) ----
 
 def _read_cache(person_id: str) -> Optional[dict[str, Any]]:
-    # Reads disabled during the demo phase — every upload runs fresh through
+    # Reads disabled during the demo phase : every upload runs fresh through
     # the live LLM+web_search pipeline. Re-enable with ENRICH_CACHE_READS=1.
     if os.environ.get("ENRICH_CACHE_READS", "").lower() not in {"1", "true", "yes"}:
         return None
@@ -230,7 +230,7 @@ async def enrich_person(
         ):
             if field in parsed and parsed[field] is not None:
                 setattr(enriched, field, parsed[field])
-        # Source statuses — LLM tells us what worked
+        # Source statuses : LLM tells us what worked
         llm_sources = parsed.get("enrichment_sources", {}) or {}
         for k in ("x", "linkedin"):
             if k in llm_sources:
@@ -280,7 +280,7 @@ async def enrich_person(
 # ---- Batch orchestration ----
 
 ProgressCallback = Callable[[str, EnrichedPerson, dict[str, Any]], Awaitable[None]]
-# (event_type, person, meta) — events: "start", "ok", "error"
+# (event_type, person, meta) : events: "start", "ok", "error"
 
 
 async def enrich_batch(

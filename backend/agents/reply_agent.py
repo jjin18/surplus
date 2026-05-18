@@ -1,5 +1,5 @@
 """
-agents/reply_agent.py — Feature B: AI-contextual replies.
+agents/reply_agent.py : Feature B: AI-contextual replies.
 
 When a prospect replies to one of our outreach DMs, the webhook hands the
 full conversation thread to `decide_reply()`. The model returns a
@@ -10,19 +10,19 @@ structured decision:
 The model does NOT have a `send_reply` tool. It only writes the draft +
 classifies the message. The CALLER decides whether to auto-send (based
 on classification + loop guard) or queue for human approval. This split
-is intentional — the model can never accidentally send something it
+is intentional : the model can never accidentally send something it
 shouldn't, because it doesn't hold the trigger.
 
 Classifications:
-    clarifying  — logistical question (when/where/who/dress code/agenda)
+    clarifying  : logistical question (when/where/who/dress code/agenda)
                   → SAFE for auto-send
-    commitment  — implies a commitment, price, time guarantee, or RSVP
+    commitment  : implies a commitment, price, time guarantee, or RSVP
                   → ALWAYS queue for approval
-    off_topic   — unrelated to the event
+    off_topic   : unrelated to the event
                   → ALWAYS queue
-    negative    — declining, hostile, frustrated, or opt-out signal
+    negative    : declining, hostile, frustrated, or opt-out signal
                   → ALWAYS queue
-    ambiguous   — agent can't tell
+    ambiguous   : agent can't tell
                   → ALWAYS queue
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ from ..jsonx import extract_json
 
 
 # Classifications the orchestrator is willing to auto-send. Hard-coded
-# (not env-driven) on purpose — changing this is a policy decision that
+# (not env-driven) on purpose : changing this is a policy decision that
 # should require a code review, not an env flip.
 AUTO_SEND_CLASSES: frozenset[str] = frozenset({"clarifying"})
 
@@ -83,7 +83,7 @@ Read the conversation thread and the recipient's latest reply, then produce:
 You do not have the ability to send messages. A human (or downstream code) decides whether to send your draft. Your output is always inspected.
 
 CLASSIFICATIONS (pick exactly one)
-- "clarifying": the recipient is asking a logistical question — time, place, dress code, agenda, who else is coming, format, duration, location specifics. NO commitments involved. Safe to handle.
+- "clarifying": the recipient is asking a logistical question : time, place, dress code, agenda, who else is coming, format, duration, location specifics. NO commitments involved. Safe to handle.
 - "commitment": the recipient is trying to commit (RSVP yes, ask for a specific seat, request a calendar invite), or expects you to commit on the host's behalf (price, exact start time you don't know, guest list confirmation).
 - "off_topic": unrelated to the event (sales pitch, recruiter spam, random question about you/the host's other work).
 - "negative": declining, frustrated, opt-out signal ("not interested", "stop", "remove me"), or hostile.
@@ -91,11 +91,11 @@ CLASSIFICATIONS (pick exactly one)
 
 DRAFT GUIDELINES
 - Concise. 1–3 sentences max. LinkedIn DMs are short.
-- Match the recipient's register — if they wrote one line, write one line.
+- Match the recipient's register : if they wrote one line, write one line.
 - NEVER invent facts. Don't make up a time, a price, an address, who else is attending, the host's bio, or specific dates. If the event facts in the user message don't cover their question, say "let me check with the host and circle back" or similar.
-- NEVER apologize for the AI. Don't say "as an AI" or "I'll have someone get back to you" — write as if you were the host's assistant.
+- NEVER apologize for the AI. Don't say "as an AI" or "I'll have someone get back to you" : write as if you were the host's assistant.
 - For "negative": draft a polite acknowledgment that respects the no. No counter-pitch.
-- For "commitment": draft a placeholder that defers to the host (e.g. "Glad you're interested — let me confirm the seat with the host and get back to you today."). The human will edit before sending.
+- For "commitment": draft a placeholder that defers to the host (e.g. "Glad you're interested : let me confirm the seat with the host and get back to you today."). The human will edit before sending.
 - For "off_topic": draft a brief redirect or "not the right person for this, sorry."
 - For "ambiguous": draft a clarifying question.
 
@@ -104,8 +104,8 @@ Return ONLY a JSON object. No prose, no markdown fences. Schema:
 
 {
   "classification": "clarifying" | "commitment" | "off_topic" | "negative" | "ambiguous",
-  "draft_text": "string — the actual reply, ready to send if approved",
-  "reasoning": "string — one sentence explaining your classification + draft choice"
+  "draft_text": "string : the actual reply, ready to send if approved",
+  "reasoning": "string : one sentence explaining your classification + draft choice"
 }"""
 
 
@@ -123,7 +123,7 @@ def _format_thread(thread: list[ThreadMessage]) -> str:
 def _format_event_context(event, host) -> str:
     """Render the parts of the event the model needs to ground its replies.
 
-    Only facts we actually have — don't fabricate placeholders for things
+    Only facts we actually have : don't fabricate placeholders for things
     we'd want the model to know (exact venue, start time, dress code). If
     a field is empty, the model should be told to defer to the host
     rather than hallucinate.
@@ -138,7 +138,7 @@ def _format_event_context(event, host) -> str:
     host_name = (getattr(host, "name", None) or "the host").strip()
     host_headline = getattr(host, "headline", None) or ""
     parts = [
-        f"Host: {host_name}" + (f" — {host_headline}" if host_headline else ""),
+        f"Host: {host_name}" + (f" : {host_headline}" if host_headline else ""),
         f"Event format: {event.format}",
         f"City: {event.city}",
         f"Headcount target: {event.headcount}",
@@ -168,7 +168,7 @@ def _coerce_decision(parsed: Optional[dict[str, Any]], raw: str,
         return ReplyDecision(
             classification="ambiguous",
             draft_text="",
-            reasoning="(agent failed to produce parseable output — queued for review)",
+            reasoning="(agent failed to produce parseable output : queued for review)",
             raw_response=raw, elapsed_s=elapsed, error=error or "no parseable JSON",
         )
     classification = str(parsed.get("classification") or "").strip().lower()
@@ -191,7 +191,7 @@ def decide_reply(
     client=None,
 ) -> ReplyDecision:
     """
-    Single Claude call per inbound message. Synchronous on purpose — the
+    Single Claude call per inbound message. Synchronous on purpose : the
     webhook handler is already a short request and this keeps the loop
     trivial to reason about.
 
@@ -201,7 +201,7 @@ def decide_reply(
         prospect : the Prospect ORM row (recipient)
         host     : the User ORM row (the human whose LinkedIn this is); may be None
         client   : optional Anthropic client (for tests). Real path constructs
-                   a fresh client per call — these are rare enough that pooling
+                   a fresh client per call : these are rare enough that pooling
                    isn't worth the import-time cost.
     """
     user_message = (

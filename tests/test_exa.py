@@ -1,5 +1,5 @@
 """
-Unit tests for Exa discovery — parsing logic only, no network.
+Unit tests for Exa discovery : parsing logic only, no network.
 
 The HTTP path is gated by EXA_API_KEY and patched out so we never hit
 api.exa.ai from CI / local test runs.
@@ -128,7 +128,7 @@ def test_discover_via_exa_filters_and_dedups(monkeypatch):
                 "url": "https://www.linkedin.com/in/maya-rodriguez/",
                 "title": "Maya Rodriguez - Staff Infra Engineer at Lo91r | LinkedIn",
             },
-            # duplicate handle — should be deduped
+            # duplicate handle : should be deduped
             {
                 "url": "https://www.linkedin.com/in/maya-rodriguez",
                 "title": "Maya Rodriguez | LinkedIn",
@@ -137,7 +137,7 @@ def test_discover_via_exa_filters_and_dedups(monkeypatch):
                 "url": "https://www.linkedin.com/in/jiahui-jin/",
                 "title": "Jiahui Jin - ML Engineer | LinkedIn",
             },
-            # non-profile URL — should be filtered
+            # non-profile URL : should be filtered
             {
                 "url": "https://www.linkedin.com/company/foo/",
                 "title": "Foo Inc | LinkedIn",
@@ -257,7 +257,7 @@ def test_resolve_city_known_aliases_share_canonical():
 
 
 def test_resolve_city_unknown_falls_back_to_raw():
-    """Unknown cities still work — synthesize a config from the raw input."""
+    """Unknown cities still work : synthesize a config from the raw input."""
     cfg = exa._resolve_city("Tokyo")
     assert cfg is not None
     assert cfg["include_text"] == "Tokyo"
@@ -288,7 +288,7 @@ def test_location_matches_returns_true_when_alias_present():
 
 
 def test_location_matches_returns_false_when_wrong_city_present():
-    """NYC profile snuck through ranking — post-filter drops it."""
+    """NYC profile snuck through ranking : post-filter drops it."""
     snippet = "# Daniel\nSenior Engineer at Acme\nNew York, New York, United States (US)\n"
     aliases = ("san francisco", "bay area", "oakland")
     assert exa._location_matches(snippet, aliases) is False

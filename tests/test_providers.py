@@ -2,7 +2,7 @@
 Unit tests for the LinkedInProvider abstraction + UnipileProvider.
 
 These tests must NEVER hit the network. Dry-run paths in UnipileProvider
-short-circuit before _lookup_provider_id / _post — tests patch both to
+short-circuit before _lookup_provider_id / _post : tests patch both to
 assert that explicitly.
 """
 from __future__ import annotations
@@ -75,7 +75,7 @@ def test_build_lead_payload_splits_name_and_carries_internal_ids(fake_prospect, 
     provider = UnipileProvider(dry_run=True)
     lead = provider.build_lead_payload(
         fake_prospect, fake_event,
-        note="Hi Maya — short note",
+        note="Hi Maya : short note",
         message="Longer follow-up message.",
     )
     assert lead.event_id == 1
@@ -83,7 +83,7 @@ def test_build_lead_payload_splits_name_and_carries_internal_ids(fake_prospect, 
     assert lead.first_name == "Maya"
     assert lead.last_name == "Rodriguez"
     assert lead.linkedin_url == "https://www.linkedin.com/in/maya-rodriguez"
-    assert lead.note == "Hi Maya — short note"
+    assert lead.note == "Hi Maya : short note"
     assert lead.message == "Longer follow-up message."
     assert lead.fit_score == 88
 
@@ -153,7 +153,7 @@ def test_unipile_normalize_new_relation_event():
     assert ev.state == "invite_accepted"
     assert ev.provider == "unipile"
     assert ev.provider_lead_id == "ACoAAA_xyz"
-    # Unipile doesn't embed back-pointers — route resolves these via DB
+    # Unipile doesn't embed back-pointers : route resolves these via DB
     assert ev.event_id == 0
     assert ev.prospect_id == 0
 

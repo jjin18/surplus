@@ -1,5 +1,5 @@
 """
-routes/webhooks.py — provider webhook ingestion.
+routes/webhooks.py : provider webhook ingestion.
 
     POST /webhooks/unipile     idempotent, HMAC-verified
 
@@ -70,7 +70,7 @@ def _apply_canonical_event(
 ) -> tuple[bool, str, Optional[models.Prospect]]:
     """
     Apply a normalized event to the DB. Returns (applied, reason, prospect).
-    Idempotent — dedup by (prospect_id, state, provider, provider_lead_id).
+    Idempotent : dedup by (prospect_id, state, provider, provider_lead_id).
     """
     prospect = _resolve_prospect(db, ev)
     if prospect is None:
@@ -122,7 +122,7 @@ def _trigger_auto_dm(
     prospect: models.Prospect,
 ) -> Optional[dict]:
     """For providers where the platform owns the sequence (Unipile), fire
-    the post-accept DM ourselves — from the OWNING USER'S LinkedIn."""
+    the post-accept DM ourselves : from the OWNING USER'S LinkedIn."""
     if not provider.auto_dm_after_accept:
         return None
 
@@ -184,7 +184,7 @@ async def _handle(request: Request, db: Session, provider: LinkedInProvider) -> 
 
 def _last_chat_id(prospect: models.Prospect) -> Optional[str]:
     """Find the provider's chat/conversation id from the most recent
-    message_sent log row — that's where send_message stamped it."""
+    message_sent log row : that's where send_message stamped it."""
     for o in sorted(prospect.outreach, key=lambda o: o.ts, reverse=True):
         if o.state == "message_sent" and o.provider_lead_id:
             return o.provider_lead_id
@@ -212,7 +212,7 @@ def _handle_ai_reply(
           f"body={canonical.body[:100]!r}")
     event = prospect.event
     if event is None:
-        print(f"  [ai_reply] SKIP prospect_id={prospect.id} — no event linked")
+        print(f"  [ai_reply] SKIP prospect_id={prospect.id} : no event linked")
         return None
 
     chat_id = _last_chat_id(prospect)

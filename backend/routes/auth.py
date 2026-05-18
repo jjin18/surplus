@@ -1,5 +1,5 @@
 """
-routes/auth.py — Sign in with LinkedIn (via Unipile hosted-auth).
+routes/auth.py : Sign in with LinkedIn (via Unipile hosted-auth).
 
 There is no separate email/password layer in surplus. The user's LinkedIn
 account IS their identity. The same Unipile connection that auth uses is
@@ -71,10 +71,10 @@ def _unipile_api_key() -> Optional[str]:
 
 
 def _surplus_base_url(request: Request) -> str:
-    """Base URL the user's browser sees us at — used to construct redirect/notify
+    """Base URL the user's browser sees us at : used to construct redirect/notify
     URLs Unipile will call back. Prefer SURPLUS_BASE_URL env (production), fall
     back to the request's own origin (local dev). Always force https:// for
-    surpluslayer.com hosts — Railway terminates SSL upstream so request.url.scheme
+    surpluslayer.com hosts : Railway terminates SSL upstream so request.url.scheme
     is "http" but the user-facing URL is "https"."""
     env = (os.environ.get("SURPLUS_BASE_URL", "") or "").strip().rstrip("/")
     if env:
@@ -223,7 +223,7 @@ async def linkedin_start_redirect(
 
 async def _fetch_unipile_profile(account_id: str, dsn: str, api_key: str) -> dict:
     """Pull the connected LinkedIn profile so we can populate the User row
-    with name + avatar + email. Best-effort — returns {} on failure."""
+    with name + avatar + email. Best-effort : returns {} on failure."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(
@@ -302,7 +302,7 @@ async def linkedin_webhook(payload: dict, db: DbSession = Depends(get_db)) -> JS
     user = db.query(User).filter(User.unipile_account_id == account_id).first()
     now = _utcnow()
     if user:
-        # Existing user re-connecting — refresh profile fields, mark active
+        # Existing user re-connecting : refresh profile fields, mark active
         for k, v in fields.items():
             if v:
                 setattr(user, k, v)
@@ -339,7 +339,7 @@ async def linkedin_callback(
 ) -> RedirectResponse:
     """User's browser redirected here by Unipile after they auth'd.
 
-    The webhook may or may not have fired by the time we get here — poll
+    The webhook may or may not have fired by the time we get here : poll
     briefly for the AuthState to resolve before deciding.
     """
     base_redirect = "/"

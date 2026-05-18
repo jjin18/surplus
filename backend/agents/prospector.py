@@ -1,9 +1,9 @@
 """
-agents/prospector.py — stage 02, concurrent fan-out + ICP gate.
+agents/prospector.py : stage 02, concurrent fan-out + ICP gate.
 
 `prospect()` calls every source adapter at once with asyncio.gather, then
 merges their partial records on `identity`. The result is a list of plain
-dicts — one per unique person — carrying whatever fields the sources between
+dicts : one per unique person : carrying whatever fields the sources between
 them could resolve.
 
 When ANTHROPIC_API_KEY is set, every merged candidate then passes through
@@ -12,7 +12,7 @@ When ANTHROPIC_API_KEY is set, every merged candidate then passes through
 before they ever hit the database, so downstream stages (scorer, outreach,
 matcher) only ever see ICP-aligned people.
 
-In mock mode (no API key) the relevance gate is skipped — the mock pool is
+In mock mode (no API key) the relevance gate is skipped : the mock pool is
 already hand-curated, so re-filtering would just churn the demo.
 """
 from __future__ import annotations
@@ -32,10 +32,10 @@ from .sources import ALL_ADAPTERS, SourceAdapter
 # outreach UI shouldn't pay 25s to re-fetch the same candidates. We cache
 # prospect()'s output in-memory keyed by a stable hash of the ICP fields
 # we actually pass to the model. Cleared on redeploy (which is what you want
-# — fresh data per deploy).
+# : fresh data per deploy).
 #
 # Tunables:
-#   PROSPECTING_CACHE_TTL — seconds, default 3600 (1h). Set 0 to disable.
+#   PROSPECTING_CACHE_TTL : seconds, default 3600 (1h). Set 0 to disable.
 #   `force_fresh=True` passed to prospect() bypasses the cache for one call.
 _PROSPECT_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
@@ -50,7 +50,7 @@ def _cache_ttl() -> int:
 def _adapter_timeout() -> float:
     """Per-adapter wall-clock cap on discovery search.
 
-    30s default — Exa neural search typically completes in 2-5s, so 30s
+    30s default : Exa neural search typically completes in 2-5s, so 30s
     is generous headroom. Historical context: this was 120s when the
     pipeline used Anthropic's web_search_20260209 (consistently 60-90s
     per call). Exa is faster by an order of magnitude, so the old cap
@@ -66,7 +66,7 @@ def _judge_timeout() -> float:
     """Wall-clock cap for the batched judge call.
 
     Fail-open on timeout (keep all candidates). 6s default is tuned for
-    Haiku 4.5 batched calls — anything slower than that is rate-limiting
+    Haiku 4.5 batched calls : anything slower than that is rate-limiting
     or a backend hiccup and we'd rather take the noisier pool than wait.
     """
     try:
@@ -101,10 +101,10 @@ _DEFAULTS = {
 async def _judge_all(candidates: list[dict], icp: dict) -> list[dict]:
     """Run the LLM gate over every candidate; keep the relevant ones.
 
-    Uses `judge_relevance_batch` — a single Haiku call that emits a
+    Uses `judge_relevance_batch` : a single Haiku call that emits a
     verdict per candidate. Wrapped in asyncio.wait_for so a slow Haiku
     response can't pin the whole /prospect call; on timeout we keep
-    every surfaced candidate (fail-open here — discovery already
+    every surfaced candidate (fail-open here : discovery already
     self-filters, the judge is a second pass).
     """
     timeout = _judge_timeout()
@@ -114,7 +114,7 @@ async def _judge_all(candidates: list[dict], icp: dict) -> list[dict]:
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        print(f"  [llm] judge_relevance_batch exceeded {timeout}s — keeping all candidates")
+        print(f"  [llm] judge_relevance_batch exceeded {timeout}s : keeping all candidates")
         return candidates
     kept: list[dict] = []
     for c in candidates:
@@ -122,7 +122,7 @@ async def _judge_all(candidates: list[dict], icp: dict) -> list[dict]:
         if relevant:
             # Surfaced for visibility in seed/log output; the field is not
             # persisted to the DB (no migration), but compose() doesn't need
-            # it — the LLM-extracted offers/seeks/works_on already carry the
+            # it : the LLM-extracted offers/seeks/works_on already carry the
             # personalization payload through.
             c["llm_verdict"] = reason
             kept.append(c)
@@ -169,7 +169,7 @@ async def prospect(
             print(f"  [adapter] {adapter.key} → {len(result)} candidates in {time.time() - a_start:.1f}s")
             return result
         except asyncio.TimeoutError:
-            print(f"  [adapter] {adapter.key} exceeded {timeout}s — skipped")
+            print(f"  [adapter] {adapter.key} exceeded {timeout}s : skipped")
             return []
         except Exception as exc:  # noqa: BLE001
             print(f"  [adapter] {adapter.key} crashed: {type(exc).__name__}: {exc}")
@@ -198,7 +198,7 @@ async def prospect(
             rec.setdefault(default_key, default_val)
         rec["li_resolved"] = bool(rec.pop("contact_resolved", False))
 
-        # LinkedIn URL is the primary driver — without it we can't do
+        # LinkedIn URL is the primary driver : without it we can't do
         # outreach at all, so the candidate is noise. GitHub stars and X
         # follower counts are kept as supplementary signal only when they
         # arrived attached to a LinkedIn-anchored record (handles matched
@@ -220,12 +220,12 @@ async def prospect(
         print(f"  [prospect] judge step took {time.time() - judge_start:.1f}s  "
               f"({len(out)} survived)")
 
-    # Only cache non-empty results — caching an empty pool would lock in
+    # Only cache non-empty results : caching an empty pool would lock in
     # a transient LLM blip for the full TTL and give the operator a
     # permanently broken event until redeploy.
     if ttl and out:
         _PROSPECT_CACHE[cache_key] = (time.time(), copy.deepcopy(out))
-        print(f"  [prospect] cache MISS for {cache_key} — stored {len(out)} candidates")
+        print(f"  [prospect] cache MISS for {cache_key} : stored {len(out)} candidates")
     elif not out:
-        print(f"  [prospect] empty pool for {cache_key} — NOT caching")
+        print(f"  [prospect] empty pool for {cache_key} : NOT caching")
     return out

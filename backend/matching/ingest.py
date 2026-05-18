@@ -1,7 +1,7 @@
 """Load a CSV of event guests and normalize into Person records.
 
 Handles Luma exports out of the box and any generic CSV via flexible column
-matching. No LLM calls — pure parsing + rule-based normalization.
+matching. No LLM calls : pure parsing + rule-based normalization.
 
 Usage:
     from backend.matching.ingest import load_csv
@@ -36,7 +36,7 @@ COLUMN_HINTS: dict[str, list[str]] = {
 
 
 # Rules for bucketing free-text experience into canonical buckets.
-# Order matters — first match wins. Higher levels checked first so "expert"
+# Order matters : first match wins. Higher levels checked first so "expert"
 # beats "intermediate" even if both keywords appear.
 EXP_LEVEL_RULES: list[tuple[str, list[str]]] = [
     ("expert",       ["expert", "senior", "principal", "staff engineer", "10+ year", "professional"]),
@@ -65,7 +65,7 @@ def load_csv(path: str | Path) -> list[Person]:
             if person is None:
                 continue
             if person.id in seen_ids:
-                continue  # CSV duplicate — already loaded this person
+                continue  # CSV duplicate : already loaded this person
             seen_ids.add(person.id)
             people.append(person)
     return people
@@ -97,7 +97,7 @@ def _row_to_person(row: dict[str, Any], col_map: dict[str, str]) -> Person | Non
     x_handle = _extract_x_handle(_get(row, col_map, "x_handle"))
     github_username = _extract_github_username(_get(row, col_map, "github_username"))
 
-    # Drop rows with no contact handles at all — nothing to enrich from
+    # Drop rows with no contact handles at all : nothing to enrich from
     if not (linkedin or x_handle or github_username):
         return None
 
@@ -204,7 +204,7 @@ def _stable_id(name: str, linkedin: str, email: str) -> str:
 # ---- Convenience helpers ----
 
 def summarize(people: Iterable[Person]) -> dict[str, Any]:
-    """One-glance stats — useful for sanity-checking an ingested CSV."""
+    """One-glance stats : useful for sanity-checking an ingested CSV."""
     people = list(people)
     n = len(people)
     if n == 0:

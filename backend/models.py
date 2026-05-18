@@ -1,5 +1,5 @@
 """
-models.py — the persistence layer.
+models.py : the persistence layer.
 
 The schema mirrors the five stages:
   Event         -> stage 01, the intake profile (the mechanism's inputs)
@@ -27,7 +27,7 @@ class Event(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Owner — every event belongs to exactly one signed-in user. Nullable for
+    # Owner : every event belongs to exactly one signed-in user. Nullable for
     # backwards compatibility with rows that pre-date multi-tenant; new rows
     # always have it set by the events POST handler. Backfilled to the operator
     # user on first migration via _migrate_event_user_id() in db.py.
@@ -73,7 +73,7 @@ class Prospect(Base):
     company: Mapped[str] = mapped_column(String(120), default="Unknown")
     seniority: Mapped[str] = mapped_column(String(40), default="Mid")
 
-    # market side + value vectors — what the matcher pairs on
+    # market side + value vectors : what the matcher pairs on
     side: Mapped[str] = mapped_column(String(20), default="Builds")
     works_on: Mapped[str] = mapped_column(String(60), default="general")
     offers: Mapped[str] = mapped_column(String(200), default="")
@@ -133,7 +133,7 @@ class OutreachLog(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     ts: Mapped[datetime] = mapped_column(default=_utcnow)
 
-    # provider tracking (nullable — only set when a real provider was invoked)
+    # provider tracking (nullable : only set when a real provider was invoked)
     provider: Mapped[Optional[str]] = mapped_column(String(20), default=None)
     provider_lead_id: Mapped[Optional[str]] = mapped_column(String(80), default=None)
 
@@ -148,7 +148,7 @@ class PendingReply(Base):
     in the auto-send allow-list (or the loop guard fires), the draft lands
     here for an operator to approve / edit / reject via /admin/pending-replies.
 
-    classification : the agent's bucket — clarifying | commitment | off_topic
+    classification : the agent's bucket : clarifying | commitment | off_topic
                      | negative | ambiguous
     draft_text     : what the agent wrote, exactly as the model produced it
     reasoning      : the agent's own explanation; surfaced in the approval UI
@@ -210,7 +210,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Stable Unipile id — same across re-connects of the same LinkedIn account
+    # Stable Unipile id : same across re-connects of the same LinkedIn account
     unipile_account_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     # Profile data pulled from Unipile after auth (best-effort, refreshable)
     email: Mapped[Optional[str]] = mapped_column(String(200), default=None, index=True)
@@ -222,7 +222,7 @@ class User(Base):
     # Lifecycle
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
     last_login_at: Mapped[datetime] = mapped_column(default=_utcnow)
-    # Connection health — flipped to "disconnected" if Unipile webhook fires
+    # Connection health : flipped to "disconnected" if Unipile webhook fires
     # CREDENTIALS / DISCONNECTED. Re-auth flips it back to "active".
     linkedin_status: Mapped[str] = mapped_column(String(20), default="active")
 

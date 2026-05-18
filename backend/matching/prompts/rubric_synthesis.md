@@ -23,7 +23,7 @@ GUEST LIST SUMMARY:
 1. Infer the **event type**: hackathon, fellowship cohort, founder summit, salon, mixer, conference, dinner, meetup, etc.
 2. Decide the **match intent**: what does "good match" mean here? (teammate / cofounder / intro / mentor / deal_flow / conversation / hire / mixed)
 3. Produce a **role_pair_matrix** that scores every observed ticket_type × ticket_type pair from 0.0 to 1.0. Use the actual ticket_type values from the guest list (not generic ones). Symmetric.
-4. Decide **hard gates** — dimensions that must clear a threshold or the pair scores 0.
+4. Decide **hard gates** : dimensions that must clear a threshold or the pair scores 0.
 5. Choose **weights** on the two axes (similar and complementary). User has expressed: more weight on complementary, less on similar. Tune for this event.
 6. Pick **anti-signals** with their penalty multipliers.
 
@@ -78,7 +78,7 @@ Return only one JSON object. No prose, no markdown fence:
     "explicit_mismatch_multiplier": 0.40
   },
 
-  "notes_for_humans": "1-2 sentence summary of how this rubric prioritizes matches at this event — used in the UI when the rubric is shown to the organizer."
+  "notes_for_humans": "1-2 sentence summary of how this rubric prioritizes matches at this event : used in the UI when the rubric is shown to the organizer."
 }
 ```
 
@@ -87,8 +87,8 @@ Return only one JSON object. No prose, no markdown fence:
 - **`role_pair_matrix` keys must use the actual ticket_type values from the input** (e.g. "Attendee", "Spectator", "Judge"). Generic placeholders like "Founder" are wrong unless that literal value appears in the guest list. Always include both orderings or document that it's symmetric.
 - **Sum of weights inside each block must equal 1.0** (`axis_blend`, `similar`, `complementary`).
 - **`axis_blend.complementary` should be higher** than `axis_blend.similar` by default (user preference: ~70/30), but you may adjust ±10pp if the event strongly favors one (e.g. a private peer dinner needs more similar; a cofounder mixer needs even more complementary).
-- **hard_gates** — `min_similar_score` should be **0.03–0.10** (very permissive). Real-world data is sparse: most pairs share at most one or two domain tags. A gate above 0.10 kills almost all cross-role matches. Use 0.10 only for narrow single-topic events; default to 0.05. `min_role_pair_score` of 0.20–0.30 is the bigger filter — it cuts out genuinely incompatible role pairs (e.g. Volunteer↔Volunteer).
-- **anti_signals** — multipliers in (0.0, 1.0). Lower number = harsher penalty. Direct competitor is the most punishing.
+- **hard_gates** : `min_similar_score` should be **0.03–0.10** (very permissive). Real-world data is sparse: most pairs share at most one or two domain tags. A gate above 0.10 kills almost all cross-role matches. Use 0.10 only for narrow single-topic events; default to 0.05. `min_role_pair_score` of 0.20–0.30 is the bigger filter : it cuts out genuinely incompatible role pairs (e.g. Volunteer↔Volunteer).
+- **anti_signals** : multipliers in (0.0, 1.0). Lower number = harsher penalty. Direct competitor is the most punishing.
 - **No fabrication.** Don't invent ticket types or roles not present in the input. If a ticket type is unknown how to weight, default its row to 0.5.
 
 ## Anchoring examples

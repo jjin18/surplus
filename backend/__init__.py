@@ -1,1 +1,1 @@
-"""surplus · event ROI engine — backend package."""
+"""surplus · event ROI engine : backend package."""

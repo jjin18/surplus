@@ -1,5 +1,5 @@
 """
-providers/unipile.py — Unipile implementation of LinkedInProvider.
+providers/unipile.py : Unipile implementation of LinkedInProvider.
 
 Unipile is action-based, not campaign-based. Every send is a direct API
 call. No template setup in their UI, no sequence engine, no campaign IDs
@@ -80,7 +80,7 @@ class UnipileProvider(LinkedInProvider):
         dry_run: bool = True,
         require_signature: bool = True,
     ) -> None:
-        # Normalize the DSN — Unipile's dashboard shows it as
+        # Normalize the DSN : Unipile's dashboard shows it as
         # `api40.unipile.com:17054` without a scheme, so prepend https://
         # if the caller forgot. Also strip trailing slash.
         raw_dsn = (dsn or "").strip().rstrip("/")
@@ -100,7 +100,7 @@ class UnipileProvider(LinkedInProvider):
             api_key=os.environ.get("UNIPILE_API_KEY"),
             account_id=os.environ.get("UNIPILE_ACCOUNT_ID"),
             webhook_secret=os.environ.get("UNIPILE_WEBHOOK_SECRET"),
-            # default TRUE — never send by accident
+            # default TRUE : never send by accident
             dry_run=_env_bool("UNIPILE_DRY_RUN", True),
             require_signature=_env_bool("UNIPILE_REQUIRE_SIGNATURE", True),
         )
@@ -286,7 +286,7 @@ class UnipileProvider(LinkedInProvider):
 
     def is_relation(self, linkedin_url: str) -> bool:
         """True when the operator's account is already connected to this
-        profile on LinkedIn. Drives the smart-routing of /invite — warm
+        profile on LinkedIn. Drives the smart-routing of /invite : warm
         prospects skip send_connection and go straight to send_message.
 
         Dry-run returns False (everyone treated as cold) so tests + demos
@@ -338,7 +338,7 @@ class UnipileProvider(LinkedInProvider):
 
             [{"direction": "outbound"|"inbound", "text": str, "ts": str}, ...]
 
-        Chronological order. Direction is from OUR perspective — "outbound"
+        Chronological order. Direction is from OUR perspective : "outbound"
         is what we sent, "inbound" is the recipient.
 
         Dry-run returns a 2-message fixture so the reply-agent harness can
@@ -382,15 +382,15 @@ class UnipileProvider(LinkedInProvider):
             })
         return out
 
-    # ---- HTTP plumbing (live mode only — never reached in dry-run) ------
+    # ---- HTTP plumbing (live mode only : never reached in dry-run) ------
 
     def _require_creds(self) -> None:
         if not self.api_key:
-            raise RuntimeError("UNIPILE_API_KEY is not set — refusing live call")
+            raise RuntimeError("UNIPILE_API_KEY is not set : refusing live call")
         if not self.dsn:
-            raise RuntimeError("UNIPILE_DSN is not set — refusing live call")
+            raise RuntimeError("UNIPILE_DSN is not set : refusing live call")
         if not self.account_id:
-            raise RuntimeError("UNIPILE_ACCOUNT_ID is not set — refusing live call")
+            raise RuntimeError("UNIPILE_ACCOUNT_ID is not set : refusing live call")
 
     def _lookup_provider_id(self, public_handle: str) -> str:
         """GET /api/v1/users/{public_handle} → extract provider_id."""
@@ -452,7 +452,7 @@ class UnipileProvider(LinkedInProvider):
         canonicalize what we can extract from the webhook body and let the
         route do the DB lookup.
 
-        We return event_id=0 / prospect_id=0 as sentinels — the route is
+        We return event_id=0 / prospect_id=0 as sentinels : the route is
         expected to call resolve_prospect_for_event() to fill them in.
         """
         if not isinstance(raw, dict):

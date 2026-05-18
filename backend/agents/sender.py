@@ -1,5 +1,5 @@
 """
-agents/sender.py — the one place a LinkedIn DM goes out.
+agents/sender.py : the one place a LinkedIn DM goes out.
 
 Three callsites used to duplicate this exact sequence (build a lead → call
 provider.send_message → write an OutreachLog row): the cron follow-up,

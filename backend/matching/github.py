@@ -81,7 +81,7 @@ async def fetch_profile(
         if user_resp.status_code == 404:
             return None
         if user_resp.status_code == 403:
-            # Rate limited — surface it so the caller can throttle
+            # Rate limited : surface it so the caller can throttle
             remaining = user_resp.headers.get("X-RateLimit-Remaining", "?")
             reset = user_resp.headers.get("X-RateLimit-Reset", "?")
             raise RuntimeError(
@@ -101,7 +101,7 @@ async def fetch_profile(
     except RuntimeError:
         raise
     except Exception as e:
-        # Network blip, malformed JSON, etc. — return None, let the batch continue.
+        # Network blip, malformed JSON, etc. : return None, let the batch continue.
         print(f"[github] {username}: {e!r}")
         return None
 
@@ -113,7 +113,7 @@ async def fetch_profile(
 
 def _shape_profile(user: dict[str, Any], repos: list[dict[str, Any]]) -> dict[str, Any]:
     """Reshape the raw GitHub responses into our flat structured form."""
-    # Filter out forks — usually not signal of someone's actual work
+    # Filter out forks : usually not signal of someone's actual work
     own_repos = [r for r in repos if not r.get("fork")]
 
     # Top repos by stars
@@ -139,7 +139,7 @@ def _shape_profile(user: dict[str, Any], repos: list[dict[str, Any]]) -> dict[st
             lang_counter[lang] += 1
     languages = dict(lang_counter.most_common(15))
 
-    # Topic tags across top repos — useful for domain extraction later
+    # Topic tags across top repos : useful for domain extraction later
     topic_counter: Counter = Counter()
     for r in top_repos[:20]:
         for t in (r.get("topics") or []):
@@ -189,7 +189,7 @@ async def batch_fetch(
                 try:
                     results[u] = await fetch_profile(u, client, use_cache=use_cache)
                 except RuntimeError as e:
-                    # Rate-limit error from fetch_profile — stop the batch.
+                    # Rate-limit error from fetch_profile : stop the batch.
                     print(f"[github] aborting batch: {e}")
                     results[u] = None
 

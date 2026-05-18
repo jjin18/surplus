@@ -1,14 +1,14 @@
 """
-providers/base.py — the LinkedInProvider contract.
+providers/base.py : the LinkedInProvider contract.
 
 Every provider (Unipile, future Manual, future others) implements this
 interface. The rest of the app only ever sees the canonical types defined
 here:
 
-    LeadPayload      — what we hand to the provider (already personalized)
-    ProviderResult   — what the provider hands back (dry-run or real)
-    CanonicalEvent   — normalized webhook event ready to apply to OutreachLog
-    CANONICAL_STATES — the only state strings the rest of the app deals with
+    LeadPayload      : what we hand to the provider (already personalized)
+    ProviderResult   : what the provider hands back (dry-run or real)
+    CanonicalEvent   : normalized webhook event ready to apply to OutreachLog
+    CANONICAL_STATES : the only state strings the rest of the app deals with
 
 Providers translate between their own dialect and these canonical shapes
 inside their own module. Outside the providers/ package, no provider-specific
@@ -80,7 +80,7 @@ class ProviderResult:
     provider: str                   # e.g. "unipile"
     provider_lead_id: Optional[str] # provider-side action id (or "dry_<uuid>")
     dry_run: bool
-    payload: dict                   # the JSON we would/did POST — captured for audit
+    payload: dict                   # the JSON we would/did POST : captured for audit
     error: Optional[str] = None
     linkedin_provider_id: Optional[str] = None
 
@@ -119,7 +119,7 @@ class LinkedInProvider(abc.ABC):
         - True  → our webhook handler calls send_message() to push the DM.
         - False → the provider's own engine fires the DM autonomously.
 
-        Unipile is True (no sequence engine — our platform owns it).
+        Unipile is True (no sequence engine : our platform owns it).
         """
         return False
 
@@ -145,7 +145,7 @@ class LinkedInProvider(abc.ABC):
     def resolve_linkedin_user(self, linkedin_url: str) -> Optional[str]:
         """
         Resolve a LinkedIn profile URL to the provider's internal user id.
-        Providers that don't need this can leave it None — `send_message`
+        Providers that don't need this can leave it None : `send_message`
         will then fail with a clear error in live mode.
         """
         return None
@@ -170,13 +170,13 @@ class LinkedInProvider(abc.ABC):
     def fetch_thread(self, chat_id: str) -> list[dict]:
         """Return chronological message history for one chat as a list of
         ``{"direction": "outbound"|"inbound", "text": str, "ts": str}``
-        dicts. Default returns [] — providers that support the AI reply
+        dicts. Default returns [] : providers that support the AI reply
         agent must override (Unipile does)."""
         return []
 
     def is_relation(self, linkedin_url: str) -> bool:
         """True if the operator's LinkedIn is already connected to this
-        profile (warm) — drives the cold vs warm send routing. Default
+        profile (warm) : drives the cold vs warm send routing. Default
         False (treat everyone as cold) so a provider without a relations
         endpoint stays safe."""
         return False
@@ -185,7 +185,7 @@ class LinkedInProvider(abc.ABC):
     def normalize_webhook(self, raw: dict) -> Optional[CanonicalEvent]:
         """
         Map a raw incoming webhook body into a CanonicalEvent. Return None if
-        the event type is unknown (caller logs + 200s — never crash).
+        the event type is unknown (caller logs + 200s : never crash).
         """
         ...
 

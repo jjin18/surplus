@@ -17,7 +17,7 @@ function initials(name) {
     .toUpperCase();
 }
 
-/** One cluster per table/team — members on a ring, groups spread horizontally. */
+/** One cluster per table/team : members on a ring, groups spread horizontally. */
 function buildGroupClusterLayout(nodes, groups, w, h) {
   const padX = 56;
   const padY = 52;

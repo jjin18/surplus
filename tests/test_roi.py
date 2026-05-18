@@ -1,4 +1,4 @@
-"""Tests for agents/roi.py — tier mapping, ledger pricing, net ROI math."""
+"""Tests for agents/roi.py : tier mapping, ledger pricing, net ROI math."""
 from types import SimpleNamespace
 
 from backend.agents.roi import tier_of, settle, linkedin_outreach_stats
@@ -51,7 +51,7 @@ def test_goal_changes_pricing():
     guests = [_p(1, 95)]
     hiring, _ = settle(_event(goal="Hiring pipeline"), guests)
     raising, _ = settle(_event(goal="Fundraising"), guests)
-    # same guest, same fit — different goal prices the outcome differently
+    # same guest, same fit : different goal prices the outcome differently
     assert hiring[0]["value"] != raising[0]["value"]
     assert hiring[0]["label"] != raising[0]["label"]
 

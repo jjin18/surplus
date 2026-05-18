@@ -11,11 +11,11 @@ import pipeXIcon from "./src/assets/pipe/x-icon.png";
 import pipeLinkedinIcon from "./src/assets/pipe/linkedin-icon.png";
 
 // ============================================================
-// Event ROI MVP — browser demo
+// Event ROI MVP : browser demo
 // Five-stage mechanism: intake -> prospecting -> auto-outreach
 // -> symbiotic matching -> verified ROI ledger
 // Adapts to event format (incl. hackathons) and goal (incl.
-// product testing). All data mocked — this is a flow demo.
+// product testing). All data mocked : this is a flow demo.
 // ============================================================
 
 const STAGES = [
@@ -33,11 +33,11 @@ const STAGES_CO = ["Pre-seed", "Seed", "Series A", "Series B+"];
 
 // ---- format config: matching topology -----------------------
 const FORMAT_CONFIG = {
-  "Sit-down dinner": { group: "Table", topo: "fixed seating — composition locked before doors open" },
-  "Hackathon":       { group: "Team",  topo: "team formation — complementary skills balanced per team" },
-  "Workshop":        { group: "Breakout", topo: "fluid breakouts — groups regroup between sessions" },
-  "Mixer":           { group: "Cluster", topo: "soft clusters — seeded, not enforced" },
-  "Roundtable":      { group: "Seat",  topo: "single ring — seating order is the lever" },
+  "Sit-down dinner": { group: "Table", topo: "fixed seating : composition locked before doors open" },
+  "Hackathon":       { group: "Team",  topo: "team formation : complementary skills balanced per team" },
+  "Workshop":        { group: "Breakout", topo: "fluid breakouts : groups regroup between sessions" },
+  "Mixer":           { group: "Cluster", topo: "soft clusters : seeded, not enforced" },
+  "Roundtable":      { group: "Seat",  topo: "single ring : seating order is the lever" },
 };
 
 // Multi-select helpers: profile.seniority/coStage/goal are arrays. These
@@ -50,7 +50,7 @@ const primaryGoal = (p) => (p.goal && p.goal[0]) || "Hiring pipeline";
 // ---- goal config: outreach + conversion semantics -----------
 const GOAL_CONFIG = {
   "Hiring pipeline": {
-    outreach: (p) => `pulling together a ${p.headcount}-person ${p.format.toLowerCase()} in ${p.city} — ${seniorityPhrase(p)} infra engineers and the teams hiring them.`,
+    outreach: (p) => `pulling together a ${p.headcount}-person ${p.format.toLowerCase()} in ${p.city} : ${seniorityPhrase(p)} infra engineers and the teams hiring them.`,
     ledgerHead: "Hiring outcome",
     tiers: {
       high: { label: "Hired", state: "won", detail: "signed offer" },
@@ -60,7 +60,7 @@ const GOAL_CONFIG = {
     value: { won: 28000, partial: 8000, lost: 0 },
   },
   "Fundraising": {
-    outreach: (p) => `hosting a ${p.format.toLowerCase()} in ${p.city} — a tight room of founders raising and investors writing checks at ${(p.coStage || []).join(" / ") || "Seed"}.`,
+    outreach: (p) => `hosting a ${p.format.toLowerCase()} in ${p.city} : a tight room of founders raising and investors writing checks at ${(p.coStage || []).join(" / ") || "Seed"}.`,
     ledgerHead: "Raise outcome",
     tiers: {
       high: { label: "Term sheet", state: "won", detail: "in diligence" },
@@ -80,7 +80,7 @@ const GOAL_CONFIG = {
     value: { won: 54000, partial: 11000, lost: 0 },
   },
   "Product testing": {
-    outreach: (p) => `pulling together a ${p.format.toLowerCase()} in ${p.city} — hands-on ${seniorityPhrase(p)} infra engineers to stress-test an early build and tell us where it breaks.`,
+    outreach: (p) => `pulling together a ${p.format.toLowerCase()} in ${p.city} : hands-on ${seniorityPhrase(p)} infra engineers to stress-test an early build and tell us where it breaks.`,
     ledgerHead: "Testing outcome",
     tiers: {
       high: { label: "Active tester", state: "won", detail: "12 issues filed, weekly" },
@@ -90,7 +90,7 @@ const GOAL_CONFIG = {
     value: { won: 16000, partial: 4000, lost: 0 },
   },
   "Community density": {
-    outreach: (p) => `building a recurring ${p.format.toLowerCase()} in ${p.city} — the ${seniorityPhrase(p)} infra crowd, same room every month.`,
+    outreach: (p) => `building a recurring ${p.format.toLowerCase()} in ${p.city} : the ${seniorityPhrase(p)} infra crowd, same room every month.`,
     ledgerHead: "Community outcome",
     tiers: {
       high: { label: "Core member", state: "won", detail: "returning + bringing others" },
@@ -116,7 +116,7 @@ const PROSPECTS = [
   { id: 3, name: "Priya Natarajan", role: "ML Platform Lead", company: "Cohere", side: "Hires",
     worksOn: "ml-platform", offers: "Platform roles + mentorship", seeks: "Infra builders to hire",
     gh: 1500, x: 9300, li: true, score: 88, status: "rsvp", grp: 1,
-    reason: "Leads a platform team with open headcount — high downstream value for the builder side of the room." },
+    reason: "Leads a platform team with open headcount : high downstream value for the builder side of the room." },
   { id: 4, name: "Sam Whitfield", role: "Senior Backend Eng", company: "Ramp", side: "Builds",
     worksOn: "payments-infra", offers: "Payments-infra experience", seeks: "Senior scope",
     gh: 410, x: 600, li: true, score: 82, status: "contacted", grp: null,
@@ -124,11 +124,11 @@ const PROSPECTS = [
   { id: 5, name: "Aisha Bello", role: "Eng Manager, Data", company: "Notion", side: "Hires",
     worksOn: "data-infra", offers: "Data-team roles", seeks: "Data-infra builders",
     gh: 320, x: 2100, li: true, score: 86, status: "rsvp", grp: 2,
-    reason: "Manages data infra with two open reqs — direct symbiotic counterpart to the builder side." },
+    reason: "Manages data infra with two open reqs : direct symbiotic counterpart to the builder side." },
   { id: 6, name: "Theo Lindqvist", role: "Distributed Systems Eng", company: "Fly.io", side: "Builds",
     worksOn: "distributed-systems", offers: "OSS credibility, hard-systems depth", seeks: "Unsolved systems problems",
     gh: 3400, x: 5600, li: true, score: 90, status: "rsvp", grp: 1,
-    reason: "High-credibility OSS contributor — an anchor guest who raises the whole room's perceived quality." },
+    reason: "High-credibility OSS contributor : an anchor guest who raises the whole room's perceived quality." },
   { id: 7, name: "Grace Liu", role: "Software Engineer", company: "Stripe", side: "Builds",
     worksOn: "web-infra", offers: "Frontend velocity", seeks: "Mentorship",
     gh: 150, x: 90, li: true, score: 61, status: "below", grp: null,
@@ -181,7 +181,7 @@ const fmtK = (v) => v >= 1000 ? `$${(v / 1000).toLocaleString(undefined, { maxim
 const fmtNum = (n) => n > 999 ? (n / 1000).toFixed(1) + "k" : "" + n;
 
 // Browser-notification helper. Returns the granted permission string (or
-// "unsupported" when the API isn't there at all — e.g., insecure context).
+// "unsupported" when the API isn't there at all : e.g., insecure context).
 // Best-effort: never throws, never blocks. The Notification API only fires
 // on https / localhost, so this silently no-ops on http deploys.
 async function ensureNotifyPermission() {
@@ -195,7 +195,7 @@ async function ensureNotifyPermission() {
   }
 }
 
-// Fire a device notification. Suppressed when the tab is already focused —
+// Fire a device notification. Suppressed when the tab is already focused :
 // the in-app UI already conveys completion in that case.
 function notifyDevice(title, options = {}) {
   if (typeof window === "undefined" || !("Notification" in window)) return;
@@ -206,12 +206,12 @@ function notifyDevice(title, options = {}) {
     const n = new Notification(title, { icon: "/surplus-logo.png", ...options });
     n.onclick = () => { try { window.focus(); n.close(); } catch {} };
   } catch {
-    // Some browsers throw on iframe / insecure contexts — just swallow.
+    // Some browsers throw on iframe / insecure contexts : just swallow.
   }
 }
 
 // ---- Stage 0: Intake ----------------------------------------
-// Toggle a value in/out of an array. Keeps at least one entry — clicking
+// Toggle a value in/out of an array. Keeps at least one entry : clicking
 // the last selected chip is a no-op (the backend rejects empty selections
 // and an empty intake screen looks broken).
 function toggleIn(arr, v) {
@@ -237,13 +237,13 @@ function Intake({ profile, setProfile, onRun }) {
           <label>Target role</label>
           <input className="text-in" value={profile.role}
             onChange={(e) => set("role", e.target.value)} />
-          <label>Seniority <span className="hint">— multi-select</span></label>
+          <label>Seniority <span className="hint">: multi-select</span></label>
           <div className="chip-row">
             {SENIORITY.map((s) => (
               <Chip key={s} active={profile.seniority.includes(s)} onClick={() => toggle("seniority", s)}>{s}</Chip>
             ))}
           </div>
-          <label>Company stage <span className="hint">— multi-select</span></label>
+          <label>Company stage <span className="hint">: multi-select</span></label>
           <div className="chip-row">
             {STAGES_CO.map((s) => (
               <Chip key={s} active={profile.coStage.includes(s)} onClick={() => toggle("coStage", s)}>{s}</Chip>
@@ -253,10 +253,10 @@ function Intake({ profile, setProfile, onRun }) {
 
         <section className="card">
           <h3><span className="card-num">B</span> Event shape</h3>
-          <label>Headcount — <strong>{profile.headcount}</strong> guests</label>
+          <label>Headcount : <strong>{profile.headcount}</strong> guests</label>
           <input type="range" min="12" max="160" step="2" value={profile.headcount}
             onChange={(e) => set("headcount", +e.target.value)} className="range-in" />
-          <label>Format <span className="hint">— sets the matching topology</span></label>
+          <label>Format <span className="hint">: sets the matching topology</span></label>
           <div className="chip-row">
             {FORMATS.map((f) => (
               <Chip key={f} active={profile.format === f} onClick={() => set("format", f)}>{f}</Chip>
@@ -269,13 +269,13 @@ function Intake({ profile, setProfile, onRun }) {
 
         <section className="card">
           <h3><span className="card-num">C</span> Goal &amp; budget</h3>
-          <label>Primary objective <span className="hint">— multi-select; first selected drives ROI math</span></label>
+          <label>Primary objective <span className="hint">: multi-select; first selected drives ROI math</span></label>
           <div className="chip-row">
             {GOALS.map((g) => (
               <Chip key={g} active={profile.goal.includes(g)} onClick={() => toggle("goal", g)}>{g}</Chip>
             ))}
           </div>
-          <label>Budget — <strong>${profile.budget.toLocaleString()}</strong></label>
+          <label>Budget : <strong>${profile.budget.toLocaleString()}</strong></label>
           <input type="range" min="2000" max="40000" step="500" value={profile.budget}
             onChange={(e) => set("budget", +e.target.value)} className="range-in" />
           <div className="derived">
@@ -338,7 +338,7 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   // clicked "Run agent pipeline" so the permission prompt is contextual.
   useEffect(() => { ensureNotifyPermission(); }, []);
 
-  // Fire ONLY /prospect — no outreach. The next stage owns sending,
+  // Fire ONLY /prospect : no outreach. The next stage owns sending,
   // per-prospect with explicit clicks. This prevents the old "intake →
   // mass-send" footgun.
   useEffect(() => {
@@ -362,7 +362,7 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
         if (!cancelled) {
           if (e.status === 404) {
             onError && onError(
-              "Event not found — the backend probably redeployed and wiped " +
+              "Event not found : the backend probably redeployed and wiped " +
               "the ephemeral SQLite store. Click Intake in the side rail to " +
               "create a new event."
             );
@@ -372,7 +372,7 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
           setApiDone(true);
           notifyDevice("Prospecting failed", {
             body: e.status === 404
-              ? "Event not found — backend redeployed."
+              ? "Event not found : backend redeployed."
               : `Pipeline error: ${e.message?.slice(0, 120) || "unknown"}`,
             tag: `prospect-${eventId}`,
           });
@@ -445,7 +445,7 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
         <div className="pipe-counter" style={{ opacity: 0.8, fontSize: "0.95rem" }}>
           <span className="pipe-counter-lbl">
             Still gathering ({elapsed}s elapsed). LLM-mode prospecting can take 60–120s
-            — web_search across GitHub / LinkedIn / X plus a per-candidate ICP verdict.
+            : web_search across GitHub / LinkedIn / X plus a per-candidate ICP verdict.
             {elapsed > 90 && " Check the backend logs if this keeps growing."}
           </span>
         </div>
@@ -474,7 +474,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   // manual-RSVP overrides applied on top of /run results (declared before
   // PROS so the override map can patch each prospect's status).
   const [rsvpOverrides, setRsvpOverrides] = useState({});
-  // Live connection-status overrides — populated by /check-connections on
+  // Live connection-status overrides : populated by /check-connections on
   // mount and refreshed every time the operator clicks "send" (the server
   // re-checks and returns the latest status in the response).
   const [connectionStatusById, setConnectionStatusById] = useState({});
@@ -514,8 +514,8 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
 
   // === backend-driven outreach review ===
   // previewById[prospect_id] = { note, message, payload, ... } from /outreach/preview
-  // editsById[prospect_id]   = { note, message } — operator's in-flight edits
-  // sendState[prospect_id]   = { status, kind, error } — per-prospect send tracking
+  // editsById[prospect_id]   = { note, message } : operator's in-flight edits
+  // sendState[prospect_id]   = { status, kind, error } : per-prospect send tracking
   const [previewById, setPreviewById] = useState({});
   const [editsById, setEditsById] = useState({});
   const [sendState, setSendState] = useState({});
@@ -567,7 +567,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
         }
         setConnectionStatusById((s) => ({ ...next, ...s }));  // don't clobber click-time updates
       } catch {
-        // Silent — button just stays as "Reach out" and the server's smart
+        // Silent : button just stays as "Reach out" and the server's smart
         // routing still does the right thing at click time.
       }
     })();
@@ -575,8 +575,8 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   }, [eventId, PROS.length]);
 
   useEffect(() => {
-    // Skip the preview fetch when the pool is empty — the backend 409s
-    // with "no prospects — call /prospect first" and we'd surface that as
+    // Skip the preview fetch when the pool is empty : the backend 409s
+    // with "no prospects : call /prospect first" and we'd surface that as
     // a spurious error banner on top of the empty-state UI.
     if (!eventId || PROS.length === 0) return;
     let cancelled = false;
@@ -595,7 +595,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
         setEditsById((cur) => ({ ...edits, ...cur }));  // don't clobber in-flight edits
         setProviderInfo({ provider: pv.provider, dry_run: pv.dry_run });
       } catch (e) {
-        // 404 here means the event no longer exists on the backend —
+        // 404 here means the event no longer exists on the backend :
         // almost always because Railway's container restarted and wiped
         // the ephemeral SQLite file. Tell the operator what to do instead
         // of leaving them staring at a bare red banner.
@@ -679,25 +679,25 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
           <h1>No candidates surfaced</h1>
           <p className="lede">
             Prospecting completed but returned an empty pool. Check the backend
-            logs — the cause is one of:
+            logs : the cause is one of:
           </p>
           <ul className="lede">
             <li>
-              <code>[adapter] &lt;name&gt; exceeded 60.0s — skipped</code> — web_search
+              <code>[adapter] &lt;name&gt; exceeded 60.0s : skipped</code> : web_search
               is timing out. Bump <code>PROSPECTING_ADAPTER_TIMEOUT</code> in env,
               or try a narrower ICP that requires less search.
             </li>
             <li>
-              <code>[llm] discover_candidates(...) failed: ...</code> — Anthropic
+              <code>[llm] discover_candidates(...) failed: ...</code> : Anthropic
               API error. Hit <code>/api/diagnostics/anthropic</code> to check
               connectivity + key.
             </li>
             <li>
-              <code>[llm] dropped &lt;name&gt;: &lt;reason&gt;</code> — the ICP gate
+              <code>[llm] dropped &lt;name&gt;: &lt;reason&gt;</code> : the ICP gate
               rejected discovered profiles. Try a less specific ICP.
             </li>
             <li>
-              No <code>[adapter]</code> or <code>[llm]</code> lines at all — the
+              No <code>[adapter]</code> or <code>[llm]</code> lines at all : the
               backend may not be running the latest code, or the SDK call is
               silently retrying. Hit <code>?fresh=true</code> on /prospect to
               skip cache.
@@ -758,7 +758,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
           })}
           <div className="threshold-note">
             <span className="threshold-line" />
-            Threshold {T} — floats with funnel supply ({Math.round(profile.headcount / 0.6)} target)
+            Threshold {T} : floats with funnel supply ({Math.round(profile.headcount / 0.6)} target)
           </div>
         </div>
 
@@ -817,7 +817,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
                 {sel.score < T && (
                   <div className="below-threshold-warn">
                     ⚠ This candidate is below the agent's fit threshold ({sel.score} / {T}).
-                    The agent wouldn't have auto-sent — but you can review and send manually.
+                    The agent wouldn't have auto-sent : but you can review and send manually.
                   </div>
                 )}
                 {selPreview ? (
@@ -918,7 +918,7 @@ function Matching({ profile, eventId, onError, onNext }) {
   const [runTick, setRunTick] = useState(0);
   // pairExplanations[`${a_id}-${b_id}`] = { status: "loading"|"ok"|"err", text }
   const [pairExplanations, setPairExplanations] = useState({});
-  // picked is at most two prospect ids — selecting two enables a Why? button
+  // picked is at most two prospect ids : selecting two enables a Why? button
   // in the floating compare panel. Picking a third bumps the oldest out.
   const [picked, setPicked] = useState([]);
 
@@ -937,7 +937,7 @@ function Matching({ profile, eventId, onError, onNext }) {
     }
   }
 
-  // Run /match (idempotent on the backend — re-running clears and re-builds)
+  // Run /match (idempotent on the backend : re-running clears and re-builds)
   // on mount when we have a real event. Falls back to the client-side mock
   // when no eventId is set so demo navigation still works.
   useEffect(() => {
@@ -955,9 +955,9 @@ function Matching({ profile, eventId, onError, onNext }) {
       } catch (e) {
         if (!cancelled) {
           if (e.status === 409) {
-            setMatchError("No RSVPs yet — flip prospects to RSVP'd below, then retry.");
+            setMatchError("No RSVPs yet : flip prospects to RSVP'd below, then retry.");
           } else if (e.status === 404) {
-            setMatchError("Event not found — the backend may have redeployed and wiped the SQLite store. Restart from Intake.");
+            setMatchError("Event not found : the backend may have redeployed and wiped the SQLite store. Restart from Intake.");
           } else {
             setMatchError(`Matching failed: ${e.message}`);
           }
@@ -985,7 +985,7 @@ function Matching({ profile, eventId, onError, onNext }) {
   const useReal = !!matchResult;
   const groupWord = useReal ? matchResult.group_word : FORMAT_CONFIG[profile.format].group;
 
-  // Build the rendering data — from real /match output when available,
+  // Build the rendering data : from real /match output when available,
   // otherwise from the client-side mock pool.
   let groups, nodes, edges, symPairs;
   if (useReal) {
@@ -1021,7 +1021,7 @@ function Matching({ profile, eventId, onError, onNext }) {
       w: e.weight,
     }));
     // Backend already pre-computed the top symbiotic pairs with the
-    // value-flow strings — much nicer than re-deriving client-side.
+    // value-flow strings : much nicer than re-deriving client-side.
     symPairs = matchResult.top_symbiotic;
   } else {
     // mock fallback (offline demo / no event)
@@ -1066,7 +1066,7 @@ function Matching({ profile, eventId, onError, onNext }) {
   const nodeById = (id) => nodes.find((n) => n.id === id);
   const totalAttending = nodes.length;
 
-  // Loading / error guards — show before the heavy SVG render so the
+  // Loading / error guards : show before the heavy SVG render so the
   // page doesn't flash empty + stale layout while the call is in flight.
   if (loading) {
     return (
@@ -1147,7 +1147,7 @@ function Matching({ profile, eventId, onError, onNext }) {
 
         <div className="match-side">
           <div className="sym-panel">
-            <p className="pd-label">Top pairs <span className="muted-text" style={{fontWeight: 400}}>— click "Why?" for an LLM-grounded explanation</span></p>
+            <p className="pd-label">Top pairs <span className="muted-text" style={{fontWeight: 400}}>: click "Why?" for an LLM-grounded explanation</span></p>
             {symPairs.length === 0 && (
               <div className="muted-text" style={{padding: "10px 0"}}>
                 No pairs surfaced yet.
@@ -1205,7 +1205,7 @@ function Matching({ profile, eventId, onError, onNext }) {
                 <p className="pd-label">Compare two guests</p>
                 <div className="muted-text" style={{marginBottom: 6}}>
                   {picked.length === 0 && "Click any two guests in the tables below."}
-                  {picked.length === 1 && `Selected: ${nameOf(picked[0])} — pick one more.`}
+                  {picked.length === 1 && `Selected: ${nameOf(picked[0])} : pick one more.`}
                   {picked.length === 2 && `Selected: ${nameOf(picked[0])} ⟷ ${nameOf(picked[1])}`}
                 </div>
                 {ready && (
@@ -1278,7 +1278,7 @@ function Matching({ profile, eventId, onError, onNext }) {
                     </div>
                   ))}
                   <p className="table-rationale">
-                    {g.members.length} guests — seated by the LLM's pairwise value scores, not by market-side bucketing.
+                    {g.members.length} guests : seated by the LLM's pairwise value scores, not by market-side bucketing.
                   </p>
                 </div>
               );
@@ -1319,7 +1319,7 @@ function ROI({ profile, onRestart }) {
     { k: "Converted", v: wonN, w: (wonN / invited) * 100 },
   ];
 
-  // LinkedIn outreach funnel — derived from the static prospect statuses.
+  // LinkedIn outreach funnel : derived from the static prospect statuses.
   // In the demo, the agent only invited prospects above THRESHOLD; those that
   // ended up in `contacted` or `rsvp` accepted the connection request, and
   // those in `rsvp` ultimately replied to the post-accept DM.
@@ -1422,7 +1422,7 @@ function ROI({ profile, onRestart }) {
               <span className={`led-pill led-pill-${g.state}`}>{g.label}</span>
               <span className="led-detail">{g.detail}</span>
             </span>
-            <span className="led-value">{g.value > 0 ? fmtK(g.value) : "—"}</span>
+            <span className="led-value">{g.value > 0 ? fmtK(g.value) : ":"}</span>
           </div>
         ))}
         <div className="ledger-foot">
@@ -1482,27 +1482,27 @@ function UserMenu({ user, onLogout }) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// App entry — no auth gate for now. Users land directly on the
+// App entry : no auth gate for now. Users land directly on the
 // product. The Sign-in-with-LinkedIn flow (SignIn.jsx + UserMenu
 // + /api/auth/* routes on the backend) is fully wired but not
 // surfaced as a wall; we'll bring it back as a "Connect LinkedIn"
 // button at the moment of send rather than a forced-signin gate.
 //
 // Anything kept around for the eventual rewiring:
-//   - SignIn.jsx                        — sign-in page component
-//   - backend/routes/auth.py            — hosted-auth + webhook + /me
-//   - backend/auth.py                   — session cookie + current_user
-//   - models.User / AuthState / Session — DB tables already migrated
-//   - api.me() / startLinkedinAuth() / logout()  — frontend wrappers
-//   - UserMenu component below          — header pill, just not mounted
-//   - get_provider_for_user(user)       — per-user Unipile factory
+//   - SignIn.jsx                        : sign-in page component
+//   - backend/routes/auth.py            : hosted-auth + webhook + /me
+//   - backend/auth.py                   : session cookie + current_user
+//   - models.User / AuthState / Session : DB tables already migrated
+//   - api.me() / startLinkedinAuth() / logout()  : frontend wrappers
+//   - UserMenu component below          : header pill, just not mounted
+//   - get_provider_for_user(user)       : per-user Unipile factory
 // ──────────────────────────────────────────────────────────────
 export default function App() {
   // On mount we fire /api/auth/me. Three terminal states:
-  //   user === null       — still loading (first paint)
-  //   user === undefined  — done loading, NOT signed in (treat as guest)
-  //   user is object      — signed in; UserMenu shows their info
-  // The app renders the SAME thing in guest vs signed-in mode — the only
+  //   user === null       : still loading (first paint)
+  //   user === undefined  : done loading, NOT signed in (treat as guest)
+  //   user is object      : signed in; UserMenu shows their info
+  // The app renders the SAME thing in guest vs signed-in mode : the only
   // difference is the topbar pill. Routes that require auth will surface
   // 401s when the user tries to use them (they can sign in then).
   const [user, setUser] = useState(null);
@@ -1609,7 +1609,7 @@ function SurplusApp({ user, onLogout, onSignIn }) {
     goal: ["Hiring pipeline"],
     budget: 8000,
   });
-  // backend-wired state — eventId comes from real /events POST; runResult is
+  // backend-wired state : eventId comes from real /events POST; runResult is
   // the response from /run (prospects, counts, etc.). Both null until the
   // user runs the flow.
   const [eventId, setEventId] = useState(null);

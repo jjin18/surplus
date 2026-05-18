@@ -1,21 +1,21 @@
 """
-agents/matcher.py — stage 04, the symbiotic matching market.
+agents/matcher.py : stage 04, the symbiotic matching market.
 
-Edges are not friendship — they are *predicted total value created* by putting
+Edges are not friendship : they are *predicted total value created* by putting
 two guests together. Two kinds:
 
   symbiotic : the two sit on different market sides, so one's offer can meet
               the other's seek (a builder and someone who can hire them; a
               founder and an investor). This is the value the matcher exists
               to manufacture.
-  affinity  : same side, adjacent domains — they worked on similar things, so
+  affinity  : same side, adjacent domains : they worked on similar things, so
               collaboration is easy. Useful, but a tiebreak, not the objective.
 
 build_edges() scores every pair. form_groups() then packs guests into the
 format's groups (Table / Team / ...), balancing sides so every group has both
 offers and seeks in the room.
 
-NOTE — open design question: build_edges weights symbiotic as a flat
+NOTE : open design question: build_edges weights symbiotic as a flat
 (avg_fit + 10). The real objective function should weight *which* cross-side
 pairing it is (founder<->investor vs builder<->hirer are not worth the same)
 and feed that into form_groups. That weighting is the actual product decision;
@@ -47,16 +47,16 @@ def build_edges(attending: list, event=None) -> list[dict]:
 
     Two backends:
 
-    1. surplus-match-library (preferred) — runs when ANTHROPIC_API_KEY is set
+    1. surplus-match-library (preferred) : runs when ANTHROPIC_API_KEY is set
        AND `event` is passed. Uses LLM enrichment + LLM-synthesized rubric +
        deterministic multi-axis composite scoring. Cached by content hash.
 
-    2. Heuristic fallback — the original `avg_fit + 10` for symbiotic edges,
+    2. Heuristic fallback : the original `avg_fit + 10` for symbiotic edges,
        `avg_fit - 8` for affinity, no edge for same-side non-adjacent pairs.
        Always works, no LLM call.
 
     The event arg is optional so legacy callers (tests, older code paths)
-    don't break — they just get the heuristic.
+    don't break : they just get the heuristic.
     """
     if event is not None:
         from . import matcher_lib
@@ -84,14 +84,14 @@ def form_groups(attending: list, event) -> dict[int, list]:
 
     Two backends:
 
-    1. LLM-driven (preferred) — when build_edges just ran the library, its
+    1. LLM-driven (preferred) : when build_edges just ran the library, its
        per-pair composite matrix is cached. We assign each prospect to the
        group that maximizes the sum of composite scores to existing members,
        with a soft same-side penalty. This is the "post-RSVP seating
-       optimizer" the UI copy references — pairs are chosen because the LLM
+       optimizer" the UI copy references : pairs are chosen because the LLM
        judged them mutually valuable, not because round-robin landed them.
 
-    2. Round-robin fallback — if the library didn't run (no API key, or
+    2. Round-robin fallback : if the library didn't run (no API key, or
        library failed) we fall back to the original side-balanced
        round-robin so the stage still produces a sensible room.
     """

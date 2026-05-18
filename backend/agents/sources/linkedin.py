@@ -1,5 +1,5 @@
 """
-sources/linkedin.py — professional profile + contact resolution.
+sources/linkedin.py : professional profile + contact resolution.
 
 This is the only adapter that resolves a real contact and the offers/seeks
 value vectors. A prospect missing here can still be surfaced by GitHub or X,
@@ -22,7 +22,7 @@ from .. import llm
 
 class LinkedInAdapter(SourceAdapter):
     key = "linkedin"
-    latency = 0.50  # third-party resolver — slowest (mock mode only)
+    latency = 0.50  # third-party resolver : slowest (mock mode only)
 
     async def fetch(self, icp: dict) -> list[dict]:
         if llm.llm_available():
@@ -39,7 +39,7 @@ class LinkedInAdapter(SourceAdapter):
                 "offers": p["offers"],
                 "seeks": p["seeks"],
                 "contact_resolved": p["contact_resolved"],
-                # linkedin_url is optional in the pool — some leads can't be
+                # linkedin_url is optional in the pool : some leads can't be
                 # resolved to a profile URL. We let the merge see whatever
                 # came back so prospect.linkedin_url ends up None when missing.
                 **({"linkedin_url": p["linkedin_url"]} if p.get("linkedin_url") else {}),

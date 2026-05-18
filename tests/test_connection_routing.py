@@ -90,7 +90,7 @@ def test_is_relation_returns_false_for_empty_url():
 
 
 def test_is_relation_returns_false_when_dsn_unset():
-    """Live mode without credentials must NOT raise — return False so the
+    """Live mode without credentials must NOT raise : return False so the
     caller proceeds with the (safer) cold path rather than crashing."""
     p = UnipileProvider(dry_run=False, dsn=None, api_key=None, account_id=None)
     assert p.is_relation("https://www.linkedin.com/in/anyone") is False
@@ -151,7 +151,7 @@ def test_webhook_invite_accepted_flips_to_connected(db):
 
 def test_webhook_non_accept_event_leaves_status_alone(db):
     """A message_sent or message_replied event doesn't tell us anything about
-    connection state we don't already know — should NOT touch the column."""
+    connection state we don't already know : should NOT touch the column."""
     _ev, p = _seed(db, status="not_connected")
     canonical = CanonicalEvent(
         event_id=0, prospect_id=0,

@@ -111,7 +111,7 @@ def test_send_and_log_writes_success_state(db):
     assert len(logs) == 1
     assert logs[0].state == "dry_run_queued" or logs[0].state == "auto_reply_sent"
     # dry-run returns state=dry_run_queued; we record sent_state on success
-    # — both are "not error" so the row is the sent_state we requested.
+    # : both are "not error" so the row is the sent_state we requested.
     assert logs[0].state == "auto_reply_sent"
 
 
@@ -138,7 +138,7 @@ def test_send_and_log_commit_false_defers(db):
         sent_state="follow_up_sent", fallback_provider=get_provider(),
         commit=False,
     )
-    # Row is in session but unflushed — rollback should drop it
+    # Row is in session but unflushed : rollback should drop it
     db.rollback()
     db.expire_all()
     assert db.get(models.Prospect, p.id).outreach == []
@@ -195,7 +195,7 @@ def test_routing_returns_per_user_provider_when_user_has_account(monkeypatch):
 
 def test_routing_falls_back_when_per_user_resolution_raises(monkeypatch):
     """If get_provider_for_user raises (e.g. stale connection, missing env),
-    we must NOT crash the webhook — fall back to the operator account."""
+    we must NOT crash the webhook : fall back to the operator account."""
     fallback = object()
     user = SimpleNamespace(id=1, unipile_account_id="user_account")
 

@@ -1,5 +1,5 @@
 """
-providers/ — pluggable LinkedIn outreach providers.
+providers/ : pluggable LinkedIn outreach providers.
 
 Currently only Unipile is implemented. Adding another provider is a one-file
 change: drop a new module that implements LinkedInProvider, register it in
@@ -23,7 +23,7 @@ from .unipile import UnipileProvider
 def get_provider() -> LinkedInProvider:
     """Resolve the configured provider using env-var account_id.
 
-    This is the single-tenant fallback path — used by tests, by webhook
+    This is the single-tenant fallback path : used by tests, by webhook
     handlers that don't yet know which user owns the prospect, and as a
     safety net during the multi-tenant migration. Production user-initiated
     sends should use get_provider_for_user(user) instead.
@@ -39,7 +39,7 @@ def get_provider_for_user(user) -> LinkedInProvider:
 
     Same Unipile DSN + API key as the env config (those are operator-level
     secrets, shared across tenants), but the account_id comes from the
-    user's row — i.e. the LinkedIn account THEY connected through the
+    user's row : i.e. the LinkedIn account THEY connected through the
     Sign-in-with-LinkedIn flow.
 
     Caller responsibility: only call with a user that has a non-empty
@@ -52,7 +52,7 @@ def get_provider_for_user(user) -> LinkedInProvider:
     name = os.environ.get("PROVIDER", "unipile").lower().strip()
     if name != "unipile":
         raise ValueError(f"Unknown PROVIDER={name!r} (expected 'unipile')")
-    # Build a fresh per-user instance (intentionally NOT cached — different
+    # Build a fresh per-user instance (intentionally NOT cached : different
     # users get different provider objects). Pulls DSN/API key from env.
     from ..providers.unipile import _env_bool
     return UnipileProvider(
@@ -85,7 +85,7 @@ def get_provider_for_prospect(prospect, fallback: LinkedInProvider) -> LinkedInP
 
 
 def reset_provider_cache() -> None:
-    """Test hook — clears the cached provider so env-var changes apply."""
+    """Test hook : clears the cached provider so env-var changes apply."""
     get_provider.cache_clear()
 
 

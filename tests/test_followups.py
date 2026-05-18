@@ -1,5 +1,5 @@
 """
-Tests for the follow-up DM machinery — compose_followup() copy contract
+Tests for the follow-up DM machinery : compose_followup() copy contract
 and the eligibility query in routes/admin.py.
 
 Does NOT import backend.main (which transitively pulls schemas.py and its
@@ -7,7 +7,7 @@ Does NOT import backend.main (which transitively pulls schemas.py and its
 the eligibility function + send loop directly with an in-memory SQLAlchemy
 session, the same pattern test_scorer.py / test_matcher.py use.
 
-No network — UnipileProvider is forced into dry-run.
+No network : UnipileProvider is forced into dry-run.
 """
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
@@ -104,7 +104,7 @@ def test_compose_followup_uses_first_name_and_format():
 
 
 def test_compose_followup_handles_csv_multi_select():
-    """Multi-select stores goal/seniority/co_stage as CSV — _framing should
+    """Multi-select stores goal/seniority/co_stage as CSV : _framing should
     pick the first entry rather than crash on KeyError."""
     event = SimpleNamespace(
         role="ML platform engineers", seniority="Staff+,Senior",
@@ -143,7 +143,7 @@ def test_not_eligible_at_max_followups(db):
 
 
 def test_not_eligible_without_message_sent(db):
-    """A prospect that only has an invite_sent row shouldn't be touched —
+    """A prospect that only has an invite_sent row shouldn't be touched :
     they haven't accepted yet, so there's no DM to follow up on."""
     ev = models.Event(
         role="x", seniority="Senior", co_stage="Seed", headcount=40,

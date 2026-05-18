@@ -1,8 +1,8 @@
 """
-Tests for the AI reply agent harness — decide_reply() output validation,
+Tests for the AI reply agent harness : decide_reply() output validation,
 should_auto_send() gate, and the admin pending-reply endpoints.
 
-No network. The Anthropic client is mocked everywhere — we never hit Claude
+No network. The Anthropic client is mocked everywhere : we never hit Claude
 from tests. UnipileProvider is forced into dry-run.
 """
 from __future__ import annotations
@@ -90,7 +90,7 @@ def _fake_prospect():
 def test_decide_reply_parses_clarifying_classification():
     client = MagicMock()
     client.messages.create.return_value = _fake_anthropic_response(
-        '{"classification":"clarifying","draft_text":"7pm at our usual spot — '
+        '{"classification":"clarifying","draft_text":"7pm at our usual spot : '
         'I\'ll send the exact address once you confirm.","reasoning":"asked about time"}'
     )
     decision = decide_reply(
@@ -170,7 +170,7 @@ def test_should_auto_send_false_when_decision_has_error():
 
 def test_auto_send_classes_is_intentionally_narrow():
     """Spec contract: only 'clarifying' auto-sends in v1. If this set grows,
-    the trust review goes with it — fail loudly to force the conversation."""
+    the trust review goes with it : fail loudly to force the conversation."""
     assert AUTO_SEND_CLASSES == frozenset({"clarifying"})
 
 

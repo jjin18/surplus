@@ -1,13 +1,13 @@
 """Deterministic per-pair scoring. No LLM. No I/O. Microseconds per pair.
 
 Given two EnrichedPerson and the synthesized rubric, returns:
-  - similar_score (0..1)            — shared context (gate)
-  - complementary_score (0..1)      — value exchange (optimizer)
-  - role_pair_score (0..1)          — looked up in rubric.role_pair_matrix
-  - gate_passed (bool)              — hard gates from rubric
-  - anti_multiplier (0..1)          — penalty for direct competitor, clone, etc.
-  - composite (0..1)                — final match score
-  - components (dict)               — breakdown of every sub-axis (for explain.py + UI)
+  - similar_score (0..1)            : shared context (gate)
+  - complementary_score (0..1)      : value exchange (optimizer)
+  - role_pair_score (0..1)          : looked up in rubric.role_pair_matrix
+  - gate_passed (bool)              : hard gates from rubric
+  - anti_multiplier (0..1)          : penalty for direct competitor, clone, etc.
+  - composite (0..1)                : final match score
+  - components (dict)               : breakdown of every sub-axis (for explain.py + UI)
 
 Each sub-axis is a set-based operation on already-extracted tags. The rubric
 decides weights; this module just applies them.
@@ -76,9 +76,9 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 def _jaccard_distance(a: set[str], b: set[str]) -> float:
     """1.0 = totally complementary (no overlap). 0.0 = identical."""
     if not a and not b:
-        return 0.0  # both empty — no signal, treat as no complementarity
+        return 0.0  # both empty : no signal, treat as no complementarity
     if not a or not b:
-        return 0.5  # one has stack, one doesn't — partial complement
+        return 0.5  # one has stack, one doesn't : partial complement
     return 1.0 - _jaccard(a, b)
 
 
@@ -161,7 +161,7 @@ def _score_domain_overlap(a: EnrichedPerson, b: EnrichedPerson) -> float:
 
 
 def _score_conviction_overlap(a: EnrichedPerson, b: EnrichedPerson) -> float:
-    """Conviction themes are free-text sentences — compare via token sets."""
+    """Conviction themes are free-text sentences : compare via token sets."""
     return _jaccard(_to_token_set(a.conviction_themes), _to_token_set(b.conviction_themes))
 
 
@@ -169,7 +169,7 @@ def _score_background_resonance(a: EnrichedPerson, b: EnrichedPerson) -> float:
     """Shared past employers + shared schools = trust accelerant."""
     companies = _jaccard(_past_companies(a), _past_companies(b))
     schools = _jaccard(_schools(a), _schools(b))
-    # Weight companies higher than schools — same company is rarer + stronger
+    # Weight companies higher than schools : same company is rarer + stronger
     return min(1.0, 0.6 * companies + 0.4 * schools)
 
 
@@ -187,7 +187,7 @@ def _score_skill_complement(a: EnrichedPerson, b: EnrichedPerson) -> float:
 def _score_experience_asymmetry(a: EnrichedPerson, b: EnrichedPerson) -> float:
     """Higher exp-level gap → potential mentor relationship.
 
-    Caps at 3 buckets gap (max useful asymmetry — beyond that becomes anti-signal).
+    Caps at 3 buckets gap (max useful asymmetry : beyond that becomes anti-signal).
     """
     dist = _exp_level_distance(a.exp_level, b.exp_level)
     return min(dist / 3.0, 1.0)
@@ -341,7 +341,7 @@ def score_pair(
         gate_failures.append("require_same_city")
 
     # --- Composite ---
-    # Weighted sum across the two axes — honors the rubric's axis_blend
+    # Weighted sum across the two axes : honors the rubric's axis_blend
     # without zeroing out lopsided pairs (e.g. great complementarity but
     # no shared specifics). The role_pair_score multiplier handles
     # role-incompatibility filtering instead.

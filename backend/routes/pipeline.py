@@ -1,12 +1,12 @@
-"""routes/pipeline.py — stage 02-03. Prospecting and outreach, split.
+"""routes/pipeline.py : stage 02-03. Prospecting and outreach, split.
 
 Multi-tenant: every route requires a signed-in user (via current_user dep)
 and resolves the event through get_owned_event (404s if the event isn't
 the user's). Send paths use get_provider_for_user(user) so DMs go from the
-signed-in user's connected LinkedIn — NOT the env-var operator account.
+signed-in user's connected LinkedIn : NOT the env-var operator account.
 
 The env-var operator account remains the fallback for webhook handlers
-(see routes/webhooks.py — webhooks have no session cookie, so they trace
+(see routes/webhooks.py : webhooks have no session cookie, so they trace
 the owning user via Prospect → Event → User).
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ async def prospect_only(
     """
     Stage 02 + 03a only: fan-out + score + threshold. No outreach.
 
-    Marks every prospect 'approved' or 'below'. Idempotent — wipes prior
+    Marks every prospect 'approved' or 'below'. Idempotent : wipes prior
     prospects (and their outreach + conversions) first.
 
     Pass `?fresh=true` to bypass the in-memory ICP cache and force a
@@ -77,11 +77,11 @@ def outreach_only(
     """
     ev = get_owned_event(event_id, user, db)
     if not ev.prospects:
-        raise HTTPException(409, "no prospects — call /prospect first")
+        raise HTTPException(409, "no prospects : call /prospect first")
     targets = [p for p in ev.prospects
                if p.status in ("approved", "contacted", "rsvp")]
     if not targets:
-        raise HTTPException(409, "no approved prospects to contact — "
+        raise HTTPException(409, "no approved prospects to contact : "
                                  "threshold may be too high for the pool")
 
     provider = get_provider_for_user(user)
@@ -109,7 +109,7 @@ async def run(
     """
     Convenience: /prospect + /outreach back-to-back. Idempotent.
 
-    Same SAFETY guard as /outreach — in LIVE mode this fires real invites
+    Same SAFETY guard as /outreach : in LIVE mode this fires real invites
     to every approved prospect at once. Pass ?confirm_live_batch=true to
     proceed, or use the per-prospect /dm endpoint for safer one-at-a-time.
     """
@@ -216,7 +216,7 @@ def outreach_preview(
     """
     ev = get_owned_event(event_id, user, db)
     if not ev.prospects:
-        raise HTTPException(409, "no prospects — call /prospect first")
+        raise HTTPException(409, "no prospects : call /prospect first")
 
     provider = get_provider_for_user(user)
     targets = [p for p in ev.prospects
@@ -276,7 +276,7 @@ def _refresh_connection_status(provider, prospect: models.Prospect) -> str:
     try:
         connected = provider.is_relation(prospect.linkedin_url or "")
     except Exception:
-        # Don't fail the action just because Unipile is flaky — keep the
+        # Don't fail the action just because Unipile is flaky : keep the
         # last known status. Caller sees the unchanged value and proceeds.
         return prospect.connection_status or "unknown"
     new_status = "connected" if connected else "not_connected"
@@ -294,7 +294,7 @@ def send_connection_invite(
     user: models.User = Depends(current_user),
 ):
     """
-    "Reach out" to ONE prospect from the signed-in user's LinkedIn —
+    "Reach out" to ONE prospect from the signed-in user's LinkedIn :
     smart-routes between cold (send_connection) and warm (send_message)
     based on a live Unipile relation check.
 
@@ -465,7 +465,7 @@ def check_connections(
     status is currently "unknown". Designed to be called once when the
     auto-outreach screen loads so button labels render correctly.
 
-    Re-checks are NOT free — one Unipile API call per prospect — so already-
+    Re-checks are NOT free : one Unipile API call per prospect : so already-
     classified rows are skipped. To force a recheck, hit /invite which always
     calls _refresh_connection_status.
     """

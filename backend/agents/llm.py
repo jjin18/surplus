@@ -1,10 +1,10 @@
 """
-agents/llm.py — Claude-driven prospecting helpers.
+agents/llm.py : Claude-driven prospecting helpers.
 
 Three operations, all gated by ANTHROPIC_API_KEY:
 
   discover_candidates(source, icp)      web-search-driven discovery per source
-  judge_relevance_batch(candidates, icp) LLM gatekeeper — ICP match verdict
+  judge_relevance_batch(candidates, icp) LLM gatekeeper : ICP match verdict
 
 `llm_available()` returns True only when the SDK is installed AND a key is
 set in the environment. Callers must check it first and fall back to the
@@ -12,9 +12,9 @@ mock pool when False (so seed/tests still work offline).
 
 Design notes:
 - Model is claude-opus-4-7 (sampling params and budget_tokens are removed
-  on Opus 4.7 — adaptive thinking only; the system prompt is the only
+  on Opus 4.7 : adaptive thinking only; the system prompt is the only
   steering knob).
-- The system prompt is stable and gets a cache_control breakpoint — every
+- The system prompt is stable and gets a cache_control breakpoint : every
   per-candidate judge call reads the cache instead of paying full price.
 - The discover_candidates call returns ONE tool_use block per candidate
   (via `emit_candidate`), so we don't have to parse free text.
@@ -33,14 +33,14 @@ except ImportError:
     _SDK_AVAILABLE = False
 
 
-# Discovery runs Sonnet 4.6 — Haiku 4.5 was attempted but doesn't appear
+# Discovery runs Sonnet 4.6 : Haiku 4.5 was attempted but doesn't appear
 # to support web_search_20260209 (every discover_candidates call started
 # 400ing). Sonnet supports the newer tool with dynamic filtering and is
 # still the fastest model that works end-to-end. Judge stays on Haiku
 # because it's plain text-in / verdict-out, no web_search tool.
 MODEL = "claude-sonnet-4-6"
 JUDGE_MODEL = "claude-haiku-4-5"
-# Cap each adapter's web_search iterations. 1 is enough for the demo —
+# Cap each adapter's web_search iterations. 1 is enough for the demo :
 # a single SERP usually yields 5+ candidates, and a second round adds
 # ~15s of latency that wasn't worth it in practice. Raise back to 2 if
 # discovery quality drops.
@@ -50,7 +50,7 @@ WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_use
 def max_per_source() -> int:
     """Cap on candidates per source adapter.
 
-    50 default — Exa is generous (one query, ~$0.005, up to 100 results)
+    50 default : Exa is generous (one query, ~$0.005, up to 100 results)
     and we have free credits to burn. Judge handles ~50 candidates in
     one batched Haiku call for ~$0.005, so the total cost ceiling per
     /prospect run is ~$0.02 even at this cap.
@@ -68,7 +68,7 @@ def _api_key() -> str:
     trailing newline to env-var values. The Anthropic SDK passes the raw
     string through to the `x-api-key` HTTP header, and httpx rejects the
     request with `LocalProtocolError: Illegal header value` before it
-    ever hits the wire — surfacing in our logs as a misleading
+    ever hits the wire : surfacing in our logs as a misleading
     "Connection error." Stripping here keeps the SDK happy regardless of
     what the platform did to the value.
     """
@@ -77,7 +77,7 @@ def _api_key() -> str:
 
 def llm_available() -> bool:
     """
-    True when ANY discovery backend is configured — Exa OR Anthropic.
+    True when ANY discovery backend is configured : Exa OR Anthropic.
 
     Source adapters call this to decide between LLM-driven discovery and
     the mock pool. `discover_candidates()` below picks the actual backend.
@@ -111,7 +111,7 @@ _DISCOVERY_SYSTEM = (
     "find real candidates that publicly match. Emit ONE tool_use call to "
     "`emit_candidate` per candidate. Cast a wide net: any real person whose "
     "public signal plausibly aligns with the ICP role + seniority should be "
-    "surfaced — a downstream ICP gate decides who stays. Skip only when the "
+    "surfaced : a downstream ICP gate decides who stays. Skip only when the "
     "profile clearly contradicts the ICP. Never invent names, URLs, follower "
     "counts, or star counts; if a numeric signal isn't visible, omit the "
     "field. The `identity` field must be a stable lowercase slug derived "
@@ -193,7 +193,7 @@ _SOURCE_GUIDANCE = {
         "Search the public web for LinkedIn profiles matching the ICP. Use "
         "queries like 'site:linkedin.com/in <icp role> <icp seniority>' and "
         "'<icp role> at <type-of-company>'. Extract role, company, and "
-        "seniority strictly from the SERP snippet or the page contents — "
+        "seniority strictly from the SERP snippet or the page contents : "
         "do not fabricate. Set `contact_resolved` to true only when you "
         "actually have a /in/<handle> URL."
     ),
@@ -210,9 +210,9 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
     Surface candidates from one source for this ICP.
 
     Backend selection:
-      1. Exa (when EXA_API_KEY is set) — preferred: cheaper, faster,
+      1. Exa (when EXA_API_KEY is set) : preferred: cheaper, faster,
          structured profile URLs from a search index.
-      2. Anthropic Claude + web_search — fallback when EXA is unavailable
+      2. Anthropic Claude + web_search : fallback when EXA is unavailable
          but ANTHROPIC_API_KEY is set.
       3. Caller falls back to the mock pool when neither is available
          (handled by `llm_available()` being False, which the source
@@ -231,7 +231,7 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
         out = exa.discover_via_exa(source, icp, max_candidates)
         if out:
             return out
-        # Exa returned empty — fall through to Claude if we have it,
+        # Exa returned empty : fall through to Claude if we have it,
         # otherwise return the empty list.
         if not (_SDK_AVAILABLE and bool(_api_key())):
             return []
@@ -257,7 +257,7 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
         # `output_config` is intentionally NOT set here: the pinned
         # anthropic==0.42.0 raises TypeError on it. Re-add when we bump
         # the SDK to a version that knows the parameter.
-        # 110s SDK timeout — slightly under the 120s adapter timeout in
+        # 110s SDK timeout : slightly under the 120s adapter timeout in
         # prospector.py so the SDK raises a clean APITimeoutError that
         # our except catches, instead of getting cancelled mid-flight.
         response = _client().with_options(timeout=110.0).messages.create(
@@ -271,9 +271,9 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
             tools=[WEB_SEARCH_TOOL, tool],
             messages=[{"role": "user", "content": user_msg}],
         )
-    except Exception as exc:  # noqa: BLE001 — surface, but don't crash the run
+    except Exception as exc:  # noqa: BLE001 : surface, but don't crash the run
         # Anthropic SDK's APIConnectionError stringifies to a bare
-        # "Connection error." — surface the underlying cause so we can
+        # "Connection error." : surface the underlying cause so we can
         # tell DNS / TLS / refused / unreachable apart in logs.
         cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
         print(f"  [llm] discover_candidates({source}) failed: {type(exc).__name__}: {exc}"
@@ -296,7 +296,7 @@ _RELEVANCE_SYSTEM = (
     "signal plausibly aligns with the ICP role + seniority + company stage "
     "should be kept, even if evidence is thin. Reject only when the profile "
     "clearly contradicts the ICP (wrong domain entirely, wrong career level "
-    "by a wide margin, obvious mismatch). Borderline candidates are kept — "
+    "by a wide margin, obvious mismatch). Borderline candidates are kept : "
     "downstream scoring will sort them. Use the `emit_verdict` tool."
 )
 
@@ -332,7 +332,7 @@ def judge_relevance_batch(candidates: list[dict], icp: dict) -> dict[str, tuple[
     """
     Run the ICP gatekeeper over a whole pool in ONE Haiku call.
 
-    Massive latency win vs calling `judge_relevance` per candidate — for
+    Massive latency win vs calling `judge_relevance` per candidate : for
     a pool of 15 candidates that's 1 API round-trip instead of 15.
 
     Returns a dict keyed by candidate `identity` → (relevant, reason).
@@ -345,7 +345,7 @@ def judge_relevance_batch(candidates: list[dict], icp: dict) -> dict[str, tuple[
     user_msg = (
         "ICP:\n"
         + json.dumps(icp, indent=2)
-        + "\n\nCandidates (judge each one — emit ONE entry per candidate, "
+        + "\n\nCandidates (judge each one : emit ONE entry per candidate, "
         "matched by `identity`):\n"
         + json.dumps(candidates, indent=2, default=str)
     )

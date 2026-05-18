@@ -1,12 +1,12 @@
 """
-routes/demo.py — hidden-link demo entry point.
+routes/demo.py : hidden-link demo entry point.
 
 Goal: hand someone (an investor, a friend, a candidate user) a single URL
 that drops them into the full surplus app without making them sign in
 with their own LinkedIn first. They get a real signed-in session backed
 by the operator user (i.e., the LinkedIn account configured via the
-UNIPILE_ACCOUNT_ID env var), so every action — including real outreach
-sends — works end-to-end.
+UNIPILE_ACCOUNT_ID env var), so every action : including real outreach
+sends : works end-to-end.
 
 Security model:
   - Gated by a shared secret in the DEMO_ACCESS_TOKEN env var.
@@ -14,7 +14,7 @@ Security model:
     for "everything works including real sends" is that anyone with the
     link can spend the operator's daily LinkedIn quota and send DMs from
     your account.
-  - When DEMO_ACCESS_TOKEN is unset, the route returns 404 — it doesn't
+  - When DEMO_ACCESS_TOKEN is unset, the route returns 404 : it doesn't
     exist in production unless you opt in by setting the env var.
   - constant-time comparison on the token to avoid timing attacks.
 
@@ -29,7 +29,7 @@ Effect:
 
 To revoke a leaked link: rotate DEMO_ACCESS_TOKEN in Railway env. Active
 sessions issued by the old link continue to work until their 30-day TTL
-expires (they're indistinguishable from a normal session) — to kill them
+expires (they're indistinguishable from a normal session) : to kill them
 immediately, delete the corresponding rows from the sessions table.
 """
 from __future__ import annotations
@@ -80,14 +80,14 @@ def demo_enter(
     if not expected:
         raise HTTPException(status_code=404, detail="not found")
 
-    # constant-time compare — avoid leaking the token length / prefix via
+    # constant-time compare : avoid leaking the token length / prefix via
     # response timing.
     if not hmac.compare_digest(key, expected):
         raise HTTPException(status_code=404, detail="not found")
 
     operator_account_id = _operator_account_id()
     if not operator_account_id:
-        # Misconfigured deploy — feature is on but there's no operator user
+        # Misconfigured deploy : feature is on but there's no operator user
         # to issue a session for. 404 so we don't leak the misconfiguration.
         raise HTTPException(status_code=404, detail="not found")
 
@@ -97,7 +97,7 @@ def demo_enter(
         .first()
     )
     if not operator:
-        # Should be impossible — _ensure_operator_user_and_backfill creates
+        # Should be impossible : _ensure_operator_user_and_backfill creates
         # this row at startup whenever UNIPILE_ACCOUNT_ID is set. Surface
         # as 500 so it's visible in logs if it ever happens.
         raise HTTPException(status_code=500, detail="operator user missing")

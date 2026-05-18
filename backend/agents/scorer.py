@@ -1,5 +1,5 @@
 """
-agents/scorer.py — stage 03a, fit scoring.
+agents/scorer.py : stage 03a, fit scoring.
 
 Two pieces:
   score_prospect(p, event) -> (score, reason)
@@ -14,7 +14,7 @@ Two pieces:
       high bar; thin pool -> the bar gives, but only to the floor.
 
 Accepts the Prospect ORM object directly (or any object with the same
-attributes — tests pass a SimpleNamespace).
+attributes : tests pass a SimpleNamespace).
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def score_prospect(p, event) -> tuple[int, str]:
 
     # --- ICP match --------------------------------------------------------
     # event.seniority is CSV (multi-select). The match threshold is the
-    # LOWEST selected rank — "Senior or Staff+" means Senior is acceptable,
+    # LOWEST selected rank : "Senior or Staff+" means Senior is acceptable,
     # anything above is too. Accepts legacy single-value strings unchanged.
     selected = [s.strip() for s in (event.seniority or "").split(",") if s.strip()]
     want_ranks = [_SENIORITY_RANK[s] for s in selected if s in _SENIORITY_RANK]

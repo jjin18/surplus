@@ -1,5 +1,5 @@
 """
-explain.py — stubbed in this vendor.
+explain.py : stubbed in this vendor.
 
 surplus uses its own per-pair rationale generation (lives in
 backend/agents/outreach.py:compose() for the connection-note path).

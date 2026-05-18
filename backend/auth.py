@@ -1,8 +1,8 @@
 """
-auth.py — session cookie + current_user dependency.
+auth.py : session cookie + current_user dependency.
 
 Surplus auth model: Sign in with LinkedIn via Unipile's hosted-auth flow.
-There's no separate email/password — the user's LinkedIn account IS their
+There's no separate email/password : the user's LinkedIn account IS their
 identity in surplus. See routes/auth.py for the actual flow.
 
 This module owns:
@@ -120,7 +120,7 @@ def get_owned_event(event_id: int, user: User, db: DbSession):
     """Fetch an event by id, requiring `user` to be its owner.
 
     Returns the Event row. Raises 404 in BOTH the not-found case AND the
-    not-owned case — deliberately the same status to avoid leaking the
+    not-owned case : deliberately the same status to avoid leaking the
     existence of other users' events.
 
     Use from any route handler that takes `event_id` from the URL:

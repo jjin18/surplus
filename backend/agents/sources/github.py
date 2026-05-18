@@ -1,5 +1,5 @@
 """
-sources/github.py — OSS signal.
+sources/github.py : OSS signal.
 
 Two modes:
   - LLM mode (when ANTHROPIC_API_KEY is set): Claude + web_search surfaces
@@ -23,7 +23,7 @@ MIN_STARS = 50
 
 class GitHubAdapter(SourceAdapter):
     key = "github"
-    latency = 0.15  # clean public API — fast (mock mode only)
+    latency = 0.15  # clean public API : fast (mock mode only)
 
     async def fetch(self, icp: dict) -> list[dict]:
         if llm.llm_available():
