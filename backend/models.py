@@ -364,6 +364,163 @@ class User(Base):
     voice_examples: Mapped[str] = mapped_column(Text, default="")
 
 
+# ─── Curation (Stage 1-5: ingested-audience workflow) ─────────────────
+# A separate row-type from Prospect (outbound-sourced) and Applicant
+# (Luma triage). Attendees come from CSV imports the operator already
+# owns : alumni, members, past attendees, nominees, sponsor target lists.
+# The curation module (backend/curation/) runs scoring + matching +
+# outreach + attribution on these rows.
+
+
+class Attendee(Base):
+    """One person ingested from a CSV / RSVP list, scoped to an Event.
+
+    Identity comes from the operator, not from web discovery : we treat
+    `email` (when present) or normalized `name+company` as the dedupe key.
+    """
+    __tablename__ = "curation_attendees"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+
+    # Canonical CSV fields
+    name: Mapped[str] = mapped_column(String(160), default="")
+    email: Mapped[Optional[str]] = mapped_column(String(200), default=None, index=True)
+    role: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    company: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    seniority: Mapped[Optional[str]] = mapped_column(String(60), default=None)
+    linkedin_url: Mapped[Optional[str]] = mapped_column(String(400), default=None)
+    # Source list this attendee came from (alumni / members / past_attendees /
+    # nominees / sponsor_targets / rsvp / other). Operator-supplied at import.
+    list_source: Mapped[str] = mapped_column(String(40), default="other")
+    # For guest-list imports: invited | rsvp_yes | rsvp_no | waitlist | attended
+    rsvp_status: Mapped[Optional[str]] = mapped_column(String(20), default=None)
+
+    # Everything else from the CSV that didn't map. JSON dict.
+    raw: Mapped[str] = mapped_column(Text, default="{}")
+
+    # Enrichment cache : firmographic, role, seniority data from Claude.
+    # JSON dict; empty until enrich_attendee() runs. Keyed by source
+    # (e.g. "claude_firmographic", "claude_role"). See curation/enrichment.py
+    # for the schema.
+    enrichment: Mapped[str] = mapped_column(Text, default="{}")
+    enriched_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+
+    # Near-term feature payloads (always stored, only computed when the
+    # corresponding feature flag is on : see curation/features.py).
+    news_signal: Mapped[str] = mapped_column(Text, default="{}")           # JSON
+    recognition_flags: Mapped[str] = mapped_column(Text, default="[]")     # JSON list
+    warm_connection: Mapped[str] = mapped_column(Text, default="{}")       # JSON
+
+    # Rule-based ICP fit, 0-100. Stored alongside its rule-based reasoning
+    # (machine-readable list of triggered rules) and the optional LLM-written
+    # rationale that explains the rules in plain English.
+    fit_score: Mapped[int] = mapped_column(default=0)
+    fit_rule_trace: Mapped[str] = mapped_column(Text, default="[]")        # JSON list of rule hits
+    fit_rationale: Mapped[str] = mapped_column(Text, default="")            # plain-English from Claude
+
+    # Near-term: predicted no-show probability 0.0-1.0. Empty when feature off.
+    no_show_probability: Mapped[Optional[float]] = mapped_column(default=None)
+    no_show_rationale: Mapped[str] = mapped_column(Text, default="")
+
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    event: Mapped["Event"] = relationship()
+
+
+class AttendeeIntro(Base):
+    """A rule-based intro recommendation between two attendees at one event.
+
+    Direction-asymmetric pairing: row stores the "introduce A to B" framing
+    so each side gets a tailored reason. Two rows per pair (A→B and B→A)
+    when both directions make sense.
+    """
+    __tablename__ = "curation_intros"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    from_attendee_id: Mapped[int] = mapped_column(ForeignKey("curation_attendees.id"))
+    to_attendee_id: Mapped[int] = mapped_column(ForeignKey("curation_attendees.id"))
+    # 0.0-1.0 rule-based pairing weight
+    weight: Mapped[float] = mapped_column(default=0.0)
+    # Machine-readable rule trace : which complementary signals triggered
+    # the recommendation. JSON list of strings.
+    rule_trace: Mapped[str] = mapped_column(Text, default="[]")
+    # Optional human-readable reason. NOT claimed as AI unless generated
+    # by Claude : current rule-based builder leaves this empty.
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class AttendeeFollowUp(Base):
+    """One logged post-event follow-up touchpoint on an attendee."""
+    __tablename__ = "curation_followups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attendee_id: Mapped[int] = mapped_column(ForeignKey("curation_attendees.id"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    # meeting | email | dm | call | intro | other
+    kind: Mapped[str] = mapped_column(String(20), default="other")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    # ISO date string when the follow-up happened; falls back to created_at
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class AttendeeAttribution(Base):
+    """Claude-derived outcome attribution : maps an event to an outcome on
+    an attendee (meeting, hire, partnership, pipeline) with reasoning."""
+    __tablename__ = "curation_attributions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attendee_id: Mapped[int] = mapped_column(ForeignKey("curation_attendees.id"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    # meeting | hire | partnership | pipeline | revenue | other | none
+    outcome: Mapped[str] = mapped_column(String(20))
+    # 0.0-1.0 model confidence that the event drove this outcome
+    confidence: Mapped[float] = mapped_column(default=0.0)
+    # Dollar value (optional, 0 when unmonetary).
+    value: Mapped[int] = mapped_column(default=0)
+    # Claude's reasoning : auditable.
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    # Source signals the attribution leaned on. JSON list.
+    evidence: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class LLMCall(Base):
+    """Audit log for every Claude call the curation module makes.
+
+    Stores prompt + raw output so the rationale on any scored / attributed
+    row stays auditable after the fact. Indexed by (event_id, purpose) so
+    operators can pull every score-rationale call for one event in one query.
+    """
+    __tablename__ = "curation_llm_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Nullable so unit tests / smoke calls without an event still log
+    event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("events.id"), default=None, index=True,
+    )
+    attendee_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("curation_attendees.id"), default=None, index=True,
+    )
+    # score_rationale | enrichment | outreach | attribution | gap_analysis | other
+    purpose: Mapped[str] = mapped_column(String(40), index=True)
+    model: Mapped[str] = mapped_column(String(60), default="")
+    # The system + user prompt concatenated as one string. Capped at 16k
+    # so we don't blow up the DB; longer prompts get a "[truncated]" tail.
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    # Raw model output. Cap mirrors prompt.
+    output: Mapped[str] = mapped_column(Text, default="")
+    # ok | error | parse_error | disabled (no API key) | dry_run
+    status: Mapped[str] = mapped_column(String(20), default="ok")
+    error: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    latency_ms: Mapped[Optional[int]] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
 class AuthState(Base):
     """Short-lived state token created when a user clicks Sign in with LinkedIn.
 
