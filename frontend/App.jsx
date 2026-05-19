@@ -282,7 +282,7 @@ function Intake({ profile, setProfile, onRun }) {
           <h3><span className="card-num">B</span> Event details</h3>
           <label>Event name</label>
           <input className="text-in" value={profile.eventName}
-            placeholder="e.g. Founders Dinner · April"
+            placeholder="e.g. Founders Dinner"
             onChange={(e) => set("eventName", e.target.value)} />
           <label>Headcount : <strong>{profile.headcount}</strong> guests</label>
           <input type="range" min="0" max="160" step="2" value={profile.headcount}
