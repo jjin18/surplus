@@ -66,7 +66,22 @@ def init_db() -> None:
     _migrate_prospect_scholar_citations()
     _migrate_user_voice_examples()
     _migrate_user_unipile_account_id_nullable()
+    _migrate_event_triage_config()
     _ensure_operator_user_and_backfill()
+
+
+def _migrate_event_triage_config() -> None:
+    """Add events.triage_config (TEXT, default '') for Applicant Triage.
+    Empty string for existing rows means 'outbound-only event'."""
+    from sqlalchemy import inspect, text
+    insp = inspect(ENGINE)
+    if "events" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("events")}
+    if "triage_config" in cols:
+        return
+    with ENGINE.begin() as conn:
+        conn.execute(text("ALTER TABLE events ADD COLUMN triage_config TEXT DEFAULT ''"))
 
 
 def _migrate_user_unipile_account_id_nullable() -> None:

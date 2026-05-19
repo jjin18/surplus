@@ -54,6 +54,10 @@ class Event(Base):
     # Years-of-experience buckets, CSV-joined ("3-5,6-10"). Empty string ==
     # "no preference" (skip the YOE clause in the Exa query).
     yoe: Mapped[str] = mapped_column(String(80), default="")
+    # Applicant Triage mode : JSON-encoded sponsor / event criteria used to
+    # score Luma CSV applicants. Empty string means outbound-only event.
+    # See backend/triage/ for the scoring + review pipeline.
+    triage_config: Mapped[str] = mapped_column(Text, default="")
     # derived once the pipeline runs
     threshold: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
@@ -62,6 +66,9 @@ class Event(Base):
         back_populates="event", cascade="all, delete-orphan"
     )
     edges: Mapped[list["MatchEdge"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
+    applicants: Mapped[list["Applicant"]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )
     user: Mapped[Optional["User"]] = relationship(foreign_keys=[user_id])
@@ -180,6 +187,114 @@ class PendingReply(Base):
     decided_at: Mapped[Optional[datetime]] = mapped_column(default=None)
 
     prospect: Mapped["Prospect"] = relationship()
+
+
+class Applicant(Base):
+    """One row per CSV-parsed applicant for an event in triage mode.
+
+    Canonical fields (name, email, role, company, linkedin_url, website)
+    are extracted by the CSV parser's flexible field-mapping. Anything the
+    parser doesn't recognize (custom Luma questions like 'Do you use Stripe?'
+    or 'Are you a creator?') is preserved verbatim in raw_application_data
+    as a JSON dict, so the scoring step can read everything the applicant
+    actually wrote.
+    """
+    __tablename__ = "applicants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+
+    name: Mapped[str] = mapped_column(String(160), default="")
+    email: Mapped[Optional[str]] = mapped_column(String(200), default=None, index=True)
+    role: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    company: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    website: Mapped[Optional[str]] = mapped_column(String(400), default=None)
+    linkedin_url: Mapped[Optional[str]] = mapped_column(String(400), default=None)
+
+    # Everything the CSV had that didn't map to a canonical field. JSON dict.
+    raw_application_data: Mapped[str] = mapped_column(Text, default="{}")
+    # Optional enrichment data (LinkedIn snippet, company info). JSON dict.
+    enrichment_data: Mapped[str] = mapped_column(Text, default="{}")
+
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    event: Mapped["Event"] = relationship(back_populates="applicants")
+    evaluation: Mapped[Optional["ApplicantEvaluation"]] = relationship(
+        back_populates="applicant", cascade="all, delete-orphan", uselist=False,
+    )
+    decision: Mapped[Optional["ReviewDecision"]] = relationship(
+        back_populates="applicant", cascade="all, delete-orphan", uselist=False,
+    )
+
+
+class ApplicantEvaluation(Base):
+    """LLM-scored evaluation of an Applicant for their Event. Empty until
+    the triage scoring pipeline (PR C) runs. One row per Applicant."""
+    __tablename__ = "applicant_evaluations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_id: Mapped[int] = mapped_column(
+        ForeignKey("applicants.id"), index=True, unique=True,
+    )
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+
+    fit_score: Mapped[int] = mapped_column(default=0)        # 0-100
+    confidence_score: Mapped[int] = mapped_column(default=0) # 0-100
+    # accept | maybe | reject | needs_review
+    recommendation: Mapped[str] = mapped_column(String(20), default="needs_review")
+    # founder | operator | engineer | creator | investor | researcher |
+    # student | service_provider | community_member | other
+    archetype: Mapped[str] = mapped_column(String(40), default="other")
+
+    # 8 sub-dimensions, each 0-100. Stored as discrete columns (not a JSON
+    # blob) so the review UI can sort / filter by any of them.
+    sponsor_fit: Mapped[int] = mapped_column(default=0)
+    event_fit: Mapped[int] = mapped_column(default=0)
+    role_relevance: Mapped[int] = mapped_column(default=0)
+    company_relevance: Mapped[int] = mapped_column(default=0)
+    stage_relevance: Mapped[int] = mapped_column(default=0)
+    seriousness_legitimacy: Mapped[int] = mapped_column(default=0)
+    room_value: Mapped[int] = mapped_column(default=0)
+    application_quality: Mapped[int] = mapped_column(default=0)
+
+    one_sentence_summary: Mapped[str] = mapped_column(Text, default="")
+    why_fit: Mapped[str] = mapped_column(Text, default="")
+    why_not_fit: Mapped[str] = mapped_column(Text, default="")
+    # JSON list of evidence strings the scorer leaned on
+    evidence_used: Mapped[str] = mapped_column(Text, default="[]")
+    # JSON list of fields the scorer wishes it had
+    missing_info: Mapped[str] = mapped_column(Text, default="[]")
+    suggested_review_action: Mapped[str] = mapped_column(Text, default="")
+
+    model_version: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    applicant: Mapped["Applicant"] = relationship(back_populates="evaluation")
+
+
+class ReviewDecision(Base):
+    """Operator's accept/reject decision on an Applicant. Empty until the
+    review UI (PR E) lets the operator act. One row per Applicant."""
+    __tablename__ = "review_decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_id: Mapped[int] = mapped_column(
+        ForeignKey("applicants.id"), index=True, unique=True,
+    )
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+
+    # The recommendation snapshot AT THE TIME of human decision : lets us
+    # measure operator-override rate later (how often humans disagree with
+    # the model). Populated from ApplicantEvaluation.recommendation.
+    system_recommendation: Mapped[str] = mapped_column(String(20), default="")
+    # accept | maybe | reject | needs_review
+    human_decision: Mapped[str] = mapped_column(String(20))
+    reviewer_notes: Mapped[str] = mapped_column(Text, default="")
+    reviewed_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    applicant: Mapped["Applicant"] = relationship(back_populates="decision")
 
 
 class MatchEdge(Base):
