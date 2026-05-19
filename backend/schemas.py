@@ -22,6 +22,59 @@ def _split_csv(v) -> list[str]:
     return [s.strip() for s in (v or "").split(",") if s.strip()]
 
 
+class SponsorBuyerProfile(BaseModel):
+    """The buyer vector a sponsor brings. Mirrors the candidate vector
+    schema so the pairwise scorer can score sponsor.buyer_profile against
+    each attendee's OFFERS/SEEKS with no second code path."""
+    target_role: str = ""
+    seniority: str = ""
+    company_stage: str = ""
+    industry: str = ""
+    intent: str = "buying"
+
+
+class SponsorIn(BaseModel):
+    """One sponsor row, accepted at intake or via the /sponsors PATCH."""
+    name: str
+    tier: str = ""
+    buyer_profile: SponsorBuyerProfile = SponsorBuyerProfile()
+
+
+class SponsorOut(BaseModel):
+    id: int
+    name: str
+    tier: str
+    buyer_profile: SponsorBuyerProfile
+
+    @classmethod
+    def of(cls, s) -> "SponsorOut":
+        import json
+        try:
+            raw = json.loads(s.buyer_profile or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return cls(
+            id=s.id, name=s.name, tier=s.tier or "",
+            buyer_profile=SponsorBuyerProfile(**{
+                k: raw.get(k, "") for k in
+                ("target_role", "seniority", "company_stage", "industry", "intent")
+            } | ({"intent": raw.get("intent") or "buying"})),
+        )
+
+
+class SponsorMatchRow(BaseModel):
+    """One sponsor↔attendee match row, shaped to mirror top_symbiotic so
+    the SAME front-end pair-row component renders it."""
+    sponsor_id: int
+    sponsor_name: str
+    prospect_id: int
+    prospect_name: str
+    score: float
+    reasons: list[str]
+
+
 class EventCreate(BaseModel):
     """Intake profile. Defaults match the demo so `POST /events {}` just works.
 
@@ -46,6 +99,9 @@ class EventCreate(BaseModel):
     sources: list[str] = ["linkedin"]
     # Years-of-experience buckets. Empty list == no preference.
     yoe: list[str] = []
+    # Sponsors block. Empty list = no sponsors (the matching screen
+    # simply doesn't render the SPONSOR MATCHES section).
+    sponsors: list[SponsorIn] = []
 
 
 class EventOut(BaseModel):
@@ -66,6 +122,7 @@ class EventOut(BaseModel):
     funnel_target: int
     cost_per_seat: int
     created_at: datetime
+    sponsors: list[SponsorOut] = []
 
     @classmethod
     def of(cls, ev) -> "EventOut":
@@ -84,6 +141,7 @@ class EventOut(BaseModel):
             funnel_target=round(ev.headcount / config.FUNNEL_CONVERSION),
             cost_per_seat=round(ev.budget / ev.headcount) if ev.headcount else 0,
             created_at=ev.created_at,
+            sponsors=[SponsorOut.of(s) for s in getattr(ev, "sponsors", []) or []],
         )
 
 
@@ -327,9 +385,12 @@ class MatchResult(BaseModel):
     edges: list[EdgeOut]
     groups: list[GroupOut]
     top_symbiotic: list[dict]   # {a, b, weight, flow}
+    # Sponsor matches grouped per-sponsor. Empty list when the event has
+    # no sponsors : the frontend just doesn't render the section.
+    sponsor_matches: list[dict] = []  # [{sponsor_id, sponsor_name, tier, matches: [SponsorMatchRow]}]
 
     @classmethod
-    def build(cls, ev, attending, edges, groups) -> "MatchResult":
+    def build(cls, ev, attending, edges, groups, sponsor_matches=None) -> "MatchResult":
         fcfg = config.format_cfg(ev.format)
         by_id = {p.id: p for p in attending}
 
@@ -366,6 +427,7 @@ class MatchResult(BaseModel):
             edges=[EdgeOut(**e) for e in edges],
             groups=group_rows,
             top_symbiotic=top_rows,
+            sponsor_matches=sponsor_matches or [],
         )
 
 
@@ -380,6 +442,11 @@ class LedgerRow(BaseModel):
     label: str
     detail: str
     value: int
+    # When sponsors exist on the event, this is the sponsor (highest-
+    # scoring sponsor match for this prospect) the row was matched to.
+    # Empty when the prospect has no sponsor match OR the event has no
+    # sponsors : the front-end omits the column entirely in that case.
+    sponsor: str = ""
 
 
 class RoiResult(BaseModel):
@@ -392,7 +459,9 @@ class RoiResult(BaseModel):
         return cls(
             event_id=ev.id,
             metrics=metrics,
-            ledger=[LedgerRow(**{k: r[k] for k in (
+            ledger=[LedgerRow(**{k: r.get(k, "") if k == "sponsor" else r[k]
+                                   for k in (
                 "prospect_id", "name", "company", "side",
-                "tier", "state", "label", "detail", "value")}) for r in ledger],
+                "tier", "state", "label", "detail", "value", "sponsor")})
+                     for r in ledger],
         )

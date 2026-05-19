@@ -78,6 +78,9 @@ class Event(Base):
     applicants: Mapped[list["Applicant"]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )
+    sponsors: Mapped[list["Sponsor"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
     user: Mapped[Optional["User"]] = relationship(foreign_keys=[user_id])
 
 
@@ -330,6 +333,64 @@ class Conversion(Base):
     value: Mapped[int]
 
     prospect: Mapped["Prospect"] = relationship(back_populates="conversion")
+
+
+# ─── Sponsors (Stage 04 extension) ───────────────────────────────────
+# An event can declare ≥1 sponsor at intake; each sponsor brings a
+# buyer_profile (target_role / seniority / company_stage / industry,
+# implicit intent="buying") that the existing pairwise scorer pits
+# against every attending Prospect's OFFERS/SEEKS vector.
+#
+# Same machinery as guest-pair scoring : matcher_lib pair-score logic
+# when the LLM is available, heuristic fallback otherwise. SponsorMatch
+# rows carry score + reasons[] so the same WHY? popover renders the same
+# way for sponsor↔attendee pairs.
+
+
+class Sponsor(Base):
+    """One sponsor row tied to an event.
+
+    `buyer_profile` is JSON-encoded and reuses the candidate vector
+    schema (target_role / seniority / company_stage / industry / intent),
+    so the existing pairwise scorer can consume it without a second
+    code path : sponsor.buyer_profile is just "another candidate" from
+    the scorer's perspective.
+    """
+    __tablename__ = "sponsors"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    tier: Mapped[str] = mapped_column(String(40), default="")
+    # JSON: {target_role, seniority, company_stage, industry, intent}
+    buyer_profile: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    event: Mapped["Event"] = relationship(back_populates="sponsors")
+    matches: Mapped[list["SponsorMatch"]] = relationship(
+        back_populates="sponsor", cascade="all, delete-orphan",
+    )
+
+
+class SponsorMatch(Base):
+    """One sponsor↔prospect pair score for an event.
+
+    Idempotent: re-running /match wipes prior SponsorMatch rows for the
+    event before recomputing, mirroring how MatchEdge is handled.
+    """
+    __tablename__ = "sponsor_matches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sponsor_id: Mapped[int] = mapped_column(ForeignKey("sponsors.id"), index=True)
+    prospect_id: Mapped[int] = mapped_column(ForeignKey("prospects.id"), index=True)
+    # 0-100, same scale as MatchEdge.weight
+    score: Mapped[float]
+    # JSON list of short reason strings. Same provenance shape as the
+    # guest-pair reasons that pair_explainer surfaces.
+    reasons: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    sponsor: Mapped["Sponsor"] = relationship(back_populates="matches")
 
 
 # ─── Identity ──────────────────────────────────────────────────────
