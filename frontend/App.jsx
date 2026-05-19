@@ -347,14 +347,22 @@ function Pipeline({ profile, eventId, onResult, onError, onDone }) {
   const [apiDone, setApiDone] = useState(false);
   const [elapsed, setElapsed] = useState(0);
 
-  // Cosmetic progress: crawl slowly while /prospect runs (often 60–120s in
-  // LLM mode). Hold below 100% until the API returns, then finish the bars.
+  // Cosmetic progress: crawl while /prospect runs. Tuned for the fast path
+  // (LinkedIn-only ~1s) AND the slow path (multi-source 30-120s) without
+  // making fast runs feel artificially padded.
+  //
+  // Pre-apiDone: hold below 90% with a curve that's quick early then slows
+  // so a multi-source run still looks busy.
+  //
+  // Post-apiDone: snap aggressively so the bar doesn't become the bottleneck
+  // when the API returns in 1s and the cosmetic was barely started. With
+  // step=15 it goes from 5% to 100% in ~1.4s instead of the old ~7s.
   useEffect(() => {
     const t = setInterval(() => {
       setProgress((p) => {
         if (apiDone) {
           if (p >= 100) return 100;
-          return Math.min(100, p + 3);
+          return Math.min(100, p + 15);
         }
         const cap = 90;
         if (p >= cap) return cap;
