@@ -79,11 +79,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  // on-demand LLM justification for a single pair
-  explainPair: (eid, a_id, b_id) =>
+  // on-demand LLM justification for a single pair.
+  // `kind` defaults to "prospect" on both sides; pass "sponsor" for a
+  // sponsor↔attendee explanation (uses the SAME endpoint + popover).
+  explainPair: (eid, a_id, b_id, { a_kind = "prospect", b_kind = "prospect" } = {}) =>
     request(`/events/${eid}/pairs/explain`, {
       method: "POST",
-      body: JSON.stringify({ a_id, b_id }),
+      body: JSON.stringify({ a_id, b_id, a_kind, b_kind }),
     }),
 
   // 05 ROI

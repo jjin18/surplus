@@ -63,10 +63,30 @@ def linkedin_outreach_stats(event) -> dict:
     }
 
 
+def _sponsor_attribution(event) -> dict[int, str]:
+    """Map prospect_id → best-matching sponsor name (highest SponsorMatch
+    score per prospect). Empty when the event has no sponsors.
+
+    Used as a single extra column on the existing ledger : no Host vs
+    Sponsor lens toggle, the column is just there when sponsors exist."""
+    sponsors = getattr(event, "sponsors", None) or []
+    if not sponsors:
+        return {}
+    best: dict[int, tuple[float, str]] = {}
+    for s in sponsors:
+        for m in getattr(s, "matches", None) or []:
+            current = best.get(m.prospect_id)
+            if current is None or m.score > current[0]:
+                best[m.prospect_id] = (m.score, s.name)
+    return {pid: name for pid, (_score, name) in best.items()}
+
+
 def settle(event, attending: list) -> tuple[list[dict], dict]:
     """Build the per-guest conversion ledger and the aggregate ROI metrics."""
     gcfg = config.goal_cfg(event.goal)
     tiers, values = gcfg["tiers"], gcfg["value"]
+
+    sponsor_by_pid = _sponsor_attribution(event)
 
     ledger: list[dict] = []
     for p in attending:
@@ -84,6 +104,7 @@ def settle(event, attending: list) -> tuple[list[dict], dict]:
             "label": outcome["label"],
             "detail": outcome["detail"],
             "value": value,
+            "sponsor": sponsor_by_pid.get(p.id, ""),
         })
 
     ledger.sort(key=lambda r: -r["value"])

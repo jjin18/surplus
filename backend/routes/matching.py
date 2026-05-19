@@ -8,6 +8,7 @@ from .. import models, schemas
 from ..auth import current_user, get_owned_event
 from ..db import get_db
 from ..agents.matcher import build_edges, form_groups
+from ..agents.sponsor_matcher import score_event_sponsors
 
 router = APIRouter(prefix="/events", tags=["04 · matching"])
 
@@ -91,11 +92,18 @@ def match(
     if not attending:
         raise HTTPException(409, "no confirmed guests : run the pipeline first")
 
-    # idempotent : clear prior edges + group assignments
+    # idempotent : clear prior edges + group assignments + sponsor matches
     for e in list(ev.edges):
         db.delete(e)
     for p in attending:
         p.group_id = None
+    # Wipe SponsorMatch rows for this event before recomputing (mirrors
+    # the MatchEdge wipe above : matching is idempotent end-to-end).
+    sponsor_ids = [s.id for s in (ev.sponsors or [])]
+    if sponsor_ids:
+        db.query(models.SponsorMatch).filter(
+            models.SponsorMatch.sponsor_id.in_(sponsor_ids)
+        ).delete(synchronize_session="fetch")
     db.flush()
 
     edges = build_edges(attending, event=ev)
@@ -107,13 +115,70 @@ def match(
         for p in members:
             p.group_id = gid
 
+    # Sponsor matching : skipped silently when the event has no sponsors,
+    # which is the only condition the brief requires for the section
+    # to not render.
+    sponsor_match_payload = _persist_sponsor_matches(db, ev, attending)
+
     db.commit()
-    return schemas.MatchResult.build(ev, attending, edges, groups)
+    return schemas.MatchResult.build(ev, attending, edges, groups,
+                                      sponsor_matches=sponsor_match_payload)
+
+
+def _persist_sponsor_matches(db: Session, ev: models.Event,
+                              attending: list[models.Prospect]) -> list[dict]:
+    """Run the heuristic sponsor scorer over `attending`, persist
+    SponsorMatch rows, and return the wire-shape MatchResult.build
+    expects in sponsor_matches.
+
+    Returns [] when the event has no sponsors so the frontend's
+    "render only if sponsors exist" guard reads cleanly.
+    """
+    import json
+    sponsors = list(ev.sponsors or [])
+    if not sponsors:
+        return []
+    scored = score_event_sponsors(ev, attending)
+    by_pid = {p.id: p for p in attending}
+    payload: list[dict] = []
+    for sponsor in sponsors:
+        rows = scored.get(sponsor.id, [])
+        match_rows: list[dict] = []
+        for row in rows:
+            prospect = by_pid.get(row["prospect_id"])
+            if prospect is None:
+                continue
+            db.add(models.SponsorMatch(
+                sponsor_id=sponsor.id,
+                prospect_id=row["prospect_id"],
+                score=row["score"],
+                reasons=json.dumps(row["reasons"]),
+            ))
+            match_rows.append({
+                "sponsor_id": sponsor.id,
+                "sponsor_name": sponsor.name,
+                "prospect_id": prospect.id,
+                "prospect_name": prospect.name,
+                "score": row["score"],
+                "reasons": row["reasons"],
+            })
+        payload.append({
+            "sponsor_id": sponsor.id,
+            "sponsor_name": sponsor.name,
+            "tier": sponsor.tier or "",
+            "matches": match_rows,
+        })
+    return payload
 
 
 class ExplainRequest(BaseModel):
     a_id: int
     b_id: int
+    # "prospect" (default) or "sponsor". When either side is a sponsor we
+    # synthesize an EnrichedPerson from the Sponsor row + persisted
+    # SponsorMatch reasons so the SAME pair_explainer is reused.
+    a_kind: str = "prospect"
+    b_kind: str = "prospect"
 
 
 class ExplainResponse(BaseModel):
@@ -121,6 +186,66 @@ class ExplainResponse(BaseModel):
     b_id: int
     explanation: str
     source: str   # "llm" | "cached" | "error"
+
+
+def _sponsor_to_enriched_person(sponsor: models.Sponsor):
+    """Synthesize an EnrichedPerson from a Sponsor row so the SAME
+    pair_explainer can score sponsor↔attendee pairs with no second code
+    path. buyer_profile fields become domains / conviction_themes / role
+    so _profile_lines renders something meaningful."""
+    from ..matching.schema import EnrichedPerson
+    from ..agents.sponsor_matcher import parse_buyer_profile
+    buyer = parse_buyer_profile(sponsor.buyer_profile)
+    bio_parts: list[str] = [f"Sponsor : {sponsor.name}."]
+    if sponsor.tier:
+        bio_parts.append(f"Tier: {sponsor.tier}.")
+    if buyer["target_role"]:
+        bio_parts.append(f"Buying for: {buyer['target_role']}.")
+    if buyer["seniority"]:
+        bio_parts.append(f"Target seniority: {buyer['seniority']}.")
+    if buyer["company_stage"]:
+        bio_parts.append(f"Target stage: {buyer['company_stage']}.")
+    if buyer["industry"]:
+        bio_parts.append(f"Target industry: {buyer['industry']}.")
+    bio_parts.append(f"Intent: {buyer['intent']}.")
+    return EnrichedPerson(
+        id=f"sponsor-{sponsor.id}",
+        name=sponsor.name,
+        role="Sponsor",
+        title=f"{sponsor.tier} Sponsor".strip() or "Sponsor",
+        company=sponsor.name,
+        domains=[buyer["industry"]] if buyer["industry"] else [],
+        conviction_themes=[
+            t for t in (buyer["target_role"], buyer["company_stage"]) if t
+        ],
+        explicit_asks=[buyer["target_role"]] if buyer["target_role"] else [],
+        bio_text=" ".join(bio_parts),
+        enrichment_status="ok",
+    )
+
+
+def _prospect_to_enriched_fallback(prospect: models.Prospect):
+    """Best-effort EnrichedPerson from a Prospect ORM row when the
+    matcher_lib cache hasn't run (heuristic-only events). Lets
+    pair_explainer's structured fallback still render something."""
+    from ..matching.schema import EnrichedPerson
+    return EnrichedPerson(
+        id=f"prospect-{prospect.id}",
+        name=prospect.name or f"Prospect {prospect.id}",
+        role=prospect.role or "",
+        title=prospect.role or "",
+        company=prospect.company or "",
+        linkedin_url=prospect.linkedin_url or "",
+        domains=[prospect.works_on] if prospect.works_on else [],
+        explicit_asks=[prospect.seeks] if prospect.seeks else [],
+        mentor_signals=[prospect.offers] if prospect.offers else [],
+        bio_text=(
+            f"{prospect.name}, {prospect.role} at {prospect.company}. "
+            f"Side: {prospect.side}. Works on: {prospect.works_on}. "
+            f"Offers: {prospect.offers}. Seeks: {prospect.seeks}."
+        ).strip(),
+        enrichment_status="ok",
+    )
 
 
 @router.post("/{event_id}/pairs/explain", response_model=ExplainResponse)
@@ -132,37 +257,85 @@ def explain_pair_endpoint(
 ):
     """On-demand LLM explanation for one pair.
 
-    Uses the enriched profile data + structured component scores cached
-    during the most recent /match call. Cache miss => no LLM call (we
-    don't want to silently re-enrich behind the user's back).
+    Supports two pair kinds, but the SAME LLM call:
+      - prospect ⟷ prospect : the original guest-pair path. Reads
+        matcher_lib's cached EnrichedPerson + pair-score components.
+      - prospect ⟷ sponsor : sponsor side is synthesized from the
+        Sponsor row + persisted SponsorMatch reasons. No cache lookup.
+
+    Cache miss on a guest pair falls back to a minimal EnrichedPerson
+    built from the Prospect row, so heuristic-only events (no LLM ran)
+    still produce structured explanations.
     """
     import asyncio
+    import json as _json
     from ..agents import matcher_lib, pair_explainer
 
     ev = get_owned_event(event_id, user, db)
 
     attending = _confirmed(ev)
-    enriched = matcher_lib.get_cached_enriched(ev, attending)
-    matrix = matcher_lib.get_cached_matrix(ev, attending)
-    if enriched is None or matrix is None:
-        raise HTTPException(
-            409,
-            "no cached enrichment for this event : re-run /match first "
-            "(the in-process cache is lost on server restart)"
+    enriched = matcher_lib.get_cached_enriched(ev, attending) or {}
+    matrix = matcher_lib.get_cached_matrix(ev, attending) or {}
+
+    def _resolve(side_id: int, kind: str):
+        """Return the EnrichedPerson for one side of the pair."""
+        if kind == "sponsor":
+            sponsor = db.get(models.Sponsor, side_id)
+            if sponsor is None or sponsor.event_id != ev.id:
+                raise HTTPException(404, f"sponsor {side_id} not on this event")
+            return _sponsor_to_enriched_person(sponsor)
+        # prospect : prefer cached enriched, fall back to ORM row
+        cached = enriched.get(f"prospect-{side_id}")
+        if cached is not None:
+            return cached
+        prospect = db.get(models.Prospect, side_id)
+        if prospect is None or prospect.event_id != ev.id:
+            raise HTTPException(404, f"prospect {side_id} not on this event")
+        return _prospect_to_enriched_fallback(prospect)
+
+    a_person = _resolve(payload.a_id, payload.a_kind)
+    b_person = _resolve(payload.b_id, payload.b_kind)
+
+    # Pair dict : prefer the matcher_lib pair when both sides are
+    # prospects AND the cache has it; otherwise synthesize one from the
+    # SponsorMatch reasons so explain_pair's structured fallback has
+    # ground truth to lean on.
+    pair = None
+    if payload.a_kind == "prospect" and payload.b_kind == "prospect":
+        a_key = f"prospect-{payload.a_id}"
+        b_key = f"prospect-{payload.b_id}"
+        pair = next(
+            (p for p in matrix.get("pairs", [])
+             if {p.get("a_id"), p.get("b_id")} == {a_key, b_key}),
+            None,
         )
-
-    a_key = f"prospect-{payload.a_id}"
-    b_key = f"prospect-{payload.b_id}"
-    a_person = enriched.get(a_key)
-    b_person = enriched.get(b_key)
-    if a_person is None or b_person is None:
-        raise HTTPException(404, "one of the prospects is not in the enriched cache")
-
-    pair = next(
-        (p for p in matrix.get("pairs", [])
-         if {p.get("a_id"), p.get("b_id")} == {a_key, b_key}),
-        None,
-    )
+    else:
+        # Sponsor pair : pull reasons + score off the persisted SponsorMatch
+        sponsor_id = payload.a_id if payload.a_kind == "sponsor" else payload.b_id
+        prospect_id = payload.b_id if payload.a_kind == "sponsor" else payload.a_id
+        match = (db.query(models.SponsorMatch)
+                   .filter(models.SponsorMatch.sponsor_id == sponsor_id,
+                           models.SponsorMatch.prospect_id == prospect_id)
+                   .first())
+        if match is not None:
+            try:
+                reasons = _json.loads(match.reasons or "[]")
+                if not isinstance(reasons, list):
+                    reasons = []
+            except _json.JSONDecodeError:
+                reasons = []
+            # Shape mirrors matcher_lib's pair dict enough that
+            # _structured_fallback's components-summary still works
+            # (it walks .components.similar / .components.complementary).
+            pair = {
+                "a_id": a_person.id, "b_id": b_person.id,
+                "composite": (match.score or 0) / 100.0,
+                "components": {
+                    "complementary": {f"reason_{i}": 1.0 for i in range(len(reasons))},
+                    "similar": {},
+                },
+                "reasons": [str(r) for r in reasons],
+            }
 
     result = asyncio.run(pair_explainer.explain_pair(a_person, b_person, pair))
     return ExplainResponse(
@@ -190,4 +363,45 @@ def get_matches(
     for p in attending:
         if p.group_id is not None:
             groups.setdefault(p.group_id, []).append(p)
-    return schemas.MatchResult.build(ev, attending, edges, groups)
+    return schemas.MatchResult.build(
+        ev, attending, edges, groups,
+        sponsor_matches=_load_persisted_sponsor_matches(db, ev),
+    )
+
+
+def _load_persisted_sponsor_matches(db: Session, ev: models.Event) -> list[dict]:
+    """Read SponsorMatch rows for `ev` back into the wire shape. Used by
+    GET /matches so the read path matches what POST /match returns."""
+    import json
+    sponsors = list(ev.sponsors or [])
+    if not sponsors:
+        return []
+    payload: list[dict] = []
+    prospect_lookup = {p.id: p for p in ev.prospects}
+    for sponsor in sponsors:
+        match_rows: list[dict] = []
+        for m in sorted(sponsor.matches, key=lambda r: -r.score):
+            prospect = prospect_lookup.get(m.prospect_id)
+            if prospect is None:
+                continue
+            try:
+                reasons = json.loads(m.reasons or "[]")
+                if not isinstance(reasons, list):
+                    reasons = []
+            except json.JSONDecodeError:
+                reasons = []
+            match_rows.append({
+                "sponsor_id": sponsor.id,
+                "sponsor_name": sponsor.name,
+                "prospect_id": prospect.id,
+                "prospect_name": prospect.name,
+                "score": m.score,
+                "reasons": [str(r) for r in reasons],
+            })
+        payload.append({
+            "sponsor_id": sponsor.id,
+            "sponsor_name": sponsor.name,
+            "tier": sponsor.tier or "",
+            "matches": match_rows,
+        })
+    return payload

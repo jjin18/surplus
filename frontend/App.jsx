@@ -236,6 +236,36 @@ function toggleIn(arr, v) {
 function Intake({ profile, setProfile, onRun }) {
   const set = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const toggle = (k, v) => setProfile((p) => ({ ...p, [k]: toggleIn(p[k], v) }));
+
+  // Sponsor row helpers. Sponsors live as a list on profile so they
+  // round-trip through the same /events POST as the rest of intake.
+  const addSponsor = () => setProfile((p) => ({
+    ...p,
+    sponsors: [...(p.sponsors || []), {
+      name: "", tier: "",
+      buyer_profile: {
+        target_role: "", seniority: "",
+        company_stage: "", industry: "", intent: "buying",
+      },
+    }],
+  }));
+  const removeSponsor = (idx) => setProfile((p) => ({
+    ...p,
+    sponsors: (p.sponsors || []).filter((_, i) => i !== idx),
+  }));
+  const updateSponsor = (idx, key, value) => setProfile((p) => ({
+    ...p,
+    sponsors: (p.sponsors || []).map((s, i) =>
+      i === idx ? { ...s, [key]: value } : s),
+  }));
+  const updateSponsorBuyer = (idx, key, value) => setProfile((p) => ({
+    ...p,
+    sponsors: (p.sponsors || []).map((s, i) =>
+      i === idx
+        ? { ...s, buyer_profile: { ...s.buyer_profile, [key]: value } }
+        : s),
+  }));
+
   return (
     <div className="stage">
       <header className="stage-head">
@@ -322,6 +352,52 @@ function Intake({ profile, setProfile, onRun }) {
               <span className="derived-v">${Math.round(profile.budget / profile.headcount)}</span>
             </div>
           </div>
+        </section>
+
+        <section className="card">
+          <h3><span className="card-num">D</span> Sponsors <span className="hint">: optional</span></h3>
+          <p className="muted-text" style={{marginTop: -4, marginBottom: 10, fontSize: 12}}>
+            Add one row per sponsor. Their buyer profile (role / seniority / stage
+            / industry) is scored against every attendee using the existing
+            matcher : if any sponsor is set, the matching screen shows a
+            "Sponsor matches" section above Top pairs.
+          </p>
+          {(profile.sponsors || []).map((s, idx) => (
+            <div key={idx} className="sponsor-row">
+              <div className="sponsor-row-head">
+                <input className="text-in"
+                       placeholder="Sponsor name (e.g. Cohere)"
+                       value={s.name}
+                       onChange={(e) => updateSponsor(idx, "name", e.target.value)} />
+                <input className="text-in sponsor-tier"
+                       placeholder="Tier (gold / silver / …)"
+                       value={s.tier}
+                       onChange={(e) => updateSponsor(idx, "tier", e.target.value)} />
+                <button className="btn-reset sponsor-remove"
+                        onClick={() => removeSponsor(idx)}
+                        title="Remove sponsor">×</button>
+              </div>
+              <div className="sponsor-row-buyer">
+                <input className="text-in"
+                       placeholder="Target role"
+                       value={s.buyer_profile.target_role}
+                       onChange={(e) => updateSponsorBuyer(idx, "target_role", e.target.value)} />
+                <input className="text-in"
+                       placeholder="Seniority"
+                       value={s.buyer_profile.seniority}
+                       onChange={(e) => updateSponsorBuyer(idx, "seniority", e.target.value)} />
+                <input className="text-in"
+                       placeholder="Company stage"
+                       value={s.buyer_profile.company_stage}
+                       onChange={(e) => updateSponsorBuyer(idx, "company_stage", e.target.value)} />
+                <input className="text-in"
+                       placeholder="Industry"
+                       value={s.buyer_profile.industry}
+                       onChange={(e) => updateSponsorBuyer(idx, "industry", e.target.value)} />
+              </div>
+            </div>
+          ))}
+          <button className="btn-reset" onClick={addSponsor}>+ Add sponsor</button>
         </section>
       </div>
 
@@ -995,12 +1071,33 @@ function Matching({ profile, eventId, onError, onNext }) {
   // picked is at most two prospect ids : selecting two enables a Why? button
   // in the floating compare panel. Picking a third bumps the oldest out.
   const [picked, setPicked] = useState([]);
+  // When a sponsor is selected, the Compare panel pairs that sponsor with
+  // the single guest in `picked` (the same component, sponsor on one side).
+  const [comparedSponsor, setComparedSponsor] = useState(null);
 
   async function fetchExplain(a_id, b_id) {
     const key = `${a_id}-${b_id}`;
     setPairExplanations((s) => ({ ...s, [key]: { status: "loading" } }));
     try {
       const r = await api.explainPair(eventId, a_id, b_id);
+      setPairExplanations((s) => ({
+        ...s, [key]: { status: "ok", text: r.explanation, source: r.source },
+      }));
+    } catch (e) {
+      setPairExplanations((s) => ({
+        ...s, [key]: { status: "err", text: e.message },
+      }));
+    }
+  }
+
+  async function fetchExplainSponsor(sponsor_id, prospect_id) {
+    // Same endpoint, same popover : sponsor side is just kind="sponsor".
+    const key = `s${sponsor_id}-p${prospect_id}`;
+    setPairExplanations((s) => ({ ...s, [key]: { status: "loading" } }));
+    try {
+      const r = await api.explainPair(eventId, sponsor_id, prospect_id, {
+        a_kind: "sponsor", b_kind: "prospect",
+      });
       setPairExplanations((s) => ({
         ...s, [key]: { status: "ok", text: r.explanation, source: r.source },
       }));
@@ -1220,6 +1317,59 @@ function Matching({ profile, eventId, onError, onNext }) {
         </div>
 
         <div className="match-side">
+          {/* Sponsor matches : same row component as Top pairs, only renders
+              when the event carries ≥1 sponsor. No toggle, no lens. */}
+          {useReal && (matchResult.sponsor_matches || []).length > 0 && (
+            <div className="sym-panel" style={{marginBottom: 12}}>
+              <p className="pd-label">Sponsor matches <span className="muted-text" style={{fontWeight: 400}}>: same WHY? as guest pairs</span></p>
+              {matchResult.sponsor_matches.map((block) => (
+                <div key={block.sponsor_id} className="sponsor-match-block">
+                  <p className="sponsor-match-name">
+                    {block.sponsor_name}
+                    {block.tier && <span className="sponsor-tier-pill">{block.tier}</span>}
+                  </p>
+                  {(block.matches || []).length === 0 && (
+                    <div className="muted-text" style={{padding: "6px 0"}}>
+                      No matched attendees above the threshold.
+                    </div>
+                  )}
+                  {(block.matches || []).map((m, i) => {
+                    const pairKey = `s${block.sponsor_id}-p${m.prospect_id}`;
+                    const state = pairExplanations[pairKey];
+                    return (
+                      <div className="sym-pair" key={i}>
+                        <div className="sym-names">
+                          {block.sponsor_name} <span className="sym-link">⟷</span> {(m.prospect_name || "").split(" ")[0]}
+                          <span className="sym-w">{Math.round(m.score)}</span>
+                        </div>
+                        {eventId && (
+                          <div style={{marginTop: 6}}>
+                            <button className="btn-reset"
+                                    disabled={state?.status === "loading"}
+                                    onClick={() => fetchExplainSponsor(block.sponsor_id, m.prospect_id)}>
+                              {state?.status === "loading" ? "Asking the LLM…"
+                                : state ? "Refresh explanation" : "Why?"}
+                            </button>
+                          </div>
+                        )}
+                        {state?.status === "ok" && (
+                          <div className="sym-flow" style={{marginTop: 6, fontStyle: "normal"}}>
+                            {state.text}
+                          </div>
+                        )}
+                        {state?.status === "err" && (
+                          <div className="sym-flow" style={{marginTop: 6, color: "#c33"}}>
+                            {state.text}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="sym-panel">
             <p className="pd-label">Top pairs <span className="muted-text" style={{fontWeight: 400}}>: click "Why?" for an LLM-grounded explanation</span></p>
             {symPairs.length === 0 && (
@@ -1262,8 +1412,9 @@ function Matching({ profile, eventId, onError, onNext }) {
           </div>
 
           {useReal && eventId && (() => {
-            // Compare-two-guests panel. Always available when matching ran,
-            // even if top_pairs is empty (heuristic fallback / one-sided pool).
+            // Compare panel. Same component for guest⟷guest AND
+            // sponsor⟷guest : a sponsor selector at the top of the panel
+            // puts a sponsor in one of the two slots.
             const nameOf = (pid) => {
               for (const g of matchResult.groups) {
                 const m = g.members.find((x) => x.id === pid);
@@ -1271,26 +1422,65 @@ function Matching({ profile, eventId, onError, onNext }) {
               }
               return `#${pid}`;
             };
-            const ready = picked.length === 2;
-            const key = ready ? `${picked[0]}-${picked[1]}` : null;
+            const sponsors = matchResult.sponsor_matches || [];
+            const sponsorRef = comparedSponsor
+              ? sponsors.find((b) => b.sponsor_id === comparedSponsor)
+              : null;
+            // Two modes : sponsor-vs-guest (one sponsor + one guest) OR
+            // guest-vs-guest (two guests, no sponsor).
+            const ready = sponsorRef
+              ? picked.length === 1
+              : picked.length === 2;
+            const key = sponsorRef
+              ? (picked.length === 1 ? `s${sponsorRef.sponsor_id}-p${picked[0]}` : null)
+              : (picked.length === 2 ? `${picked[0]}-${picked[1]}` : null);
             const state = key ? pairExplanations[key] : null;
+            const onFetch = () => sponsorRef
+              ? fetchExplainSponsor(sponsorRef.sponsor_id, picked[0])
+              : fetchExplain(picked[0], picked[1]);
+            const headerNote = sponsorRef
+              ? `Selected: ${sponsorRef.sponsor_name} (sponsor)${picked.length === 1 ? ` ⟷ ${nameOf(picked[0])}` : " : pick one guest."}`
+              : (picked.length === 0 ? "Click any two guests in the tables below."
+                  : picked.length === 1 ? `Selected: ${nameOf(picked[0])} : pick one more.`
+                  : `Selected: ${nameOf(picked[0])} ⟷ ${nameOf(picked[1])}`);
             return (
               <div className="sym-panel" style={{marginTop: 12}}>
-                <p className="pd-label">Compare two guests</p>
+                <p className="pd-label">Compare {sponsorRef ? "sponsor ⟷ guest" : "two guests"}</p>
+                {sponsors.length > 0 && (
+                  <div className="chip-row" style={{marginBottom: 8}}>
+                    <span className="muted-text" style={{fontSize: 11, marginRight: 6}}>
+                      Sponsor side:
+                    </span>
+                    <button className={`chip ${comparedSponsor === null ? "chip-on" : ""}`}
+                            onClick={() => setComparedSponsor(null)}>
+                      None
+                    </button>
+                    {sponsors.map((b) => (
+                      <button key={b.sponsor_id}
+                              className={`chip ${comparedSponsor === b.sponsor_id ? "chip-on" : ""}`}
+                              onClick={() => {
+                                setComparedSponsor(b.sponsor_id);
+                                // Sponsor takes one slot : drop oldest guest if both picked.
+                                setPicked((cur) => cur.slice(-1));
+                              }}>
+                        {b.sponsor_name}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="muted-text" style={{marginBottom: 6}}>
-                  {picked.length === 0 && "Click any two guests in the tables below."}
-                  {picked.length === 1 && `Selected: ${nameOf(picked[0])} : pick one more.`}
-                  {picked.length === 2 && `Selected: ${nameOf(picked[0])} ⟷ ${nameOf(picked[1])}`}
+                  {headerNote}
                 </div>
                 {ready && (
                   <div style={{display: "flex", gap: 8, alignItems: "center"}}>
                     <button className="btn-reset"
                             disabled={state?.status === "loading"}
-                            onClick={() => fetchExplain(picked[0], picked[1])}>
+                            onClick={onFetch}>
                       {state?.status === "loading" ? "Asking the LLM…"
-                        : state ? "Refresh explanation" : "Why these two?"}
+                        : state ? "Refresh explanation"
+                        : sponsorRef ? "Why this sponsor + guest?" : "Why these two?"}
                     </button>
-                    <button className="btn-reset" onClick={() => setPicked([])}>Clear</button>
+                    <button className="btn-reset" onClick={() => { setPicked([]); setComparedSponsor(null); }}>Clear</button>
                   </div>
                 )}
                 {state?.status === "ok" && (
@@ -1378,6 +1568,29 @@ function ROI({ profile, onRestart }) {
     const tier = cfg.tiers[tierOf(p.score)];
     return { ...p, ...tier, value: cfg.value[tier.state] };
   });
+
+  // Sponsor column : only renders when the operator declared sponsors at
+  // intake. Attribution mirrors the backend heuristic (best-token-match
+  // on target_role vs role / works_on / offers). One extra column, no
+  // toggle, no separate view.
+  const sponsors = (profile.sponsors || []).filter((s) => (s.name || "").trim());
+  const hasSponsors = sponsors.length > 0;
+  const sponsorFor = (guest) => {
+    if (!hasSponsors) return "";
+    const hay = [guest.role, guest.works_on, guest.offers].join(" ").toLowerCase();
+    let best = null;
+    let bestScore = 0;
+    for (const s of sponsors) {
+      const target = (s.buyer_profile?.target_role || "").toLowerCase();
+      const toks = target.split(/\s+/).filter((t) => t.length >= 3);
+      const hits = toks.filter((t) => hay.includes(t)).length;
+      if (hits > bestScore) {
+        bestScore = hits;
+        best = s.name;
+      }
+    }
+    return best || "";
+  };
 
   const invited = Math.round(profile.headcount / 0.6);
   const rsvp = Math.round(invited * 0.62);
@@ -1481,9 +1694,11 @@ function ROI({ profile, onRestart }) {
         </div>
       </div>
 
-      <div className="ledger">
+      <div className={`ledger ${hasSponsors ? "ledger--sponsored" : ""}`}>
         <div className="ledger-head">
-          <span>Guest</span><span>Side</span><span>{cfg.ledgerHead}</span><span>Verified value</span>
+          <span>Guest</span><span>Side</span><span>{cfg.ledgerHead}</span>
+          {hasSponsors && <span>Sponsor</span>}
+          <span>Verified value</span>
         </div>
         {ledger.sort((a, b) => b.value - a.value).map((g) => (
           <div className={`ledger-row led-${g.state}`} key={g.id}>
@@ -1496,6 +1711,11 @@ function ROI({ profile, onRestart }) {
               <span className={`led-pill led-pill-${g.state}`}>{g.label}</span>
               <span className="led-detail">{g.detail}</span>
             </span>
+            {hasSponsors && (
+              <span className="led-sponsor">
+                {sponsorFor(g) || <span className="muted-text">:</span>}
+              </span>
+            )}
             <span className="led-value">{g.value > 0 ? fmtK(g.value) : ":"}</span>
           </div>
         ))}
@@ -1765,6 +1985,7 @@ function SurplusApp({ user, onLogout, onSignIn }) {
     goal: ["Hiring pipeline"],
     budget: 8000,
     sources: ["linkedin"],
+    sponsors: [],
   });
   // backend-wired state : eventId comes from real /events POST; runResult is
   // the response from /run (prospects, counts, etc.). Both null until the
@@ -1800,6 +2021,14 @@ function SurplusApp({ user, onLogout, onSignIn }) {
         goal: profile.goal,
         budget: profile.budget,
         sources: profile.sources,
+        // Send any non-empty sponsor rows : the backend skips blank names.
+        sponsors: (profile.sponsors || [])
+          .filter((s) => (s.name || "").trim())
+          .map((s) => ({
+            name: s.name.trim(),
+            tier: (s.tier || "").trim(),
+            buyer_profile: s.buyer_profile,
+          })),
       });
       setEventId(ev.id);
       go(1);
@@ -2326,6 +2555,32 @@ const CSS = `
 .ledger-foot { display:flex; justify-content:space-between; padding:15px 18px;
   font-size:11px; color:var(--ink-dim); text-transform:uppercase; letter-spacing:0.04em; font-weight:600; }
 .ledger-total { font-size:17px; font-weight:800; color:var(--acc); letter-spacing:-0.01em; }
+/* Sponsor column : added when the event carries ≥1 sponsor. The grid
+   template grows by one slot before "Verified value". */
+.ledger--sponsored .ledger-head,
+.ledger--sponsored .ledger-row {
+  grid-template-columns:1.6fr 0.7fr 1.6fr 1.0fr 0.8fr;
+}
+.led-sponsor { font-size:11.5px; color:var(--ink); font-weight:600; }
+/* Sponsor-row controls on the intake screen */
+.sponsor-row { border:1px solid var(--line); border-radius:var(--r-panel);
+  padding:10px 12px; margin-bottom:10px; background:var(--panel-2); }
+.sponsor-row-head { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+.sponsor-row-head .text-in { margin:0; flex:1; }
+.sponsor-tier { max-width:140px; }
+.sponsor-remove { color:var(--no); font-size:18px; line-height:1;
+  padding:4px 10px; border-radius:var(--r-pill); }
+.sponsor-row-buyer { display:grid; grid-template-columns:repeat(2, 1fr);
+  gap:8px; }
+.sponsor-row-buyer .text-in { margin:0; }
+/* Sponsor match block on the matching screen */
+.sponsor-match-block { margin-bottom:10px; }
+.sponsor-match-block:last-child { margin-bottom:0; }
+.sponsor-match-name { font-size:11.5px; font-weight:700; color:var(--ink);
+  margin:6px 0 4px; display:flex; align-items:center; gap:8px; }
+.sponsor-tier-pill { font-size:9px; text-transform:uppercase;
+  letter-spacing:0.04em; padding:2px 7px; border-radius:var(--r-pill);
+  background:var(--acc-soft); color:var(--acc); font-weight:700; }
 @media (max-width:880px) {
   .form-grid, .pipe-sources { grid-template-columns:1fr; }
   .prospect-layout, .roi-top, .roi-li-tiles { grid-template-columns:1fr; }

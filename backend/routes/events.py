@@ -24,6 +24,7 @@ def create_event(
     """Define the event mechanism. Returns the profile + derived funnel target.
     The event is auto-stamped with the signed-in user's id."""
     data = payload.model_dump()
+    sponsors_payload = data.pop("sponsors", []) or []
     # Multi-select fields arrive as lists; the Event columns are CSV strings.
     for key in ("seniority", "co_stage", "goal", "sources", "yoe"):
         v = data.get(key)
@@ -38,6 +39,20 @@ def create_event(
         data["sources"] = ("linkedin," + src).rstrip(",")
     ev = models.Event(**data, user_id=user.id)
     db.add(ev)
+    db.flush()
+    # Persist sponsors if any : intake's only condition for sponsor
+    # matching to render is "≥1 sponsor exists on the event".
+    import json
+    for s in sponsors_payload:
+        if not (s.get("name") or "").strip():
+            continue
+        buyer = s.get("buyer_profile") or {}
+        db.add(models.Sponsor(
+            event_id=ev.id,
+            name=s["name"].strip(),
+            tier=(s.get("tier") or "").strip(),
+            buyer_profile=json.dumps(buyer),
+        ))
     db.commit()
     db.refresh(ev)
     return schemas.EventOut.of(ev)
