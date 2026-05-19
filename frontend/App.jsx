@@ -280,7 +280,7 @@ function Intake({ profile, setProfile, onRun }) {
         </section>
 
         <section className="card">
-          <h3><span className="card-num">B</span> Event shape</h3>
+          <h3><span className="card-num">B</span> Event details</h3>
           <label>Headcount : <strong>{profile.headcount}</strong> guests</label>
           <input type="range" min="0" max="160" step="2" value={profile.headcount}
             onChange={(e) => set("headcount", +e.target.value)} className="range-in" />
