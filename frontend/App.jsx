@@ -2569,7 +2569,7 @@ function Stage02({
 
       <div className="path-picker">
         <div
-          className={`path-card ${displaySelection === "outbound" ? "sel" : ""} ${isLocked && committed !== "outbound" ? "off" : ""}`}
+          className={`path-card ${displaySelection === "outbound" ? "sel" : ""} ${isLocked && committedPath !== "outbound" ? "off" : ""}`}
           role="button"
           tabIndex={isLocked ? -1 : 0}
           onClick={() => !isLocked && setSelected("outbound")}
@@ -2588,7 +2588,7 @@ function Stage02({
         </div>
 
         <div
-          className={`path-card ${displaySelection === "inbound" ? "sel" : ""} ${isLocked && committed !== "inbound" ? "off" : ""}`}
+          className={`path-card ${displaySelection === "inbound" ? "sel" : ""} ${isLocked && committedPath !== "inbound" ? "off" : ""}`}
           role="button"
           tabIndex={isLocked ? -1 : 0}
           onClick={() => !isLocked && setSelected("inbound")}
