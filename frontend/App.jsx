@@ -2067,24 +2067,6 @@ export default function App() {
     try { return localStorage.getItem("surplus_mode") || "outbound"; }
     catch { return "outbound"; }
   });
-  // Shared eventId across both flows so the operator can switch between
-  // Triage and Outbound without losing the event they're working on. The
-  // Event row in the DB is the same entity; only the UI mode differs.
-  // Persisted in localStorage so refresh / new tab restores context too.
-  const [sharedEventId, setSharedEventId] = useState(() => {
-    try {
-      const v = localStorage.getItem("surplus_event_id");
-      const n = v ? parseInt(v, 10) : NaN;
-      return Number.isFinite(n) ? n : null;
-    } catch { return null; }
-  });
-  const updateSharedEventId = (eid) => {
-    setSharedEventId(eid);
-    try {
-      if (eid) localStorage.setItem("surplus_event_id", String(eid));
-      else localStorage.removeItem("surplus_event_id");
-    } catch {}
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -2120,8 +2102,6 @@ export default function App() {
     return (
       <TriageApp
         user={user}
-        initialEventId={sharedEventId}
-        onEventChange={updateSharedEventId}
         onLogout={async () => {
           try { await api.logout(); } catch {}
           setUser(undefined);
@@ -2134,8 +2114,6 @@ export default function App() {
   return (
     <SurplusApp
       user={user || null}
-      initialEventId={sharedEventId}
-      onEventChange={updateSharedEventId}
       onLogout={() => setUser(undefined)}
       onSignIn={async () => {
         try {
@@ -2210,21 +2188,9 @@ function SignInModal({ open, onClose, onSignIn }) {
   );
 }
 
-function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage,
-                      initialEventId = null, onEventChange = () => {} }) {
-  // If we already have an eventId (e.g. user toggled here from Triage with
-  // the same event), skip Intake and land them on Prospecting. Otherwise
-  // start at the beginning of the funnel.
-  // Only auto-resume into Prospecting (stage 1) if the user is actually
-  // signed in. Otherwise an unauthenticated visit to a session with a
-  // stale `surplus_event_id` in localStorage would dump the visitor on
-  // a stage-1 screen that fires /events/{id}/* calls in a loop, all
-  // 401ing, and pop a sign-in modal on top of it.
-  // Land them on Intake first ; once they sign in they can navigate
-  // forward in the rail.
-  const _shouldResume = !!(initialEventId && user);
-  const [stage, setStage] = useState(_shouldResume ? 1 : 0);
-  const [maxReached, setMaxReached] = useState(_shouldResume ? 1 : 0);
+function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage }) {
+  const [stage, setStage] = useState(0);
+  const [maxReached, setMaxReached] = useState(0);
   const [profile, setProfile] = useState({
     role: "Infrastructure / ML platform engineers",
     seniority: ["Staff+"],
@@ -2249,13 +2215,8 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage,
   });
   // backend-wired state : eventId comes from real /events POST; runResult is
   // the response from /run (prospects, counts, etc.). Both null until the
-  // user runs the flow. `initialEventId` seeds from App-level state so a
-  // mode-switch (Outbound <-> Triage) preserves the event.
-  const [eventId, setEventIdLocal] = useState(initialEventId);
-  const setEventId = (eid) => {
-    setEventIdLocal(eid);
-    onEventChange(eid);
-  };
+  // user runs the flow.
+  const [eventId, setEventId] = useState(null);
   const [runResult, setRunResult] = useState(null);
   const [apiError, setApiError] = useState(null);
   const [signInModalOpen, setSignInModalOpen] = useState(false);
@@ -2276,30 +2237,6 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage,
     // — don't interrupt the operator with a modal they have to dismiss.
     if (needsSignIn(err) && !user) {
       setSignInModalOpen(true);
-      return;
-    }
-    // 404 with an eventId in scope = the backend redeployed and wiped
-    // the SQLite store, so our cached eventId points at a row that no
-    // longer exists. Auto-recover : clear the cached id and bounce
-    // back to Intake instead of leaving the operator stuck on a
-    // Prospecting / Auto-outreach screen that 404s every poll.
-    //
-    // Some catch blocks pass an Error object (err.status === 404), others
-    // hand-roll a string message ("This event no longer exists on the
-    // server.", "Event not found : ..."). Match both shapes.
-    const errStatus = err?.status;
-    const errText = (typeof err === "string" ? err : err?.message || "").toLowerCase();
-    const looksLike404 = errStatus === 404
-      || errText.includes("event not found")
-      || errText.includes("no longer exists on the server")
-      || errText.includes("backend most likely redeployed")
-      || errText.includes("backend probably redeployed")
-      || errText.includes("wiped its ephemeral");
-    if (looksLike404 && eventId) {
-      setEventId(null);
-      setRunResult(null);
-      go(0);
-      setApiError("Event not found : the backend redeployed and wiped the store. Start a new event from Intake.");
       return;
     }
     const msg = typeof err === "string" ? err : err?.message || "Something went wrong";
