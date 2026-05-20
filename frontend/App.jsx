@@ -1984,9 +1984,16 @@ export default function App() {
   const [committedPath, setCommittedPath] = useState(null); // null | "outbound" | "inbound"
   // /prospect response — Pipeline writes it, Prospects (stage 03 outbound)
   // reads it. Needs to live above Stage02 so Pipeline's result survives
-  // the stage transition.
+  // the stage transition. Intentionally NOT persisted across refresh
+  // (per #101 lessons : Pipeline re-runs /prospect on mount).
   const [runResult, setRunResult] = useState(null);
   const [apiError, setApiError] = useState(null);
+  // Hydration gate. False until we've finished reading the cached session
+  // from localStorage AND validated the event via api.getEvent. Render
+  // is gated on (user && hydrated) so we never flash intake before the
+  // hydrate completes. Avoids the #94 race where Prospecting mounted on a
+  // cached eventId and fired /prospect before auth/validation finished.
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2010,7 +2017,80 @@ export default function App() {
     try { localStorage.setItem("surplus_mode", next); } catch {}
   };
 
-  if (user === null) {
+  // Hydrate the unified session from localStorage AFTER /me confirms the
+  // user is real. Validates the cached eventId with api.getEvent before
+  // resuming : 404 / 403 / any error clears the key and falls through
+  // to intake. Lessons from #94/#98/#99/#100/#101 revert :
+  //   - never resume mid-funnel for an unauthenticated visitor (no 401 storm)
+  //   - never trust the cached eventId without server-side validation
+  //     (no 404 storm when ephemeral SQLite gets wiped on redeploy)
+  //   - keep recovery in ONE place — here — not scattered across
+  //     every downstream component's catch block
+  useEffect(() => {
+    if (!user) {
+      // Signed-out visit : nothing to hydrate. Mark hydrated so the
+      // signed-out branches (SurplusApp) render immediately.
+      setHydrated(true);
+      return;
+    }
+    if (hydrated) return;
+    let cancelled = false;
+    (async () => {
+      let cached = null;
+      try {
+        const raw = localStorage.getItem(UNIFIED_SESSION_KEY);
+        cached = raw ? JSON.parse(raw) : null;
+      } catch {
+        // Corrupt JSON : clear and start fresh.
+        try { localStorage.removeItem(UNIFIED_SESSION_KEY); } catch {}
+      }
+      if (!cached || !cached.eventId) {
+        if (!cancelled) setHydrated(true);
+        return;
+      }
+      try {
+        const ev = await api.getEvent(cached.eventId);
+        if (cancelled) return;
+        // Validation passed : safe to hydrate.
+        setEventId(ev.id);
+        setProfile(profileFromEventOut(ev));
+        const path = VALID_PATHS.has(cached.committedPath) ? cached.committedPath : null;
+        setCommittedPath(path);
+        const savedStage = VALID_STAGES.has(cached.stage) ? cached.stage : "intake";
+        setStage(savedStage);
+      } catch (_e) {
+        // 404 / 403 / network : clear the key and fall through. No
+        // banner — operator just lands on a fresh intake, which is
+        // the same behavior as no cached session.
+        try { localStorage.removeItem(UNIFIED_SESSION_KEY); } catch {}
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, hydrated]);
+
+  // Persist {eventId, stage, committedPath} on every change. Gated on
+  // `hydrated` so the hydration effect's own setState calls don't
+  // bounce-write the same values back. eventId-less states clear the
+  // key so a logged-out tab doesn't keep ghost session data around.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      if (eventId) {
+        localStorage.setItem(
+          UNIFIED_SESSION_KEY,
+          JSON.stringify({ eventId, stage, committedPath }),
+        );
+      } else {
+        localStorage.removeItem(UNIFIED_SESSION_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private window / quota) : silent.
+    }
+  }, [eventId, stage, committedPath, hydrated]);
+
+  if (user === null || (user && !hydrated)) {
     return <div style={{ minHeight: "100vh", background: "#f6f7f9" }} />;
   }
 
@@ -2028,6 +2108,10 @@ export default function App() {
         user={user}
         onLogout={async () => {
           try { await api.logout(); } catch {}
+          // Belt-and-suspenders : the write effect would also clear
+          // the key when eventId becomes null, but we explicit-clear
+          // here too so the spec wording matches the code.
+          try { localStorage.removeItem(UNIFIED_SESSION_KEY); } catch {}
           setUser(undefined);
           setStage("intake");
           setEventId(null);
@@ -2134,6 +2218,34 @@ const STAGE_INDEX = {
   matching: 3,
   roi:      4,
 };
+
+// Persistence : only three keys go to localStorage. Components re-fetch
+// their own state on mount; we don't cache runResult / prospects /
+// applicants / edges / groups / etc.
+const UNIFIED_SESSION_KEY = "surplus_unified_session";
+const VALID_STAGES = new Set(Object.keys(STAGE_INDEX));
+const VALID_PATHS = new Set([null, "outbound", "inbound"]);
+
+// Denormalize the EventOut wire shape back into the chip-profile that
+// SharedIntake + the rest of the unified flow consume. The form's state
+// uses camelCase (coStage, eventDate, eventName) while the API uses
+// snake_case — translate here in one place.
+function profileFromEventOut(ev) {
+  return {
+    role:       ev.role || "",
+    seniority:  ev.seniority || [],
+    coStage:    ev.co_stage || [],
+    yoe:        ev.yoe || [],
+    headcount:  ev.headcount ?? 40,
+    format:     ev.format || "Sit-down dinner",
+    city:       ev.city || "",
+    eventDate:  ev.event_date || "",
+    eventName:  ev.event_name || "",
+    goal:       ev.goal || ["Hiring pipeline"],
+    budget:     ev.budget ?? 0,
+    sources:    ev.sources || ["linkedin"],
+  };
+}
 
 // Shell for the unified intake → stage 02 → ... flow. Reuses
 // SURPLUS_APP_CSS classes so it looks identical to the legacy shells.
