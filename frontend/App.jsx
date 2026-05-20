@@ -237,7 +237,7 @@ function toggleIn(arr, v) {
   return [...cur, v];
 }
 
-function Intake({ profile, setProfile, onRun }) {
+function Intake({ profile, setProfile, onRun, onUploadApplicants }) {
   const set = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const toggle = (k, v) => setProfile((p) => ({ ...p, [k]: toggleIn(p[k], v) }));
 
@@ -433,8 +433,17 @@ function Intake({ profile, setProfile, onRun }) {
 
       </div>
 
-      <div className="stage-foot">
-        <button className="btn-primary" onClick={onRun}>Run agent pipeline <ArrowRight size={16} /></button>
+      <div className="stage-foot intake-foot">
+        <button className="btn-primary" onClick={onRun}>
+          Run agent pipeline <ArrowRight size={16} />
+        </button>
+        {onUploadApplicants && (
+          <button className="btn-reset intake-upload-cta"
+                  onClick={onUploadApplicants}
+                  title="Skip cold outbound. Upload a Luma applicant CSV and triage against the rubric above.">
+            Upload Luma CSV instead <ArrowRight size={14} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2310,6 +2319,54 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage,
     }
   };
 
+  // "Upload Luma CSV instead" path from Intake. Same upfront work as
+  // handleIntakeRun (create event + save triage_config), but instead of
+  // jumping to outbound Prospecting we flip mode to Triage and land the
+  // operator on the Upload step. Same event, same ICP, different
+  // candidate source. Caller is the Intake's secondary CTA.
+  const handleUploadApplicants = async () => {
+    setApiError(null);
+    const splitLines = (s) => (s || "").split("\n")
+      .map((x) => x.trim()).filter(Boolean);
+    try {
+      const ev = await api.createEvent({
+        role: profile.role,
+        seniority: profile.seniority,
+        co_stage: profile.coStage,
+        yoe: profile.yoe,
+        headcount: profile.headcount,
+        format: profile.format,
+        city: profile.city,
+        event_date: profile.eventDate,
+        event_name: profile.eventName,
+        goal: profile.goal,
+        budget: profile.budget,
+        sources: profile.sources,
+      });
+      setEventId(ev.id);
+      try {
+        await api.setTriageConfig(ev.id, {
+          event_type: profile.format || "sponsor_cafe",
+          sponsor_name: profile.sponsorName?.trim() || null,
+          event_goal: (profile.goal || []).join(", ") || null,
+          ideal_attendee_profile: profile.idealProfile?.trim() || profile.role || null,
+          hard_filters: splitLines(profile.hardFilters),
+          nice_to_have_signals: splitLines(profile.niceToHave),
+          anti_fit_examples: splitLines(profile.antiFit),
+          capacity: profile.headcount || null,
+        });
+      } catch (cfgErr) {
+        console.warn("triage_config save failed (non-fatal):", cfgErr);
+      }
+      // Flip to Triage : eventId is shared via App-level state, so
+      // TriageApp mounts with initialEventId set and skips Configure
+      // straight to Upload.
+      if (onSwitchToTriage) onSwitchToTriage();
+    } catch (e) {
+      reportError(e);
+    }
+  };
+
   const restart = () => {
     setEventId(null);
     setRunResult(null);
@@ -2338,31 +2395,11 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage,
             )}
           </div>
           <StageRail stage={stage} setStage={go} maxReached={maxReached} />
-          {onSwitchToTriage && (
-            <button className="topbar-mode-switch"
-                    onClick={async () => {
-                      if (user) {
-                        onSwitchToTriage();
-                        return;
-                      }
-                      // Signed-out : mint an anonymous session and drop the
-                      // user straight into the triage flow. No form, no
-                      // signup, no LinkedIn. Email can be attached later
-                      // if they want to recover the event across browsers.
-                      try {
-                        localStorage.setItem("surplus_mode", "triage");
-                      } catch {}
-                      try {
-                        await api.triageQuickStart();
-                        window.location.reload();
-                      } catch (e) {
-                        alert("Could not start a triage session: " + (e.message || e));
-                      }
-                    }}
-                    title="Switch to Applicant Triage (review Luma applicants)">
-              Triage mode
-            </button>
-          )}
+          {/* Triage mode button removed : Applicant Triage ICP is now set
+              inline on Intake (Luma URL + Card D), so the operator doesn't
+              need to switch into a separate flow just to define event
+              criteria. Triage Review / Upload still reachable via /triage
+              direct URL or App-level mode state. */}
           {user ? (
             <UserMenu user={user} onLogout={onLogout} />
           ) : (
@@ -2382,7 +2419,9 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage,
           onSignIn={onSignIn}
         />
         <main className="canvas" key={stage}>
-          {stage === 0 && <Intake profile={profile} setProfile={setProfile} onRun={handleIntakeRun} />}
+          {stage === 0 && <Intake profile={profile} setProfile={setProfile}
+                                  onRun={handleIntakeRun}
+                                  onUploadApplicants={onSwitchToTriage ? handleUploadApplicants : null} />}
           {stage === 1 && <Pipeline profile={profile} eventId={eventId}
                                     onResult={setRunResult}
                                     onError={reportError}
@@ -2544,6 +2583,17 @@ const CSS = `
   margin-top:8px; padding:8px 11px; border-radius:8px;
   background:var(--good-soft, #e9f7ef); color:var(--good, #137a3d);
   border:1px solid #c9eedb; font-size:12.5px;
+}
+.intake-foot { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.intake-upload-cta {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:10px 16px; border-radius:999px;
+  border:1px solid var(--line); background:var(--panel); color:var(--ink-dim);
+  font-family:inherit; font-size:13px; font-weight:500;
+  cursor:pointer; transition:all 0.15s;
+}
+.intake-upload-cta:hover {
+  color:var(--acc); border-color:var(--acc); background:var(--acc-soft);
 }
 .canvas { animation:fade 0.4s ease; }
 @keyframes fade { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:none;} }
