@@ -294,7 +294,8 @@ async def enrich_batch(
     concurrency = concurrency or int(os.environ.get("ENRICH_CONCURRENCY", "20"))
 
     sem = asyncio.Semaphore(concurrency)
-    anthropic_client = AsyncAnthropic()
+    from ..agents.llm import _api_key
+    anthropic_client = AsyncAnthropic(api_key=_api_key())
     timeout = httpx.Timeout(20.0, connect=10.0)
     results: list[Optional[EnrichedPerson]] = [None] * len(people)
 

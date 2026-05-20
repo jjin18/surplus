@@ -195,7 +195,8 @@ def score_applicant(applicant: models.Applicant, rubric: Rubric,
     try:
         if client is None:
             from anthropic import Anthropic
-            client = Anthropic()
+            from ..agents.llm import _api_key
+            client = Anthropic(api_key=_api_key())
         t0 = time.time()
         resp = client.messages.create(
             model=SCORE_MODEL,

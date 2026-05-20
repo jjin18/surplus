@@ -336,7 +336,8 @@ def suggest_triage_config(event: LumaEvent) -> TriageSuggestion:
 
     try:
         from anthropic import Anthropic
-        client = Anthropic()
+        from ..agents.llm import _api_key
+        client = Anthropic(api_key=_api_key())
         resp = client.messages.create(
             model=_SUGGEST_MODEL,
             max_tokens=_SUGGEST_MAX_TOKENS,

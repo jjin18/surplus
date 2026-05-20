@@ -234,7 +234,11 @@ async def synthesize_rubric(
     summary = _summarize_people(people)
     prompt = _build_prompt(event_name, event_description, summary)
 
-    client = anthropic_client or AsyncAnthropic()
+    if anthropic_client is None:
+        from ..agents.llm import _api_key
+        client = AsyncAnthropic(api_key=_api_key())
+    else:
+        client = anthropic_client
     telemetry: dict[str, Any] = {"model": MODEL}
     try:
         t0 = time.time()

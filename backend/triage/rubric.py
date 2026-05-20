@@ -215,7 +215,8 @@ def synthesize_rubric(event_id: int, triage_config_json: str,
 
     try:
         from anthropic import Anthropic
-        client = Anthropic()
+        from ..agents.llm import _api_key
+        client = Anthropic(api_key=_api_key())
         resp = client.messages.create(
             model=RUBRIC_MODEL,
             max_tokens=RUBRIC_MAX_TOKENS,
