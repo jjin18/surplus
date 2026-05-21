@@ -553,14 +553,11 @@ export function UploadStep({ eventId, onNext }) {
   const [uploaded, setUploaded] = useState(null);
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState(null);
-  const [sessionExpired, setSessionExpired] = useState(false);
   const fileRef = useRef(null);
   const pollRef = useRef(null);
 
   // Poll the evaluation-progress endpoint after upload so the operator
-  // sees scores fill in. Stops once everything's scored, or on 401 :
-  // the latter means the demo session was revoked or expired and we
-  // can't recover by retrying.
+  // sees scores fill in. Stops once everything's scored.
   useEffect(() => {
     if (!uploaded || !eventId) return;
     let alive = true;
@@ -573,13 +570,7 @@ export function UploadStep({ eventId, onNext }) {
         if (p.pending === 0 && p.total_applicants > 0) {
           clearInterval(pollRef.current);
         }
-      } catch (e) {
-        if (e?.status === 401) {
-          setSessionExpired(true);
-          clearInterval(pollRef.current);
-          alive = false;
-        }
-      }
+      } catch {}
     }, 1500);
     return () => { alive = false; clearInterval(pollRef.current); };
   }, [uploaded, eventId]);
@@ -689,11 +680,6 @@ export function UploadStep({ eventId, onNext }) {
           <AlertCircle size={14} /> {error}
         </div>
       )}
-      {sessionExpired && (
-        <div className="api-error" role="alert">
-          <AlertCircle size={14} /> Session expired. Start a new demo.
-        </div>
-      )}
     </div>
   );
 }
@@ -716,15 +702,12 @@ export function ReviewStep({ eventId }) {
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(null);
-  const [sessionExpired, setSessionExpired] = useState(false);
 
   // Poll continuously while there are unscored applicants so the table
-  // fills in live. Stop once everyone's scored, or on 401 (demo session
-  // revoked / expired : retrying won't recover).
+  // fills in live. Stop once everyone's scored.
   useEffect(() => {
     if (!eventId) return;
     let alive = true;
-    let t;
     const tick = async () => {
       try {
         const [list, prog] = await Promise.all([
@@ -735,16 +718,10 @@ export function ReviewStep({ eventId }) {
         setApplicants(list);
         setProgress(prog);
         setLoading(false);
-      } catch (e) {
-        if (e?.status === 401) {
-          setSessionExpired(true);
-          alive = false;
-          if (t) clearInterval(t);
-        }
-      }
+      } catch {}
     };
     tick();
-    t = setInterval(() => {
+    const t = setInterval(() => {
       if (!alive) return;
       tick();
     }, 2000);
@@ -780,11 +757,6 @@ export function ReviewStep({ eventId }) {
 
   return (
     <div className="triage-review">
-      {sessionExpired && (
-        <div className="api-error" role="alert" style={{ marginBottom: 12 }}>
-          <AlertCircle size={14} /> Session expired. Start a new demo.
-        </div>
-      )}
       <header className="stage-head triage-head-row">
         <div>
           <h1>Review queue</h1>
