@@ -60,6 +60,9 @@ class TriageConfig(BaseModel):
     anti_fit_examples: list[str] = []
     capacity: Optional[int] = None
     notes: Optional[str] = None
+    # UI-only round-trip for Triage "Configure" when it mirrors outbound Intake.
+    # Stripped before the rubric LLM sees the config (see triage.rubric).
+    intake_snapshot: Optional[dict] = None
 
 
 class EvaluationOut(BaseModel):

@@ -8,6 +8,16 @@ import {
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import SharedIntake from "./SharedIntake.jsx";
+import {
+  FORMATS,
+  GOALS,
+  SENIORITY,
+  STAGES_CO,
+  YOE,
+  SOURCES,
+  FORMAT_CONFIG,
+  DEFAULT_INTAKE_PROFILE,
+} from "./intakeFormConstants.js";
 import MatchingRadarGraph from "./components/MatchingRadarGraph.jsx";
 import pipeGithubIcon from "./src/assets/pipe/github-icon.png";
 import pipeXIcon from "./src/assets/pipe/x-icon.png";
@@ -28,34 +38,6 @@ const STAGES = [
   { id: 3, key: "matching",  label: "Matching",     icon: Network },
   { id: 4, key: "roi",       label: "ROI ledger",   icon: TrendingUp },
 ];
-
-const FORMATS = ["Sit-down dinner", "Hackathon", "Workshop", "Mixer", "Roundtable"];
-const GOALS = ["Hiring pipeline", "Fundraising", "Sales pipeline", "Product testing", "Community density"];
-const SENIORITY = ["Student", "New grad", "Junior", "Senior", "Staff+", "Leadership"];
-const STAGES_CO = ["Pre-seed", "Seed", "Series A", "Series B+", "Enterprise"];
-const YOE = ["0-2", "3-5", "6-10", "10+"];
-
-// Each prospect source has a backend adapter key (lower-case) and a label.
-// LinkedIn is locked-on : the backend forces it in regardless, but rendering
-// the lock indicator here saves the operator a wasted click.
-const SOURCES = [
-  { key: "linkedin", label: "LinkedIn", locked: true },
-  { key: "github",   label: "GitHub" },
-  // X / Twitter pulled : Exa deprecated `category: "tweet"` and stopped
-  // honoring includeDomains=x.com, so the channel returns 0. Tracked in
-  // backend/agents/exa.py x-source handling. Re-add when we have a real
-  // X discovery backend (SerpAPI site:x.com or X API).
-  { key: "scholar",  label: "Scholar" },
-];
-
-// ---- format config: matching topology -----------------------
-const FORMAT_CONFIG = {
-  "Sit-down dinner": { group: "Table", topo: "fixed seating : composition locked before doors open" },
-  "Hackathon":       { group: "Team",  topo: "team formation : complementary skills balanced per team" },
-  "Workshop":        { group: "Breakout", topo: "fluid breakouts : groups regroup between sessions" },
-  "Mixer":           { group: "Cluster", topo: "soft clusters : seeded, not enforced" },
-  "Roundtable":      { group: "Seat",  topo: "single ring : seating order is the lever" },
-};
 
 // Multi-select helpers: profile.seniority/coStage/goal are arrays. These
 // turn them into readable phrases for the outreach templates without
@@ -241,7 +223,7 @@ function toggleIn(arr, v) {
   return [...cur, v];
 }
 
-function Intake({ profile, setProfile, onRun }) {
+function Intake({ profile, setProfile, onRun, user, onSwitchToTriage }) {
   const set = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const toggle = (k, v) => setProfile((p) => ({ ...p, [k]: toggleIn(p[k], v) }));
   return (
@@ -249,6 +231,10 @@ function Intake({ profile, setProfile, onRun }) {
       <header className="stage-head">
         <h1>Define the event</h1>
       </header>
+
+      {onSwitchToTriage && (
+        <IntakeLumaEntry user={user} onSwitchToTriage={onSwitchToTriage} />
+      )}
 
       <div className="form-grid">
         <section className="card">
@@ -755,11 +741,11 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
   // or the LLM web_search calls erroring out. Render a useful explanation
   // instead of the (white-screen) crash that used to happen on sel.id.
   if (PROS.length === 0) {
-    return (
-      <div className="stage">
-        <header className="stage-head">
+  return (
+    <div className="stage">
+      <header className="stage-head">
           <h1>No candidates surfaced</h1>
-          <p className="lede">
+        <p className="lede">
             Prospecting completed but returned an empty pool. Check the backend
             logs : the cause is one of:
           </p>
@@ -834,7 +820,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
                   {p.scholar > 0 && (
                     <span className="sig" title="Scholar citations">
                       <GraduationCap size={11} /> {fmtNum(p.scholar)}
-                    </span>
+                </span>
                   )}
                 </span>
                 <span className="pr-status">
@@ -900,7 +886,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
                   </span>
                 )}
               </p>
-              <div className="outreach">
+                <div className="outreach">
                 {sel.score < T && (
                   <div className="below-threshold-warn">
                     ⚠ This candidate is below the agent's fit threshold ({sel.score} / {T}).
@@ -931,7 +917,7 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
                           reset to agent text
                         </button>
                       )}
-                    </span>
+                  </span>
                     <div className="send-row">
                       <button className="btn-send btn-send-invite"
                               disabled={!selPreview.eligible || selSend?.status === "sending"}
@@ -940,19 +926,19 @@ function Prospects({ profile, runResult, eventId, onError, onNext }) {
                           ? actionLabel(sel.connectionStatus, true)
                           : <>{actionLabel(sel.connectionStatus, false)} <ArrowRight size={14} /></>}
                       </button>
-                    </div>
+                </div>
                     {selSend && selSend.status === "sent" && (
                       <div className="send-result ok">
                         <Check size={11} strokeWidth={3} />{" "}
                         {selSend.path_taken === "warm" ? "Message" : "Invite"} sent
                         {selSend.dry_run && <span> · dry-run</span>}
                         {selSend.state && <span> · state: {selSend.state}</span>}
-                      </div>
-                    )}
+                </div>
+              )}
                     {selSend && selSend.status === "failed" && (
                       <div className="send-result err">
                         ⚠ Send failed: {selSend.error}
-                      </div>
+                </div>
                     )}
                     {!selPreview.eligible && (
                       <div className="send-result muted">Skipped: {selPreview.skip_reason}</div>
@@ -1354,29 +1340,29 @@ function Matching({ profile, eventId, onError, onNext, committedPath }) {
     groups = [...new Set(attending.map((p) => p.grp))].sort((a, b) => a - b);
     const positions = layoutGroupCenters(groups.length);
     nodes = [];
-    groups.forEach((g, gi) => {
+  groups.forEach((g, gi) => {
       const [cx, cy] = positions[gi];
-      const members = attending.filter((p) => p.grp === g);
-      members.forEach((p, idx) => {
-        const n = members.length;
-        const ang = -Math.PI / 2 + (idx / n) * Math.PI * 2;
-        const r = n === 1 ? 0 : 52;
-        nodes.push({ ...p, x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r });
-      });
+    const members = attending.filter((p) => p.grp === g);
+    members.forEach((p, idx) => {
+      const n = members.length;
+      const ang = -Math.PI / 2 + (idx / n) * Math.PI * 2;
+      const r = n === 1 ? 0 : 52;
+      nodes.push({ ...p, x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r });
     });
+  });
     edges = [];
-    for (let i = 0; i < attending.length; i++) {
-      for (let j = i + 1; j < attending.length; j++) {
-        const a = attending[i], b = attending[j];
-        const sym = a.side !== b.side;
-        edges.push({
-          a: a.id, b: b.id,
-          type: sym ? "sym" : "aff",
-          cross: a.grp !== b.grp,
-          w: (a.score + b.score) / 2,
-        });
-      }
+  for (let i = 0; i < attending.length; i++) {
+    for (let j = i + 1; j < attending.length; j++) {
+      const a = attending[i], b = attending[j];
+      const sym = a.side !== b.side;
+      edges.push({
+        a: a.id, b: b.id,
+        type: sym ? "sym" : "aff",
+        cross: a.grp !== b.grp,
+        w: (a.score + b.score) / 2,
+      });
     }
+  }
     symPairs = edges.filter((e) => e.type === "sym" && !e.cross)
       .sort((x, y) => y.w - x.w).slice(0, 4)
       .map((e) => {
@@ -1394,9 +1380,9 @@ function Matching({ profile, eventId, onError, onNext, committedPath }) {
   // Loading / error guards : show before the heavy SVG render so the
   // page doesn't flash empty + stale layout while the call is in flight.
   if (loading) {
-    return (
-      <div className="stage">
-        <header className="stage-head">
+  return (
+    <div className="stage">
+      <header className="stage-head">
           <h1>Building the value graph…</h1>
         </header>
         <div className="graph-wrap graph-wrap--loading">
@@ -1501,7 +1487,7 @@ function Matching({ profile, eventId, onError, onNext, committedPath }) {
                   {(block.matches || []).map((m, i) => {
                     const pairKey = `s${block.sponsor_id}-p${m.prospect_id}`;
                     const state = pairExplanations[pairKey];
-                    return (
+              return (
                       <div className="sym-pair" key={i}>
                         <div className="sym-names">
                           {block.sponsor_name} <span className="sym-link">⟷</span> {(m.prospect_name || "").split(" ")[0]}
@@ -1528,11 +1514,11 @@ function Matching({ profile, eventId, onError, onNext, committedPath }) {
                           </div>
                         )}
                       </div>
-                    );
-                  })}
+              );
+            })}
                 </div>
               ))}
-            </div>
+          </div>
           )}
 
           <div className="sym-panel">
@@ -2779,12 +2765,11 @@ function SignInModal({ open, onClose, onSignIn }) {
   );
 }
 
-// Topbar Luma URL entry. Replaces the previous "Triage mode" button :
-// paste a lu.ma URL, press Go, and we drop the operator straight into
-// the triage flow with that event pre-imported on the intake page.
+// Luma URL row under "Define the event". Paste a lu.ma URL, press Go,
+// and we drop the operator into triage with that event pre-imported.
 // Stashes the URL in sessionStorage so SharedIntake's mount effect can
 // pick it up and call previewLumaEvent without the operator re-pasting.
-function TopbarLumaEntry({ user, onSwitchToTriage }) {
+function IntakeLumaEntry({ user, onSwitchToTriage }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -2816,25 +2801,30 @@ function TopbarLumaEntry({ user, onSwitchToTriage }) {
   };
 
   return (
-    <form className="topbar-luma" onSubmit={submit}>
-      <Link2 size={14} className="topbar-luma-icon" aria-hidden />
+    <form className="luma-quick" onSubmit={submit}>
+      <Link2 size={14} aria-hidden className="luma-quick-icon" />
+      <label htmlFor="intake-luma-url" className="luma-quick-label">
+        Luma URL
+      </label>
       <input
+        id="intake-luma-url"
         type="text"
-        className="topbar-luma-input"
+        className="text-in luma-quick-input"
         value={url}
         onChange={(e) => setUrl(e.target.value)}
-        placeholder="Paste lu.ma URL"
+        placeholder="https://lu.ma/your-event"
         aria-label="Luma event URL"
         disabled={busy}
       />
       <button
         type="submit"
-        className="topbar-luma-go"
+        className="btn-primary luma-quick-btn"
         disabled={busy || !url.trim()}
         title="Open triage with this Luma event"
       >
-        {busy ? <Loader2 className="spin" size={13} /> : "Go"}
+        {busy ? <><Loader2 className="spin" size={14} /> Starting</> : "Go"}
       </button>
+      <span className="hint luma-quick-hint">*optional, pre-fills on triage intake</span>
     </form>
   );
 }
@@ -2842,20 +2832,7 @@ function TopbarLumaEntry({ user, onSwitchToTriage }) {
 function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage }) {
   const [stage, setStage] = useState(0);
   const [maxReached, setMaxReached] = useState(0);
-  const [profile, setProfile] = useState({
-    role: "Infrastructure / ML platform engineers",
-    seniority: ["Staff+"],
-    coStage: ["Seed"],
-    yoe: ["6-10"],
-    headcount: 40,
-    format: "Sit-down dinner",
-    city: "San Francisco",
-    eventDate: "",
-    eventName: "",
-    goal: ["Hiring pipeline"],
-    budget: 8000,
-    sources: ["linkedin"],
-  });
+  const [profile, setProfile] = useState(() => ({ ...DEFAULT_INTAKE_PROFILE }));
   // backend-wired state : eventId comes from real /events POST; runResult is
   // the response from /run (prospects, counts, etc.). Both null until the
   // user runs the flow.
@@ -2926,7 +2903,7 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage }) {
           <div className="brand">
             <img className="brand-logo" src="/surplus-logo.png" alt="Surplus logo" />
             <div className="brand-text">
-              <span className="brand-name">surplus</span>
+            <span className="brand-name">surplus</span>
             </div>
             {(profile.eventName?.trim() || eventId) && (
               <span className="live-badge"
@@ -2938,9 +2915,6 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage }) {
             )}
           </div>
           <StageRail stage={stage} setStage={go} maxReached={maxReached} />
-          {onSwitchToTriage && (
-            <TopbarLumaEntry user={user} onSwitchToTriage={onSwitchToTriage} />
-          )}
           {user ? (
             <UserMenu user={user} onLogout={onLogout} />
           ) : (
@@ -2960,7 +2934,15 @@ function SurplusApp({ user, onLogout, onSignIn, onSwitchToTriage }) {
           onSignIn={onSignIn}
         />
         <main className="canvas" key={stage}>
-          {stage === 0 && <Intake profile={profile} setProfile={setProfile} onRun={handleIntakeRun} />}
+          {stage === 0 && (
+            <Intake
+              profile={profile}
+              setProfile={setProfile}
+              onRun={handleIntakeRun}
+              user={user}
+              onSwitchToTriage={onSwitchToTriage}
+            />
+          )}
           {stage === 1 && <Pipeline profile={profile} eventId={eventId}
                                     onResult={setRunResult}
                                     onError={reportError}

@@ -11,6 +11,7 @@ This module owns:
   - current_user FastAPI dependency
 """
 from __future__ import annotations
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -31,6 +32,25 @@ SESSION_TTL_DAYS = 30
 # instead of type=create on every sign-in.
 LAST_ACCOUNT_COOKIE = "surplus_last_account"
 LAST_ACCOUNT_TTL_DAYS = 365
+
+
+def _session_cookie_secure() -> bool:
+    """Browsers ignore Set-Cookie with Secure= over plain HTTP, which breaks local
+    dev (e.g. Vite at http://localhost). Production uses https:// in
+    SURPLUS_BASE_URL, so cookies stay secure unless overridden.
+
+    SURPLUS_SESSION_COOKIE_SECURE: explicit "1"/"true"/"yes" or "0"/"false"/"no".
+    If unset, falls back to False when SURPLUS_BASE_URL starts with http://.
+    """
+    raw = (os.environ.get("SURPLUS_SESSION_COOKIE_SECURE") or "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    base = (os.environ.get("SURPLUS_BASE_URL") or "").strip().lower()
+    if base.startswith("http://"):
+        return False
+    return True
 
 
 def _utcnow() -> datetime:
@@ -58,30 +78,35 @@ def create_session(db: DbSession, user: User) -> Session:
 def set_session_cookie(response: Response, session_token: str) -> None:
     """Set the surplus session cookie. Lax SameSite so the LinkedIn-hosted-auth
     redirect (a top-level navigation back to our domain) carries the cookie."""
+    secure = _session_cookie_secure()
     response.set_cookie(
         key=SESSION_COOKIE,
         value=session_token,
         max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
         httponly=True,
-        secure=True,
+        secure=secure,
         samesite="lax",
         path="/",
     )
 
 
 def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(key=SESSION_COOKIE, path="/")
+    secure = _session_cookie_secure()
+    response.delete_cookie(
+        key=SESSION_COOKIE, path="/", secure=secure, httponly=True, samesite="lax"
+    )
 
 
 def set_last_account_cookie(response: Response, account_id: str) -> None:
     """Persist the Unipile account_id so the next sign-in can use
     type=reconnect. Lax SameSite so the Unipile→callback redirect carries it."""
+    secure = _session_cookie_secure()
     response.set_cookie(
         key=LAST_ACCOUNT_COOKIE,
         value=account_id,
         max_age=LAST_ACCOUNT_TTL_DAYS * 24 * 60 * 60,
         httponly=True,
-        secure=True,
+        secure=secure,
         samesite="lax",
         path="/",
     )

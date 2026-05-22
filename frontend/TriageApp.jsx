@@ -2,10 +2,21 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   ArrowRight, Check, Upload, Search, Filter, ChevronRight,
   Loader2, FileText, Sparkles, AlertCircle, ExternalLink, Link2,
-  Target, ClipboardList,
+  Target, ClipboardList, CornerDownRight,
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import { SURPLUS_APP_CSS } from "./surplusTheme.js";
+import {
+  FORMATS,
+  GOALS,
+  SENIORITY,
+  STAGES_CO,
+  YOE,
+  SOURCES,
+  FORMAT_CONFIG,
+  DEFAULT_INTAKE_PROFILE,
+  FORMAT_TO_TRIAGE_EVENT_TYPE,
+} from "./intakeFormConstants.js";
 
 const Chip = ({ active, onClick, children }) => (
   <button type="button" className={`chip ${active ? "chip-on" : ""}`} onClick={onClick}>{children}</button>
@@ -55,15 +66,93 @@ function TriageRail({ stage, setStage, maxReached }) {
 // open the review drawer for any applicant.
 // =============================================================
 
-const EVENT_TYPES = [
-  { key: "sponsor_cafe",    label: "Sponsor cafe" },
-  { key: "founder_dinner",  label: "Founder dinner" },
-  { key: "partner_dinner",  label: "Partner dinner" },
-  { key: "member_social",   label: "Member social" },
-  { key: "community_event", label: "Community event" },
-  { key: "research_event",  label: "Research event" },
-  { key: "other",           label: "Other" },
-];
+function toggleIn(arr, v) {
+  const cur = Array.isArray(arr) ? arr : [arr].filter(Boolean);
+  if (cur.includes(v)) {
+    return cur.length > 1 ? cur.filter((x) => x !== v) : cur;
+  }
+  return [...cur, v];
+}
+
+function primaryGoalLabel(p) {
+  return (p.goal && p.goal[0]) || "Hiring pipeline";
+}
+
+function normalizeIntakeSnapshot(raw) {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_INTAKE_PROFILE };
+  const s = raw;
+  return {
+    ...DEFAULT_INTAKE_PROFILE,
+    ...s,
+    seniority: Array.isArray(s.seniority) ? s.seniority : DEFAULT_INTAKE_PROFILE.seniority,
+    coStage: Array.isArray(s.coStage) ? s.coStage : DEFAULT_INTAKE_PROFILE.coStage,
+    yoe: Array.isArray(s.yoe) ? s.yoe : DEFAULT_INTAKE_PROFILE.yoe,
+    goal: Array.isArray(s.goal) && s.goal.length ? s.goal : DEFAULT_INTAKE_PROFILE.goal,
+    sources: Array.isArray(s.sources) ? s.sources : DEFAULT_INTAKE_PROFILE.sources,
+    headcount: typeof s.headcount === "number" ? s.headcount : DEFAULT_INTAKE_PROFILE.headcount,
+    budget: typeof s.budget === "number" ? s.budget : DEFAULT_INTAKE_PROFILE.budget,
+    format: s.format || DEFAULT_INTAKE_PROFILE.format,
+  };
+}
+
+/** Maps outbound-style Intake profile → triage_config fields for scoring (unchanged contract + optional intake_snapshot). */
+function buildTriageConfigFromProfile(profile, lumaEnrich) {
+  const le = lumaEnrich || {};
+  const primary = primaryGoalLabel(profile);
+  const idealLines = [
+    `Target role: ${profile.role || ""}`.trim(),
+    `Seniority: ${(profile.seniority || []).join(", ")}`,
+    `Company stage (ICP): ${(profile.coStage || []).join(", ")}`,
+    `Years of experience: ${(profile.yoe || []).join(", ")}`,
+    `Discovery sources: ${(profile.sources || []).join(", ")}`,
+  ];
+  if (le.ideal_attendee_profile) {
+    idealLines.push(`Additional context (Luma): ${le.ideal_attendee_profile}`);
+  }
+  const ideal_attendee_profile = idealLines.join("\n");
+
+  const event_goal = [
+    `Primary objective: ${primary} (same framing as outbound Intake).`,
+    `${profile.format} in ${profile.city}${profile.eventDate ? ` · ${profile.eventDate}` : ""} · ${profile.headcount} guests`,
+    profile.eventName && `Listed event name: ${profile.eventName}`,
+    le.event_description && `Description: ${le.event_description}`,
+  ].filter(Boolean).join("\n");
+
+  const hard_filters = [
+    ...(profile.coStage || []).map((x) => `Gate: ICP company stage includes ${x}`),
+    ...(profile.seniority || []).map((x) => `Gate: ICP seniority includes ${x}`),
+    ...(profile.yoe || []).map((x) => `Gate: experience band ${x}`),
+    ...(Array.isArray(le.hard_filters) ? le.hard_filters : []),
+  ];
+
+  const srcExtras = (profile.sources || []).filter((k) => k !== "linkedin");
+  const nice_to_have_signals = [
+    ...srcExtras.map((k) => `Bonus if strong ${k} / public artifacts`),
+    ...(Array.isArray(le.nice_to_have_signals) ? le.nice_to_have_signals : []),
+  ];
+  const anti_fit_examples = Array.isArray(le.anti_fit_examples) ? [...le.anti_fit_examples] : [];
+
+  const funnel = Math.round(profile.headcount / 0.6);
+  const cps = Math.round(profile.budget / Math.max(profile.headcount, 1));
+  const notes = [
+    `Budget: $${Number(profile.budget).toLocaleString()}`,
+    `Illustrative funnel target: ${funnel} good-fits · cost/seat $${cps}`,
+    le.reviewer_notes,
+  ].filter(Boolean).join("\n");
+
+  return {
+    event_type: FORMAT_TO_TRIAGE_EVENT_TYPE[profile.format] || "sponsor_cafe",
+    sponsor_name: le.sponsor_name || null,
+    event_goal,
+    ideal_attendee_profile,
+    hard_filters,
+    nice_to_have_signals,
+    anti_fit_examples,
+    capacity: profile.headcount,
+    notes,
+    intake_snapshot: { ...profile },
+  };
+}
 
 const REC_META = {
   accept:        { color: "rec-accept",   label: "Accept" },
@@ -279,28 +368,23 @@ function TriageLanding({ onSignedIn }) {
 
 
 // ─── Stage 01 : Configure ─────────────────────────────────────
+// Mirrors outbound Intake field-for-field (see App.jsx Intake). Values are
+// deterministically serialized into triage_config for the existing scorer.
 
-function ConfigStep({ user, eventId, setEventId, onNext }) {
-  const [eventName, setEventName] = useState("");
-  const [eventType, setEventType] = useState("sponsor_cafe");
-  const [sponsorName, setSponsorName] = useState("");
-  const [eventGoal, setEventGoal] = useState("");
-  const [idealProfile, setIdealProfile] = useState("");
-  const [hardFilters, setHardFilters] = useState("");          // newline-separated
-  const [niceToHave, setNiceToHave] = useState("");
-  const [antiFit, setAntiFit] = useState("");
-  const [capacity, setCapacity] = useState("");
-  const [notes, setNotes] = useState("");
+function ConfigStep({ user: _user, eventId, setEventId, onNext }) {
+  const [profile, setProfile] = useState(() => ({ ...DEFAULT_INTAKE_PROFILE }));
+  /** Luma-only enrichments merged into triage_config (suggestions + description). */
+  const [lumaEnrich, setLumaEnrich] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  // Luma import : paste a lu.ma URL, server scrapes the public page,
-  // we pre-fill the form. Saves ~30s of retyping and gives the rubric
-  // synthesizer real event context.
   const [lumaUrl, setLumaUrl] = useState("");
   const [lumaLoading, setLumaLoading] = useState(false);
   const [lumaError, setLumaError] = useState(null);
   const [lumaImported, setLumaImported] = useState(null);
+
+  const set = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
+  const toggle = (k, v) => setProfile((p) => ({ ...p, [k]: toggleIn(p[k], v) }));
 
   const handleLumaImport = async () => {
     setLumaError(null);
@@ -314,31 +398,27 @@ function ConfigStep({ user, eventId, setEventId, onNext }) {
       const res = await api.previewLumaEvent(url);
       const ev = res.event || {};
       const sug = res.suggestions || {};
-      // ── Direct fields from the Luma page ────────────────────────────
-      if (ev.name) setEventName(ev.name);
-      if (ev.description) {
-        setEventGoal((prev) => prev || ev.description);
-      }
-      if (ev.capacity && !capacity) setCapacity(String(ev.capacity));
-      if (ev.location) {
-        setNotes((prev) => prev ? prev : `Location: ${ev.location}`);
-      }
-      // ── Claude-inferred fields (don't overwrite operator typing) ────
-      if (sug.sponsor_name) {
-        setSponsorName((prev) => prev || sug.sponsor_name);
-      }
-      if (sug.ideal_attendee_profile) {
-        setIdealProfile((prev) => prev || sug.ideal_attendee_profile);
-      }
-      if (Array.isArray(sug.hard_filters) && sug.hard_filters.length) {
-        setHardFilters((prev) => prev || sug.hard_filters.join("\n"));
-      }
-      if (Array.isArray(sug.anti_fit_examples) && sug.anti_fit_examples.length) {
-        setAntiFit((prev) => prev || sug.anti_fit_examples.join("\n"));
-      }
-      if (Array.isArray(sug.nice_to_have_signals) && sug.nice_to_have_signals.length) {
-        setNiceToHave((prev) => prev || sug.nice_to_have_signals.join("\n"));
-      }
+      setProfile((p) => ({
+        ...p,
+        eventName: ev.name || p.eventName,
+        headcount: ev.capacity != null ? Number(ev.capacity) : p.headcount,
+        city: (ev.location && String(ev.location).trim()) || p.city,
+      }));
+      setLumaEnrich((prev) => ({
+        ...prev,
+        event_description: ev.description || prev.event_description,
+        sponsor_name: (sug.sponsor_name || prev.sponsor_name || "").trim() || undefined,
+        ideal_attendee_profile: sug.ideal_attendee_profile || prev.ideal_attendee_profile,
+        hard_filters: Array.isArray(sug.hard_filters) && sug.hard_filters.length
+          ? sug.hard_filters
+          : prev.hard_filters,
+        anti_fit_examples: Array.isArray(sug.anti_fit_examples) && sug.anti_fit_examples.length
+          ? sug.anti_fit_examples
+          : prev.anti_fit_examples,
+        nice_to_have_signals: Array.isArray(sug.nice_to_have_signals) && sug.nice_to_have_signals.length
+          ? sug.nice_to_have_signals
+          : prev.nice_to_have_signals,
+      }));
       setLumaImported(ev);
     } catch (err) {
       setLumaError(err.message || "Could not import from Luma.");
@@ -347,8 +427,6 @@ function ConfigStep({ user, eventId, setEventId, onNext }) {
     }
   };
 
-  // If an eventId was already created (operator backed out and came back),
-  // hydrate the form from the saved config.
   useEffect(() => {
     if (!eventId) return;
     let cancelled = false;
@@ -356,22 +434,18 @@ function ConfigStep({ user, eventId, setEventId, onNext }) {
       try {
         const cfg = await api.getTriageConfig(eventId);
         if (cancelled) return;
-        setEventType(cfg.event_type || "sponsor_cafe");
-        setSponsorName(cfg.sponsor_name || "");
-        setEventGoal(cfg.event_goal || "");
-        setIdealProfile(cfg.ideal_attendee_profile || "");
-        setHardFilters((cfg.hard_filters || []).join("\n"));
-        setNiceToHave((cfg.nice_to_have_signals || []).join("\n"));
-        setAntiFit((cfg.anti_fit_examples || []).join("\n"));
-        setCapacity(cfg.capacity ? String(cfg.capacity) : "");
-        setNotes(cfg.notes || "");
+        if (cfg.intake_snapshot) {
+          setProfile(normalizeIntakeSnapshot(cfg.intake_snapshot));
+          setLumaEnrich({});
+        } else {
+          if (cfg.capacity != null) {
+            setProfile((p) => ({ ...p, headcount: cfg.capacity }));
+          }
+        }
       } catch {}
     })();
     return () => { cancelled = true; };
   }, [eventId]);
-
-  const splitLines = (s) =>
-    (s || "").split("\n").map((x) => x.trim()).filter(Boolean);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -380,40 +454,34 @@ function ConfigStep({ user, eventId, setEventId, onNext }) {
     try {
       let id = eventId;
       if (!id) {
-        // Lightweight outbound-shaped Event with the bare minimum fields :
-        // backend POST /events expects a few required outbound fields, but
-        // triage doesn't really use them. Defaults are fine.
         const ev = await api.createEvent({
-          role: eventName || "(triage event)",
-          seniority: ["Staff+"],
-          co_stage: ["Seed"],
-          headcount: parseInt(capacity, 10) || 40,
-          format: "Sit-down dinner",
-          city: "",
-          goal: ["Hiring pipeline"],
-          budget: 0,
-          sources: ["linkedin"],
+          role: profile.role,
+          seniority: profile.seniority,
+          co_stage: profile.coStage,
+          yoe: profile.yoe,
+          headcount: profile.headcount,
+          format: profile.format,
+          city: profile.city,
+          event_date: profile.eventDate,
+          event_name: profile.eventName,
+          goal: profile.goal,
+          budget: profile.budget,
+          sources: profile.sources,
         });
         id = ev.id;
         setEventId(id);
       }
-      await api.setTriageConfig(id, {
-        event_type: eventType,
-        sponsor_name: sponsorName.trim() || null,
-        event_goal: eventGoal.trim() || null,
-        ideal_attendee_profile: idealProfile.trim() || null,
-        hard_filters: splitLines(hardFilters),
-        nice_to_have_signals: splitLines(niceToHave),
-        anti_fit_examples: splitLines(antiFit),
-        capacity: capacity ? parseInt(capacity, 10) : null,
-        notes: notes.trim() || null,
-      });
+      await api.setTriageConfig(id, buildTriageConfigFromProfile(profile, lumaEnrich));
       onNext();
     } catch (err) {
       setError(err.message || "Could not save config.");
       setSaving(false);
     }
   };
+
+  const fmt = profile.format && FORMAT_CONFIG[profile.format]
+    ? profile.format
+    : "Sit-down dinner";
 
   return (
     <form className="stage" onSubmit={handleSubmit}>
@@ -461,67 +529,84 @@ function ConfigStep({ user, eventId, setEventId, onNext }) {
 
       <div className="form-grid">
         <section className="card">
-          <h3><span className="card-num">A</span> Sponsor + event</h3>
-
-          <label>Event name <span className="hint">: just for your reference</span></label>
-          <input className="text-in" value={eventName}
-            onChange={(e) => setEventName(e.target.value)}
-            placeholder="e.g. Founders dinner" />
-
-          <label>Event type</label>
+          <h3><span className="card-num">A</span> Ideal attendee (ICP)</h3>
+          <label>Target role</label>
+          <input className="text-in" value={profile.role}
+            onChange={(e) => set("role", e.target.value)} />
+          <label>Seniority</label>
           <div className="chip-row">
-            {EVENT_TYPES.map((t) => (
-              <Chip key={t.key} active={eventType === t.key} onClick={() => setEventType(t.key)}>{t.label}</Chip>
+            {SENIORITY.map((s) => (
+              <Chip key={s} active={profile.seniority.includes(s)} onClick={() => toggle("seniority", s)}>{s}</Chip>
             ))}
           </div>
-
-          <label>Sponsor / partner name</label>
-          <input className="text-in" value={sponsorName}
-            onChange={(e) => setSponsorName(e.target.value)}
-            placeholder="Sponsor or partner" />
-
-          <label>Capacity <span className="hint">: optional</span></label>
-          <input className="text-in" value={capacity} type="number" min="1"
-            onChange={(e) => setCapacity(e.target.value)}
-            placeholder="" />
+          <label>Company stage</label>
+          <div className="chip-row">
+            {STAGES_CO.map((s) => (
+              <Chip key={s} active={profile.coStage.includes(s)} onClick={() => toggle("coStage", s)}>{s}</Chip>
+            ))}
+          </div>
+          <label>Years of experience</label>
+          <div className="chip-row">
+            {YOE.map((y) => (
+              <Chip key={y} active={profile.yoe.includes(y)} onClick={() => toggle("yoe", y)}>{y}</Chip>
+            ))}
+          </div>
+          <label>Sources <span className="hint">: more sources, longer search</span></label>
+          <div className="chip-row">
+            {SOURCES.map((src) => (
+              <Chip key={src.key}
+                active={profile.sources.includes(src.key)}
+                onClick={() => { if (!src.locked) toggle("sources", src.key); }}>
+                {src.label}
+              </Chip>
+            ))}
+          </div>
         </section>
 
         <section className="card">
-          <h3><span className="card-num">B</span> Who&apos;s the right room</h3>
-
-          <label>Event goal <span className="hint">: what should this room produce for the sponsor?</span></label>
-          <textarea className="text-in" value={eventGoal} rows={3}
-            onChange={(e) => setEventGoal(e.target.value)}
-            placeholder="What should this room produce for the sponsor?" />
-
-          <label>Ideal attendee profile</label>
-          <textarea className="text-in" value={idealProfile} rows={3}
-            onChange={(e) => setIdealProfile(e.target.value)}
-            placeholder="Who is the right attendee?" />
-
-          <label>Hard filters <span className="hint">: one per line. Violations cap the score.</span></label>
-          <textarea className="text-in" value={hardFilters} rows={3}
-            onChange={(e) => setHardFilters(e.target.value)}
-            placeholder="One filter per line" />
+          <h3><span className="card-num">B</span> Event details</h3>
+          <label>Event name</label>
+          <input className="text-in" value={profile.eventName}
+            placeholder="e.g. Founders Dinner"
+            onChange={(e) => set("eventName", e.target.value)} />
+          <label>Headcount : <strong>{profile.headcount}</strong> guests</label>
+          <input type="range" min="0" max="160" step="2" value={profile.headcount}
+            onChange={(e) => set("headcount", +e.target.value)} className="range-in" />
+          <label>Format</label>
+          <div className="chip-row">
+            {FORMATS.map((f) => (
+              <Chip key={f} active={profile.format === f} onClick={() => set("format", f)}>{f}</Chip>
+            ))}
+          </div>
+          <p className="topo-inline"><CornerDownRight size={11} /> {FORMAT_CONFIG[fmt].topo}</p>
+          <label>City</label>
+          <input className="text-in" value={profile.city} onChange={(e) => set("city", e.target.value)} />
+          <label>Date</label>
+          <input type="date" className="text-in" value={profile.eventDate}
+            onChange={(e) => set("eventDate", e.target.value)} />
         </section>
 
         <section className="card">
-          <h3><span className="card-num">C</span> Anti-fit + nice-to-have</h3>
-
-          <label>Anti-fit examples <span className="hint">: categories the sponsor does NOT want</span></label>
-          <textarea className="text-in" value={antiFit} rows={4}
-            onChange={(e) => setAntiFit(e.target.value)}
-            placeholder="One per line" />
-
-          <label>Nice-to-have signals <span className="hint">: bonus points if applicants show these</span></label>
-          <textarea className="text-in" value={niceToHave} rows={3}
-            onChange={(e) => setNiceToHave(e.target.value)}
-            placeholder="One per line" />
-
-          <label>Notes for reviewers <span className="hint">: optional</span></label>
-          <textarea className="text-in" value={notes} rows={2}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="" />
+          <h3><span className="card-num">C</span> Goal &amp; budget</h3>
+          <label>Primary objective <span className="hint">: first selected drives ROI math</span></label>
+          <div className="chip-row">
+            {GOALS.map((g) => (
+              <Chip key={g} active={profile.goal.includes(g)} onClick={() => toggle("goal", g)}>{g}</Chip>
+            ))}
+          </div>
+          <label>Budget : <strong>${profile.budget.toLocaleString()}</strong></label>
+          <input type="range" min="0" max="40000" step="500" value={profile.budget}
+            onChange={(e) => set("budget", +e.target.value)} className="range-in" />
+          <div className="derived">
+            <div>
+              <span className="derived-k">Funnel target</span>
+              <span className="derived-v">{Math.round(profile.headcount / 0.6)} good-fits</span>
+            </div>
+            <div>
+              <span className="derived-k">Cost / seat</span>
+              <span className="derived-v">${Math.round(profile.budget / profile.headcount)}</span>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -536,7 +621,7 @@ function ConfigStep({ user, eventId, setEventId, onNext }) {
           {saving ? (
             <><Loader2 className="spin" size={16} /> Saving…</>
           ) : (
-            <>Continue <ArrowRight size={16} /></>
+            <>Run agent pipeline <ArrowRight size={16} /></>
           )}
         </button>
       </div>

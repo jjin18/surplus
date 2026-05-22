@@ -138,7 +138,8 @@ Return ONLY JSON. No prose, no markdown fences. Schema:
 
 
 def _build_user_message(triage_config: dict, pool_summary: dict) -> str:
-    parts = ["TRIAGE CONFIG", json.dumps(triage_config, indent=2),
+    cfg = {k: v for k, v in triage_config.items() if k != "intake_snapshot"}
+    parts = ["TRIAGE CONFIG", json.dumps(cfg, indent=2),
              "", "APPLICANT POOL SUMMARY",
              json.dumps(pool_summary, indent=2),
              "", "Generate the rubric JSON now."]

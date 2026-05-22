@@ -145,7 +145,7 @@ export default function SharedIntake({ initialProfile, onSubmitted, onError }) {
   };
 
   // Auto-consume a pending Luma URL left in sessionStorage by the
-  // landing topbar's TopbarLumaEntry. Pop-and-fire-once : remove the
+  // landing intake's IntakeLumaEntry (signed-out). Pop-and-fire-once : remove the
   // key before kicking off the import so a refresh doesn't re-import.
   // Empty deps : runs exactly once on mount, intentional.
   useEffect(() => {
