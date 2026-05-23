@@ -441,3 +441,48 @@ def test_parse_result_no_city_cfg_is_no_op():
     }
     cand = exa._parse_result("linkedin", nyc_result, None)
     assert cand is not None
+
+
+# ---- snippet skip-list ----------------------------------------------------
+
+def test_should_skip_snippet_fetch_linkedin_profile():
+    assert exa.should_skip_snippet_fetch("https://www.linkedin.com/in/daniel-wang") is True
+    assert exa.should_skip_snippet_fetch("https://linkedin.com/company/acme") is True
+
+
+def test_should_skip_snippet_fetch_luma_checkin():
+    assert exa.should_skip_snippet_fetch("https://luma.com/check-in/evt-x?pk=abc") is True
+    assert exa.should_skip_snippet_fetch("https://lu.ma/e?pk=secret") is False  # not luma.com host
+    assert exa.should_skip_snippet_fetch("https://luma.com/event/xyz?pk=secret") is True
+
+
+def test_should_skip_snippet_fetch_keeps_other_urls():
+    assert exa.should_skip_snippet_fetch("https://acme.com/about") is False
+    assert exa.should_skip_snippet_fetch("") is False
+    assert exa.should_skip_snippet_fetch(None) is False
+
+
+def test_fetch_url_snippet_skips_known_blocked_without_network(monkeypatch):
+    """Blocked URLs should return "" without ever calling httpx."""
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+
+    def explode(*a, **kw):  # pragma: no cover : asserts via raise on call
+        raise AssertionError("httpx should not be called for skipped URLs")
+
+    monkeypatch.setattr("httpx.Client", explode)
+    assert exa.fetch_url_snippet("https://www.linkedin.com/in/daniel-wang") == ""
+    assert exa.fetch_url_snippet("https://luma.com/check-in/evt-x?pk=abc") == ""
+
+
+def test_fetch_url_snippet_returns_empty_on_502(monkeypatch):
+    """HTTP errors return "" without raising : enrichment is best-effort."""
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+
+    fake_resp = MagicMock(status_code=502, text="Bad gateway")
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.post.return_value = fake_resp
+    monkeypatch.setattr("httpx.Client", lambda *a, **kw: fake_client)
+
+    # acme.com isn't in the skip list, so it goes through the network path
+    assert exa.fetch_url_snippet("https://acme.com/about") == ""
