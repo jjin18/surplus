@@ -36,6 +36,36 @@ def exa_available() -> bool:
     return bool(_api_key())
 
 
+def should_skip_snippet_fetch(url: str) -> bool:
+    """URLs we never bother fetching : known to 502 through Cloudflare or
+    require an authenticated session. Callers treat the result as a soft
+    skip (empty snippet) rather than a failure.
+
+    Domains/paths covered:
+      - LinkedIn profile / company pages (anti-bot block)
+      - Luma check-in URLs (auth-gated, leaks pk= tokens to logs)
+    """
+    u = (url or "").lower()
+    if not u:
+        return False
+    if "linkedin.com/in/" in u or "linkedin.com/company/" in u:
+        return True
+    if "luma.com/check-in" in u:
+        return True
+    if "luma.com" in u and "pk=" in u:
+        return True
+    return False
+
+
+def _skip_reason(url: str) -> str:
+    u = (url or "").lower()
+    if "linkedin.com" in u:
+        return "skipped_linkedin_blocked_domain"
+    if "luma.com/check-in" in u or ("luma.com" in u and "pk=" in u):
+        return "skipped_private_luma_url"
+    return "skipped"
+
+
 def fetch_url_snippet(url: str, max_chars: int = 1500) -> str:
     """Fetch a URL's page text via Exa's /contents endpoint.
 
@@ -46,8 +76,15 @@ def fetch_url_snippet(url: str, max_chars: int = 1500) -> str:
 
     Caches in process for 1h to avoid re-fetching the same LinkedIn URL
     when the same applicant gets re-evaluated.
+
+    Known-blocked URLs (LinkedIn profiles, Luma check-in links) short-
+    circuit to "" without a network call : Cloudflare anti-bot 502s the
+    request anyway, so the round-trip is just log noise.
     """
     if not url or not exa_available():
+        return ""
+    if should_skip_snippet_fetch(url):
+        print(f"  [exa.snippet.skip] url={url} reason={_skip_reason(url)}")
         return ""
     # Module-level cache : OK to share across requests.
     cache = _url_snippet_cache()
@@ -66,14 +103,14 @@ def fetch_url_snippet(url: str, max_chars: int = 1500) -> str:
                 json={"urls": [url], "text": True},
             )
     except Exception as exc:
-        print(f"  [exa.fetch_url_snippet] {url}: "
-              f"{type(exc).__name__}: {exc}")
+        print(f"  [exa.snippet.failed] url={url} "
+              f"error={type(exc).__name__}: {exc}")
         return ""
     if resp.status_code >= 400:
         # Loud on auth / quota failures so a dead key doesn't quietly
         # collapse enrichment for the whole event.
-        print(f"  [exa.fetch_url_snippet] {url}: "
-              f"HTTP {resp.status_code} : {resp.text[:160]}")
+        print(f"  [exa.snippet.failed] url={url} "
+              f"http={resp.status_code} body={resp.text[:160]}")
         return ""
     try:
         data = resp.json()
@@ -81,9 +118,11 @@ def fetch_url_snippet(url: str, max_chars: int = 1500) -> str:
         return ""
     results = data.get("results") or []
     if not results:
+        print(f"  [exa.snippet.ok] url={url} text_chars=0")
         return ""
     text = (results[0].get("text") or "").strip()
     cache[url] = (now, text)
+    print(f"  [exa.snippet.ok] url={url} text_chars={len(text)}")
     return text[:max_chars]
 
 
