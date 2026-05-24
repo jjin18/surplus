@@ -44,12 +44,13 @@ from ..auth import (
     clear_session_cookie,
     create_session,
     current_user,
+    require_paid_to_connect_linkedin,
     revoke_session,
     set_last_account_cookie,
     set_session_cookie,
 )
 from ..db import get_db
-from ..models import AuthState, User
+from ..models import AuthState, Session, User
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -213,12 +214,28 @@ async def linkedin_start(
     expires = _unipile_iso_timestamp(_utcnow() + timedelta(hours=1))
     failure_url = f"{base}/signin?error=linkedin_auth_failed"
 
+    # ── Paywall : signed-in users must have paid before connecting LinkedIn.
+    # Anonymous callers (first-time signup via LinkedIn) sail through
+    # unchanged. _resolve_returning_user reads the cookies; if a
+    # signed-in User row is returned and they haven't paid, reject with
+    # 402 payment_required (frontend opens Stripe Checkout).
+    returning = _resolve_returning_user(request, db)
+    # Also check the active session cookie : _resolve_returning_user reads
+    # the last_account cookie which can be stale; the session cookie is
+    # the source of truth for "is someone signed in right now."
+    session_token = (request.cookies.get(SESSION_COOKIE) or "").strip()
+    active_user = (db.query(User).join(Session)
+                   .filter(Session.session_token == session_token,
+                           Session.revoked_at.is_(None))
+                   .first()
+                   if session_token else None)
+    require_paid_to_connect_linkedin(active_user)
+
     # Same-browser returning user? Use reconnect (reuses their Unipile
     # account, no new seat). Pre-fill AuthState.user_id so the callback
     # doesn't need to wait for a webhook to correlate by state_token :
     # the reconnect body strips `name`, so the webhook can't tag the
     # state itself anyway.
-    returning = _resolve_returning_user(request, db)
     if returning is not None:
         auth_state.user_id = returning.id
         db.commit()
@@ -465,6 +482,30 @@ async def linkedin_callback(
         fields = _extract_profile_fields(profile)
         user = db.query(User).filter(User.unipile_account_id == acct).first()
         now = _utcnow()
+        if user is None:
+            # Dedup before insert : if the operator's site-data was cleared
+            # (or they signed up via triage / email-only first), the new
+            # Unipile account will have a fresh acct id but the SAME person
+            # is behind it. Match on stable LinkedIn identifiers first
+            # (provider_id then public_id), then fall back to email. Any
+            # match means we CLAIM that existing User row : its Stripe
+            # paid_at / customer_id / event ownership all stay intact, and
+            # we just point its unipile_account_id at the new acct.
+            for key, val in (
+                ("linkedin_provider_id", fields.get("linkedin_provider_id")),
+                ("linkedin_public_id", fields.get("linkedin_public_id")),
+                ("email", fields.get("email")),
+            ):
+                if not val:
+                    continue
+                user = db.query(User).filter(
+                    getattr(User, key) == val
+                ).first()
+                if user is not None:
+                    print(f"  [auth.dedup] claimed existing user.id={user.id} "
+                          f"via {key} : new unipile_account_id={acct}")
+                    user.unipile_account_id = acct
+                    break
         if user:
             for k, v in fields.items():
                 if v:
