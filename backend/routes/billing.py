@@ -82,14 +82,38 @@ def create_checkout_session(
     db: DbSession = Depends(get_db),
     user: models.User = Depends(current_user),
 ) -> JSONResponse:
-    """Create a one-time-payment Checkout Session for `user`. The session's
-    `client_reference_id` is set to `user.id` so the webhook can locate
-    the right row; `customer_email` pre-fills Stripe's form."""
+    """Return the checkout URL the SPA should redirect to.
+
+    Two modes, controlled by env :
+      - STRIPE_PAYMENT_LINK set : return that URL with client_reference_id
+        and prefilled_email appended so the webhook can find this user.
+        No Stripe API call : the link is preconfigured in the dashboard.
+      - STRIPE_PRICE_ID set     : create a Checkout Session via the API,
+        return its URL. Used when we want per-session customization.
+
+    Either way the response shape is { url, session_id? }, so the SPA
+    doesn't have to care which mode is active.
+    """
+    payment_link = _env("STRIPE_PAYMENT_LINK")
+    if payment_link:
+        # Append client_reference_id + prefilled_email so the webhook can
+        # locate the right user. Stripe appends these as standard params
+        # on Payment Links : same behavior as Checkout Sessions, just
+        # configured upfront in the dashboard instead of per-call.
+        from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
+        parsed = urlparse(payment_link)
+        params = dict(parse_qsl(parsed.query))
+        params["client_reference_id"] = str(user.id)
+        if user.email:
+            params["prefilled_email"] = user.email
+        url = urlunparse(parsed._replace(query=urlencode(params)))
+        return JSONResponse({"url": url})
+
     price_id = _env("STRIPE_PRICE_ID")
     if not price_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="STRIPE_PRICE_ID not configured",
+            detail="neither STRIPE_PAYMENT_LINK nor STRIPE_PRICE_ID configured",
         )
     stripe = _stripe()
     success_url, cancel_url = _success_cancel_urls(request)
