@@ -1,9 +1,10 @@
-# fly.toml app configuration file generated for surplus-prod on 2026-05-20T04:08:55Z
+# fly.toml app configuration for the surplus production app (surplus.fly.dev,
+# fronted by Cloudflare at www.surpluslayer.com).
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = "surplus-prod"
+app = "surplus"
 primary_region = "sjc"
 
 [build]
