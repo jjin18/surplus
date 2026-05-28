@@ -423,8 +423,13 @@ def judge_relevance_batch(candidates: list[dict], icp: dict) -> dict[str, tuple[
         cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
         print(f"  [llm] judge_relevance_batch failed: {type(exc).__name__}: {exc}"
               + (f"  (cause: {type(cause).__name__}: {cause})" if cause else ""))
-        # Fail-closed: every candidate gets dropped with the error as reason.
-        return {c["identity"]: (False, f"verdict error: {exc}") for c in candidates}
+        # Fail-OPEN on API errors : the judge is a SECONDARY filter (discovery
+        # already screened candidates for ICP fit), so a transient Haiku
+        # outage / rate limit / connection blip shouldn't black-hole every
+        # surfaced candidate. Better to surface possibly-noisy candidates
+        # than dead-end on "No candidates surfaced." Matches the timeout
+        # fail-open at _judge_all's caller in prospector.py.
+        return {c["identity"]: (True, f"judge unavailable: {exc}") for c in candidates}
 
     saw_tool_use = False
     for block in response.content:

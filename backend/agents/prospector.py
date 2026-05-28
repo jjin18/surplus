@@ -231,6 +231,40 @@ async def prospect(
         print(f"  [prospect] judge step took {time.time() - judge_start:.1f}s  "
               f"({len(out)} survived)")
 
+    # Top-level safety net : if discovery + judge both ended up returning
+    # zero, fall back to the mock POOL so the user never dead-ends on
+    # "No candidates surfaced." Common triggers : Anthropic + Exa both
+    # down, web_search timing out for every adapter, judge dropping every
+    # candidate as off-topic. The POOL is generic but workable and lets
+    # the rest of the flow exercise. Logged loud so the operator can spot
+    # the underlying discovery failure in the backend logs.
+    if not out:
+        from .sources.base import POOL
+        pool_fallback = [
+            {
+                "identity": p["identity"],
+                "name": p["name"],
+                "sources": "linkedin",
+                "role": p.get("role"),
+                "company": p.get("company"),
+                "seniority": p.get("seniority"),
+                "offers": p.get("offers"),
+                "seeks": p.get("seeks"),
+                "li_resolved": True,
+                "linkedin_url": p.get("linkedin_url"),
+                "works_on": p.get("works_on") or "",
+                "gh_stars": p.get("gh_stars") or 0,
+                "x_followers": p.get("x_followers") or 0,
+                "scholar_citations": p.get("scholar_citations") or 0,
+                "side": p.get("side") or "Builds",
+            }
+            for p in POOL if p.get("linkedin_url")
+        ]
+        if pool_fallback:
+            print(f"  [prospect] ALL discovery returned empty : surfacing "
+                  f"{len(pool_fallback)} mock POOL candidates as fallback")
+            out = pool_fallback
+
     # Only cache non-empty results : caching an empty pool would lock in
     # a transient LLM blip for the full TTL and give the operator a
     # permanently broken event until redeploy.
