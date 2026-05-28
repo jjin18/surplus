@@ -40,6 +40,13 @@ const STAGES = [
   { id: 4, key: "roi",       label: "ROI ledger",   icon: TrendingUp },
 ];
 
+// Stages actually rendered in the rail. ROI ledger is hidden platform-
+// wide (PR #165) for both signed-in AND anonymous views. STAGES stays
+// intact so STAGE_INDEX / VALID_STAGES keep their numeric mapping;
+// downstream effects that key off "roi" still work. Any new StageRail
+// caller should use VISIBLE_STAGES — it's the safe default.
+const VISIBLE_STAGES = STAGES.filter((s) => s.key !== "roi");
+
 // Multi-select helpers: profile.seniority/coStage/goal are arrays. These
 // turn them into readable phrases for the outreach templates without
 // requiring a single canonical value.
@@ -143,7 +150,7 @@ const THRESHOLD = 70;
 const SIDE_CLASS = { Builds: "side-build", Hires: "side-hire", Operates: "side-op" };
 
 // ---- shared UI ----------------------------------------------
-function StageRail({ stage, setStage, maxReached, mutedIds = [], stages = STAGES }) {
+function StageRail({ stage, setStage, maxReached, mutedIds = [], stages = VISIBLE_STAGES }) {
   return (
     <nav className="rail">
       {stages.map((s) => {
@@ -2361,7 +2368,7 @@ export default function App() {
     // screen, and the "Settle ROI" advance for every user. Nothing is
     // deleted : the stage just isn't surfaced anymore.
     const hideRoi = true;
-    const visibleStages = STAGES.filter((s) => s.key !== "roi");
+    const visibleStages = VISIBLE_STAGES;  // module-level constant; same intent
     // Both paths land on functional content at stage 03 (Prospects for
     // outbound, ReviewStep for inbound). No muted bubbles : the UI
     // loophole is that the same rail slot carries different content
@@ -2706,7 +2713,7 @@ function InboundReviewWithAdvance({ eventId, onAdvance }) {
 function UnifiedShell({
   user, onLogout, apiError, onClearError, children,
   stageIdx = 0, mutedIds = [], eventName, eventId, onStageJump,
-  stages = STAGES,
+  stages = VISIBLE_STAGES,
 }) {
   const noop = () => {};
   return (
