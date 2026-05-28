@@ -2494,20 +2494,53 @@ export default function App() {
         // already have a LinkedIn-backed account (paid or not) and just
         // need to re-authenticate. Route to Unipile-hosted LinkedIn auth.
         //
+        // Two pre-flight branches before calling /linkedin/start :
+        //
+        //   1. Demo user clicked Sign in : they want to leave the demo
+        //      and become themselves. Clear the demo session FIRST so the
+        //      backend treats the LinkedIn start as anonymous (which
+        //      require_paid_to_connect_linkedin lets through). Otherwise
+        //      the backend sees an unpaid demo session and returns
+        //      402 payment_required, which surfaced as a raw JSON alert
+        //      in PR #174.
+        //
+        //   2. Signed-in unpaid non-demo user : same gating problem, but
+        //      semantically different — they're a real user who never
+        //      paid. Route them to Stripe instead of failing.
+        //
         // Dedup-by-linkedin_provider_id in routes/auth.py:526 reattaches
         // their existing User row (preserving paid_at + stripe_customer_id
-        // + every event they own) when they sign in again. New users who
-        // somehow click this instead of "Get started" go through the same
-        // path : LinkedIn-connect succeeds, then their next send attempt
-        // hits payment_required (402) which surfaces the Stripe modal.
-        //
-        // Was previously calling api.startCheckout() — that flow is for
-        // the "Get started" / new-signup CTA, not the sign-in CTA.
+        // + every event they own) when they sign back in.
         try {
+          if (user?.is_demo) {
+            // Best-effort logout : even if the network blip eats it, the
+            // /linkedin/start route doesn't fail closed for anonymous
+            // callers, so the next step still works.
+            try { await api.logout(); } catch {}
+          } else if (user && !user.paid_at) {
+            // Real signed-in user who hasn't paid yet. /linkedin/start
+            // will 402 them. Skip straight to Stripe Checkout instead of
+            // bouncing them through a guaranteed-to-fail LinkedIn flow.
+            const r = await api.startCheckout();
+            if (r?.url) { window.location.href = r.url; return; }
+          }
           const r = await api.startLinkedinAuth();
           if (r?.url) window.location.href = r.url;
         } catch (e) {
-          alert("Could not start LinkedIn sign-in: " + e.message);
+          // 402 here means the backend gated the LinkedIn-start behind
+          // payment despite our pre-flight. Fall back to Stripe instead
+          // of dumping JSON at the user.
+          const code = e?.body?.detail?.code || e?.body?.code;
+          if (e?.status === 402 || code === "payment_required") {
+            try {
+              const r = await api.startCheckout();
+              if (r?.url) { window.location.href = r.url; return; }
+            } catch (e2) {
+              alert("Could not start checkout: " + (e2.message || "unknown"));
+              return;
+            }
+          }
+          alert("Could not start LinkedIn sign-in: " + (e.message || "unknown"));
         }
       }}
       onSwitchToTriage={() => switchMode("triage")}
