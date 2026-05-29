@@ -22,6 +22,7 @@ from ..auth import (
     current_user,
     get_owned_event,
     require_linkedin_connected,
+    require_outreach_enabled,
     require_paid_auto_outreach,
 )
 from ..db import get_db
@@ -85,6 +86,7 @@ def outreach_only(
     to approved before re-running.
     """
     ev = get_owned_event(event_id, user, db)
+    require_outreach_enabled()  # 503s when SURPLUS_KILL_OUTREACH is on
     if not ev.prospects:
         raise HTTPException(409, "no prospects : call /prospect first")
     targets = [p for p in ev.prospects
@@ -370,6 +372,7 @@ def send_connection_invite(
     if not p.linkedin_url:
         raise HTTPException(409, "prospect has no linkedin_url")
 
+    require_outreach_enabled()  # 503s when SURPLUS_KILL_OUTREACH is on
     require_linkedin_connected(user)
     provider = get_provider_for_user(user)
     status = _refresh_connection_status(provider, p)
@@ -463,6 +466,7 @@ def send_direct_message(
     if not p.linkedin_url:
         raise HTTPException(409, "prospect has no linkedin_url")
 
+    require_outreach_enabled()  # 503s when SURPLUS_KILL_OUTREACH is on
     require_linkedin_connected(user)
     provider = get_provider_for_user(user)
 
