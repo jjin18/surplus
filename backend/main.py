@@ -137,6 +137,54 @@ def health():
         db_dialect = ENGINE.dialect.name  # "postgresql" | "sqlite"
     except Exception:
         db_dialect = "unknown"
+
+    # ── Tech-Week visibility : external integration health snapshot ──
+    # Each is a cheap env-check or a single COUNT() ; bounded query
+    # work so polling /api/health stays cheap. All wrapped in try/except
+    # so any individual failure can't 5xx the healthcheck.
+    def _env_bool(*names: str) -> bool:
+        return any((os.environ.get(n) or "").strip() for n in names)
+
+    integrations = {
+        "anthropic_key_set":      _env_bool("ANTHROPIC_API_KEY"),
+        "exa_key_set":            _env_bool("EXA_API_KEY"),
+        "unipile_configured":     _env_bool("UNIPILE_DSN") and _env_bool("UNIPILE_API_KEY"),
+        "stripe_secret_set":      _env_bool("STRIPE_SECRET_KEY"),
+        "stripe_webhook_set":     _env_bool("STRIPE_WEBHOOK_SECRET"),
+        "stripe_payment_link_set": _env_bool("STRIPE_PAYMENT_LINK"),
+    }
+
+    # Stripe-webhook freshness proxy : the most recent paid_at timestamp.
+    # Tells you at a glance whether webhooks are landing. Skipped (= null)
+    # when the DB query fails so the healthcheck stays a 200.
+    last_webhook_paid_at = None
+    pending_replies_count = None
+    try:
+        from sqlalchemy import text
+        with ENGINE.connect() as conn:
+            row = conn.execute(text(
+                "SELECT MAX(paid_at) FROM users WHERE paid_at IS NOT NULL"
+            )).fetchone()
+            if row and row[0]:
+                last_webhook_paid_at = str(row[0])
+            row2 = conn.execute(text(
+                "SELECT COUNT(*) FROM pending_replies WHERE status = 'pending'"
+            )).fetchone()
+            if row2:
+                pending_replies_count = int(row2[0])
+    except Exception as exc:  # noqa: BLE001
+        # Don't fail the healthcheck on a DB blip ; surface it instead.
+        integrations["db_probe_error"] = f"{type(exc).__name__}"
+
+    # Kill switch — operators flip this in Railway's env to halt all
+    # outreach without a redeploy. Same mechanism as
+    # event_graph/messaging worker. Surfaced here so /api/health makes
+    # it visible at a glance.
+    kill_switch_engaged = (
+        (os.environ.get("SURPLUS_KILL_OUTREACH") or "").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+
     return {
         "service": "surplus-roi-engine",
         "version": "0.1.0",
@@ -147,6 +195,10 @@ def health():
         "image_ref": os.environ.get("FLY_IMAGE_REF"),
         "db_dialect": db_dialect,
         "db_url_set": bool((os.environ.get("DATABASE_URL") or "").strip()),
+        "integrations": integrations,
+        "last_paid_at": last_webhook_paid_at,
+        "pending_replies": pending_replies_count,
+        "outreach_kill_switch": kill_switch_engaged,
         "stages": ["01 intake", "02-03 pipeline", "04 matching", "05 roi"],
         "docs": "/docs",
     }

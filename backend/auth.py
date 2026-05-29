@@ -40,6 +40,44 @@ def is_demo_user(user) -> bool:
     email = (getattr(user, "email", "") or "").lower()
     return email == DEMO_USER_EMAIL or email.endswith(f"@{DEMO_USER_EMAIL_DOMAIN}")
 
+
+# ─── Emergency outreach kill switch ──────────────────────────────────
+# Set SURPLUS_KILL_OUTREACH=1 in Railway env to immediately halt every
+# LinkedIn send path without redeploying. Use cases :
+#   - Unipile workspace got rate-limited
+#   - Someone abuses your Unipile account
+#   - You see "wait, that template was wrong" mid-Tech-Week
+#
+# Surfaced on /api/health.outreach_kill_switch so any operator can see
+# at a glance whether the switch is flipped. require_outreach_enabled()
+# is called from the per-prospect invite/dm routes and from the batch
+# /outreach run path; both turn into 503 with a kill-switch message
+# (not 500 — this is intentional + observable).
+
+def kill_switch_engaged() -> bool:
+    """True when SURPLUS_KILL_OUTREACH is set to a truthy value."""
+    raw = (os.environ.get("SURPLUS_KILL_OUTREACH") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def require_outreach_enabled() -> None:
+    """Raises 503 with a kill-switch message when SURPLUS_KILL_OUTREACH is on.
+    Per-prospect and batch outreach routes call this before touching any
+    provider. Cheap : single env var lookup, no DB."""
+    if kill_switch_engaged():
+        print("  [outreach.kill_switch] blocked outbound send : "
+              "SURPLUS_KILL_OUTREACH is on")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "outreach_kill_switch",
+                "message": (
+                    "Outreach is temporarily paused by the operator. "
+                    "Try again in a few minutes."
+                ),
+            },
+        )
+
 # Long-lived cookie remembering which Unipile account this browser was
 # last signed in with. Lets /linkedin/start call Unipile's hosted-auth
 # with type=reconnect (reuses existing account = no new billed seat)
