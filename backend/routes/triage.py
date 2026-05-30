@@ -257,9 +257,8 @@ def upload_applicants(
         )
         db.add(a)
         new_applicants.append(a)
+    inserted = len(new_applicants)
     db.commit()
-    for a in new_applicants:
-        db.refresh(a)
 
     started = False
     if new_applicants:
@@ -268,12 +267,19 @@ def upload_applicants(
         background_tasks.add_task(_evaluate_event_async, ev.id)
         started = True
 
+    # NOTE: we deliberately do NOT serialize the inserted applicants back here.
+    # A real Luma export is 500+ rows; expire_on_commit means each one would
+    # need a refresh + lazy-load of its (still-empty) evaluation/decision, i.e.
+    # ~3 queries/row. At 530 rows that blew past Cloudflare's 100s edge timeout
+    # and returned a 524 — even though the rows committed fine, so every retry
+    # silently duplicated the whole event. The UI only reads `parsed`/`inserted`
+    # and then polls the list endpoint, so the per-row payload was pure waste.
     return UploadResult(
         event_id=ev.id,
         parsed=len(parsed_rows),
-        inserted=len(new_applicants),
+        inserted=inserted,
         evaluation_started=started,
-        applicants=[_applicant_out(a) for a in new_applicants],
+        applicants=[],
     )
 
 
