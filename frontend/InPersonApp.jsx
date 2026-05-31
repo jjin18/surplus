@@ -17,6 +17,7 @@ import jsQR from "jsqr";
 import {
   Camera, Link2, Search, Send, Bookmark, ArrowLeft, Check, Loader2,
   QrCode, User, Users, RefreshCw, AlertCircle, ChevronRight, Activity,
+  LogOut,
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import { ensureNotifyPermission, notifyDevice } from "./lib/notify.js";
@@ -31,6 +32,9 @@ function loadActiveEvent() {
 }
 function saveActiveEvent(ev) {
   try { sessionStorage.setItem(ACTIVE_EVENT_KEY, JSON.stringify(ev)); } catch {}
+}
+function clearActiveEvent() {
+  try { sessionStorage.removeItem(ACTIVE_EVENT_KEY); } catch {}
 }
 function loadRecentLabels() {
   try { return JSON.parse(localStorage.getItem(RECENT_LABELS_KEY) || "[]"); }
@@ -128,6 +132,22 @@ export default function InPersonApp() {
 
   const pickEvent = (ev) => { setEvent(ev); saveActiveEvent(ev); };
 
+  // Sign out : revoke the session, drop the picked event, and reset to the
+  // sign-in screen. For a guest this is the path to "upgrade" to a real
+  // LinkedIn account. We deliberately do NOT bump reloadKey (that effect would
+  // auto-mint a fresh guest on the /guest path) : staying on SignInBounce lets
+  // the user choose how to come back.
+  const signOut = async () => {
+    try { await api.logout(); } catch { /* best-effort : clear locally anyway */ }
+    clearActiveEvent();
+    setEvent(null);
+    setResult(null);
+    setOpenCapture(null);
+    setTab("capture");
+    setIsOperator(false);
+    setUser(undefined);
+  };
+
   if (user === null) {
     return <Centered><Loader2 className="spin" size={28} /></Centered>;
   }
@@ -142,7 +162,7 @@ export default function InPersonApp() {
     <div className="ip-root">
       <style>{IP_CSS}</style>
 
-      <EventBar event={event} onPick={pickEvent} />
+      <EventBar event={event} onPick={pickEvent} user={user} onSignOut={signOut} />
 
       {notConnected && (
         <div className="ip-banner">
@@ -266,7 +286,7 @@ function SignInBounce({ authError = null, onRetry = null }) {
 
 // ── event bar ────────────────────────────────────────────────────────────────
 
-function EventBar({ event, onPick }) {
+function EventBar({ event, onPick, user, onSignOut }) {
   const [open, setOpen] = useState(!event);
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
