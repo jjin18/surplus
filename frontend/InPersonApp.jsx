@@ -309,12 +309,24 @@ function EventBar({ event, onPick, user, onSignOut }) {
 
   return (
     <div className="ip-eventbar">
-      <button className="ip-eventpick" onClick={() => setOpen((o) => !o)}>
-        <span className="ip-eventlabel">
-          {event ? <><b>I’m at:</b> {event.label}</> : "Pick event"}
-        </span>
-        <ChevronRight size={16} className={open ? "rot" : ""} />
-      </button>
+      <div className="ip-eventhead">
+        <button className="ip-eventpick" onClick={() => setOpen((o) => !o)}>
+          <span className="ip-eventlabel">
+            {event ? <><b>I’m at:</b> {event.label}</> : "Pick event"}
+          </span>
+          <ChevronRight size={16} className={open ? "rot" : ""} />
+        </button>
+        {onSignOut && (
+          <button className="ip-signout"
+                  title={user?.unipile_account_id
+                    ? `Sign out${user?.name ? ` (${user.name})` : ""}`
+                    : "Sign out of guest"}
+                  onClick={onSignOut}>
+            <LogOut size={15} />
+            <span>{user?.unipile_account_id ? "Sign out" : "Guest"}</span>
+          </button>
+        )}
+      </div>
       {open && (
         <div className="ip-eventmenu">
           <div className="ip-eventrow">
@@ -918,10 +930,15 @@ const IP_CSS = `
 /* event bar */
 .ip-eventbar { position:sticky; top:0; z-index:5; background:var(--ip-card);
   border-bottom:1px solid var(--ip-line); }
-.ip-eventpick { width:100%; display:flex; align-items:center; justify-content:space-between;
+.ip-eventhead { display:flex; align-items:center; gap:8px; padding-right:12px; }
+.ip-eventpick { flex:1; min-width:0; display:flex; align-items:center; justify-content:space-between;
   padding:13px 16px; background:none; border:0; font-size:15px; color:var(--ip-ink); }
 .ip-eventlabel b { color:var(--ip-dim); font-weight:600; margin-right:4px; }
 .ip-eventpick .rot { transform:rotate(90deg); }
+.ip-signout { flex-shrink:0; display:flex; align-items:center; gap:6px;
+  background:none; border:1px solid var(--ip-line); border-radius:8px;
+  padding:6px 10px; color:var(--ip-dim); font-size:13px; cursor:pointer; }
+.ip-signout:active { background:var(--ip-line); }
 .ip-eventmenu { padding:0 12px 12px; }
 .ip-eventrow { display:flex; gap:8px; }
 .ip-recents { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
