@@ -36,8 +36,10 @@ Failures are silent — enrichment is supplementary signal, never load-bearing.
 from __future__ import annotations
 import itertools
 import os
+import random
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -401,6 +403,32 @@ def _fetch_person_unipile(linkedin_url: str,
     slug = (linkedin_url or "").rstrip("/").split("/")[-1].split("?")[0]
 
     result = unipile_adapter.fetch_profile(dsn, api_key, _next_account_id, slug)
+
+    # Soft-throttle repair: LinkedIn often returns a 200 with the EXPERIENCE
+    # section stripped when an account is under sustained load (esp. a small
+    # account pool). That looks like 'success' but yields empty work history,
+    # which starves founders of corroboration (their companies are small/unknown,
+    # so without work-exp their confidence gets capped — the Harpriya failure).
+    # Treat a 200-but-empty-experience as INCOMPLETE and retry a couple of times
+    # with jittered backoff (rotating account when the pool has >1) to give the
+    # account a beat to recover. A genuinely work-history-less profile just costs
+    # us two extra calls and still resolves to evidence_level=medium.
+    _empty_exp_retries = int(os.environ.get("UNIPILE_EMPTY_EXP_RETRIES", "2"))
+    _attempt = 0
+    while (result.ok and not (result.body or {}).get("work_experience")
+           and _attempt < _empty_exp_retries):
+        _attempt += 1
+        time.sleep(random.uniform(0.8, 2.0) * _attempt)
+        retry = unipile_adapter.fetch_profile(dsn, api_key, _next_account_id, slug)
+        if retry.ok and (retry.body or {}).get("work_experience"):
+            print(f"  [unipile.profile] {slug} → empty work-exp repaired on "
+                  f"retry {_attempt}")
+            result = retry
+            break
+        # keep the best (a still-ok body) so we don't downgrade a 200 to nothing
+        if retry.ok:
+            result = retry
+
     ev.fetch_status = result.status
     if not result.ok:
         print(f"  [unipile.profile] {slug} → {result.status} "

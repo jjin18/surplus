@@ -18,7 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .recommend import finalize, recommendation_from, Thresholds, RecommendationOutput
+from .recommend import (
+    finalize, recommendation_from, apply_archetype_priority,
+    Thresholds, RecommendationOutput,
+)
 from .verify_score import VerifyResult
 
 
@@ -49,28 +52,45 @@ class FinalDecision:
 def consolidate(applicant, dimension_scores: dict, llm_confidence: int,
                 *, weights: Optional[dict] = None,
                 thresholds: Optional[Thresholds] = None,
-                verify: Optional[VerifyResult] = None) -> FinalDecision:
+                verify: Optional[VerifyResult] = None,
+                archetype: str = "",
+                founder_corroborated: bool = False,
+                priority_policy: Optional[dict] = None) -> FinalDecision:
     """Produce the final (fit, confidence, recommendation), applying the audit.
 
     `verify` is None when Judge B was skipped (clean applicant) — in that case
     this is exactly finalize() wrapped. When present, the audit can only lower
-    confidence and/or downgrade the verdict; it never raises either."""
+    confidence and/or downgrade the verdict; it never raises either.
+
+    `priority_policy` (from triage_config) lets the operator make archetype
+    priority STRUCTURAL — e.g. boost corroborated founders, cap pure investors —
+    instead of relying on rubric prose. It is applied deterministically to the
+    fit score BEFORE the verdict is derived, so the audit's conservatism still
+    layers on top. With no policy this is a no-op and behaviour is unchanged."""
     base: RecommendationOutput = finalize(
         applicant, dimension_scores, llm_confidence=llm_confidence,
         weights=weights, thresholds=thresholds)
     t = thresholds or Thresholds.default()
 
+    # Data-driven archetype priority (founder boost / investor cap). Applied to
+    # fit first so the recommendation in BOTH paths reflects it.
+    adj_fit, priority_reasons = apply_archetype_priority(
+        base.fit_score, archetype,
+        founder_corroborated=founder_corroborated, policy=priority_policy)
+
     if verify is None or not verify.ran:
         return FinalDecision(
-            fit_score=base.fit_score,
+            fit_score=adj_fit,
             confidence_score=base.confidence_score,
-            recommendation=base.recommendation,
+            recommendation=recommendation_from(
+                adj_fit, base.confidence_score, thresholds=t),
             verifier_ran=False,
+            adjustments=tuple(priority_reasons),
         )
 
-    fit = base.fit_score
+    fit = adj_fit
     confidence = base.confidence_score
-    adjustments: list[str] = []
+    adjustments: list[str] = list(priority_reasons)
     block_accept = False
 
     # 1. Explicit cap from the auditor (it judged confidence overstated).

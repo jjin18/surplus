@@ -332,9 +332,33 @@ def score_applicant(applicant: models.Applicant, rubric: Rubric,
     return _coerce(parsed, full)
 
 
+def _founder_domain_corroborated(applicant, packet) -> bool:
+    """True when the applicant's email domain matches their claimed company —
+    the operator's strongest 'real founder' signal ('they say they founded X and
+    have an @X email'). Free-mail domains (gmail etc.) never corroborate. Checks
+    the submitted website and the reconciler's selected company URL. Independent
+    of LinkedIn, so it survives a throttled/empty work-history pull.
+    """
+    from .enrich import _email_domain, _domain, _domains_match
+    email_dom = _email_domain(getattr(applicant, "email", "") or "")
+    if not email_dom:
+        return False
+    company_domains: list[str] = []
+    site = getattr(applicant, "website", "") or ""
+    if site:
+        company_domains.append(_domain(site))
+    if packet is not None and not packet.is_empty():
+        sel = (packet.as_dict().get("selected_company") or {})
+        if sel.get("url"):
+            company_domains.append(_domain(sel["url"]))
+    return any(cd and _domains_match(email_dom, cd) for cd in company_domains)
+
+
 def persist_evaluation(db, applicant: models.Applicant, event_id: int,
                       score: ScoreResult, rubric: Rubric, *,
                       verify: Optional[VerifyResult] = None,
+                      founder_corroborated: bool = False,
+                      priority_policy: Optional[dict] = None,
                       ) -> models.ApplicantEvaluation:
     """Write (or update) the ApplicantEvaluation row for this applicant.
 
@@ -344,6 +368,10 @@ def persist_evaluation(db, applicant: models.Applicant, event_id: int,
     lower confidence, block an accept, force review — never upgrade it. When
     `verify` is None (clean applicant, audit skipped) consolidate() is exactly
     finalize() wrapped, so behaviour is unchanged for the common case.
+
+    `founder_corroborated` / `priority_policy` make the operator's archetype
+    priority (boost founders, cap investors) a deterministic fit adjustment —
+    see recommend.apply_archetype_priority.
     """
     from .consolidate import consolidate  # lazy : breaks import cycle
 
@@ -351,7 +379,10 @@ def persist_evaluation(db, applicant: models.Applicant, event_id: int,
                         llm_confidence=score.confidence,
                         weights=rubric.weights(),
                         thresholds=rubric.thresholds,
-                        verify=verify)
+                        verify=verify,
+                        archetype=score.archetype,
+                        founder_corroborated=founder_corroborated,
+                        priority_policy=priority_policy)
 
     existing = applicant.evaluation
     if existing is None:
@@ -411,6 +442,10 @@ async def evaluate_all(db, event: models.Event, rubric: Rubric, *,
         return {"total": 0, "scored": 0, "failed": 0}
 
     triage_config = _safe_json_load(getattr(event, "triage_config", None))
+    # Operator's archetype-priority policy (boost founders / cap investors), made
+    # structural via consolidate(). Absent → no-op, generic scoring unchanged.
+    _priority_policy = (triage_config.get("archetype_priority")
+                        if isinstance(triage_config, dict) else None)
     scored = 0
     failed = 0
     sem = asyncio.Semaphore(SCORE_CONCURRENCY)
@@ -470,7 +505,10 @@ async def evaluate_all(db, event: models.Event, rubric: Rubric, *,
                               f"auditing — {', '.join(audit_reasons)}")
                         verify = await asyncio.to_thread(
                             verify_score, a, packet, result)
-                persist_evaluation(db, a, event.id, result, rubric, verify=verify)
+                persist_evaluation(
+                    db, a, event.id, result, rubric, verify=verify,
+                    founder_corroborated=_founder_domain_corroborated(a, packet),
+                    priority_policy=_priority_policy)
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 print(f"  [triage.score] {a.id} ({a.name}): "
