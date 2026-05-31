@@ -137,7 +137,12 @@ def _cookie_domain(host: Optional[str] = None) -> Optional[str]:
     just authenticated.
 
     Resolution order:
-      1. SESSION_COOKIE_DOMAIN env (explicit operator override; wins).
+      1. SESSION_COOKIE_DOMAIN env override : honored ONLY when it actually
+         matches the request host. A browser silently DROPS a cookie whose
+         Domain isn't a parent of the current host, so a typo like
+         ".surpluslayer.co" (missing the m) would otherwise break login for
+         everyone with no error. We validate it against `host` and ignore it
+         when it doesn't match, falling through to host-derivation.
       2. Auto-derived from the request `host`: any *.surpluslayer.com host (or
          the bare apex) -> ".surpluslayer.com". This is the durable default :
          no env var to forget or mis-set, and it can't lock anyone out because
@@ -145,10 +150,20 @@ def _cookie_domain(host: Optional[str] = None) -> Optional[str]:
       3. None (host-only) for localhost / *.railway.app / *.fly.dev / IPs, where
          a non-matching Domain would make the browser silently drop the cookie.
     """
+    h = (host or "").split(":")[0].strip().lower()
     env = (os.environ.get("SESSION_COOKIE_DOMAIN") or "").strip()
     if env:
-        return env
-    h = (host or "").split(":")[0].strip().lower()
+        # Only trust the override if the current host is actually under it
+        # (a leading-dot domain is a parent; an exact match also counts). When
+        # we have no host to check against (rare : non-request callers), trust
+        # it as before.
+        bare = env.lstrip(".").lower()
+        if not h or h == bare or h.endswith("." + bare):
+            return env
+        # env is set but doesn't match this host (e.g. the ".surpluslayer.co"
+        # typo on event.surpluslayer.com) : ignore it and derive from the host.
+        print(f"  [auth] ignoring SESSION_COOKIE_DOMAIN={env!r} : does not match "
+              f"request host {h!r}; deriving from host instead")
     if h == "surpluslayer.com" or h.endswith(".surpluslayer.com"):
         return ".surpluslayer.com"
     return None
