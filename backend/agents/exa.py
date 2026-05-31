@@ -430,6 +430,79 @@ def discover_via_exa(source: str, icp: dict, max_candidates: int = 5) -> list[di
     return out
 
 
+def resolve_person(name: str, title: str = "", company: str = "",
+                   max_candidates: int = 5) -> list[dict]:
+    """
+    Rank LinkedIn profile candidates for a typed name / title / company.
+
+    Low-confidence sibling of discover_via_exa : SAME Exa /search call
+    (category "linkedin profile", includeDomains ["linkedin.com"], neural),
+    but the query is one specific person instead of an ICP fan-out. Reuses
+    _api_key + _parse_result so parsing / org-filtering stays in one place.
+
+    Returns up to `max_candidates` ranked {name, linkedin_url, headline,
+    snippet} dicts. Returns [] when EXA_API_KEY is unset : the caller surfaces
+    a "type the link instead" fallback. We deliberately do NOT fall back to
+    Claude here : Exa is the path for this resolver.
+    """
+    if not exa_available():
+        return []
+    query = " ".join(p.strip() for p in (name, title, company) if p and p.strip())
+    if not query:
+        return []
+    body = {
+        "query": f"linkedin profile {query}",
+        "type": "neural",
+        # Over-fetch : some results won't yield a parseable handle (snippets,
+        # company pages), so ask for more than we return and cap after parse.
+        "numResults": min(100, max(max_candidates * 3, 10)),
+        "includeDomains": ["linkedin.com"],
+        "category": "linkedin profile",
+        "contents": {"text": True},
+    }
+    headers = {
+        "x-api-key": _api_key(),
+        "content-type": "application/json",
+        "accept": "application/json",
+    }
+    try:
+        import httpx
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post("https://api.exa.ai/search",
+                               headers=headers, json=body)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [exa.resolve_person] search failed: {type(exc).__name__}: {exc}")
+        return []
+    if resp.status_code >= 400:
+        print(f"  [exa.resolve_person] search {resp.status_code}: {resp.text[:200]}")
+        return []
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return []
+
+    results = data.get("results") or []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for r in results:
+        cand = _parse_result("linkedin", r, None)
+        if cand is None:
+            continue
+        url = cand["linkedin_url"]
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append({
+            "name": cand["name"],
+            "linkedin_url": url,
+            "headline": cand.get("headline", "") or "",
+            "snippet": (r.get("text") or "").strip()[:600],
+        })
+        if len(out) >= max_candidates:
+            break
+    return out
+
+
 # ---- query construction --------------------------------------------------
 
 def _as_list(v) -> list[str]:
