@@ -81,7 +81,18 @@ async def main() -> None:
     user = models.User(name="Local", email="local@example.com",
                        unipile_account_id=None)
     db.add(user); db.flush()
+    # triage_config precedence:
+    #   1. an explicit "triage_config" block (hand-tuned, e.g. icp_bryankim.json)
+    #   2. otherwise, deterministically COMPILE one from the high-level ICP fields
+    #      (role/format/priority_archetypes/...) via icp_compiler. This exercises
+    #      the real prod path: structured ICP -> compile_icp -> triage_config.
     triage_config = icp_cfg.get("triage_config", {})
+    if not triage_config and icp_cfg:
+        from backend.triage.icp_compiler import compile_icp
+        triage_config = compile_icp(icp_cfg)
+        print(f"[icp] compiled triage_config from ICP fields "
+              f"(archetype_priority={triage_config.get('archetype_priority', {})})",
+              flush=True)
     ev = models.Event(
         user_id=user.id,
         role=icp_cfg.get("role", ""),
