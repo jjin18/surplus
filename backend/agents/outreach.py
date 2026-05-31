@@ -465,15 +465,19 @@ def _framing_inperson(event, note: str | None = None) -> str:
     parts = [
         f"You just met this person face to face at {where}.",
         "Write a warm LinkedIn connection note and first message that continue "
-        "that conversation. Reference meeting in person, keep it specific and "
-        "friendly, and propose ONE concrete light next step (a quick call, a "
-        "follow-up). Do NOT re-pitch the event or sound like a cold lead.",
+        "that conversation. The connection note must be BRIEF : one or two short "
+        "sentences that lead with the specific thing you talked about, so it "
+        "reads like a real callback rather than a template. Reference meeting in "
+        "person, keep it friendly, and propose ONE concrete light next step (a "
+        "quick call, a follow-up). Do NOT re-pitch the event or sound like a "
+        "cold lead.",
     ]
     note = (note or "").strip()
     if note:
         parts.append(
-            f"Something from the conversation you just had: {note}. "
-            "Reference it naturally if it fits.")
+            f"The specific thing you talked about: {note}. Open the connection "
+            "note by referencing this directly (e.g. a fun fact like where "
+            "they're from or a shared interest), so it feels personal.")
     return " ".join(parts)
 
 
@@ -485,16 +489,37 @@ def _compose_inperson_template(prospect, event) -> Message:
     first = (prospect.name or "there").split()[0]
     label = _event_label(event)
     note = (getattr(prospect, "note", None) or "").strip()
-    note_clause = f" Enjoyed talking about {note}." if note else ""
+    # Drop a conversational lead-in the operator may have typed ("we talked
+    # about rock climbing" -> "rock climbing") so the template doesn't double up
+    # on "about" / "chatting about".
+    for _lead in ("we talked about ", "talked about ", "we chatted about ",
+                  "chatted about ", "we discussed ", "discussed ", "about "):
+        if note.lower().startswith(_lead):
+            note = note[len(_lead):].strip()
+            break
+    # A preposition-led note ("from Ottawa", "into climbing") reads as a "you're
+    # …" callback; everything else ("bagels", "her new startup") slots after
+    # "about". Either way we LEAD with it so the note is a brief, real callback.
+    is_fact = note.lower().split(" ")[0] in (
+        "from", "in", "into", "based", "at") if note else False
 
-    connection = _truncate_note(
-        f"Great meeting you at {label}, {first}.{note_clause} "
-        f"Let's stay connected here.")
+    if note and is_fact:
+        connection = _truncate_note(
+            f"Great meeting you at {label}, {first} — love that you're {note}. "
+            f"Let's connect!")
+    elif note:
+        connection = _truncate_note(
+            f"Loved chatting about {note} at {label}, {first} — let's connect!")
+    else:
+        connection = _truncate_note(
+            f"Great meeting you at {label}, {first} — let's connect!")
+
+    chat = (f"Love that you're {note}" if (note and is_fact)
+            else "Enjoyed our chat" + (f" about {note}" if note else ""))
     message = "\n".join([
         f"Great to meet you at {label}, {first}.",
         "",
-        ("Enjoyed our chat" + (f" about {note}" if note else "")
-         + " : wanted to connect here so we can keep it going."),
+        chat + " : wanted to connect here so we can keep it going.",
         "",
         "Worth grabbing 15 minutes next week to pick it back up? Happy to work "
         "around your schedule, or just say the word if there's something I can "

@@ -598,8 +598,8 @@ function ScanResult({ event, result, onDone, onCancel, canSend }) {
       <textarea className="ip-area" rows={5}
         value={draftMsg} onChange={(e) => setDraftMsg(e.target.value)} />
 
-      <label className="ip-lbl">Private note <span className="ip-dim">(just for you)</span></label>
-      <input className="ip-input" placeholder="what you talked about…"
+      <label className="ip-lbl">What you talked about <span className="ip-dim">(personalizes the invite)</span></label>
+      <input className="ip-input" placeholder="e.g. from Ottawa · loves bagels · rock climbing"
         value={note} onChange={(e) => setNote(e.target.value)} />
 
       {err && <div className="ip-err"><AlertCircle size={14} /> {err}</div>}
