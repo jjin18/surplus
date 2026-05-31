@@ -74,8 +74,23 @@ def test_cookie_host_only_for_non_first_party_hosts(monkeypatch):
 
 
 def test_env_override_still_wins_over_host(monkeypatch):
+    # A matching env override is honored (host is under the override domain).
     monkeypatch.setenv("SESSION_COOKIE_DOMAIN", ".surpluslayer.com")
     r = Response()
-    auth.set_session_cookie(r, "tok", host="localhost")  # env wins despite host
+    auth.set_session_cookie(r, "tok", host="event.surpluslayer.com")
     sc = [v.decode() for k, v in r.raw_headers if k == b"set-cookie"][0]
     assert "Domain=.surpluslayer.com" in sc
+
+
+def test_misconfigured_env_domain_is_ignored(monkeypatch):
+    # The real production incident: SESSION_COOKIE_DOMAIN=".surpluslayer.co"
+    # (missing the m) on event.surpluslayer.com. A browser would DROP a cookie
+    # whose Domain isn't a parent of the host, silently breaking login. We must
+    # ignore the non-matching override and derive the correct domain instead.
+    monkeypatch.setenv("SESSION_COOKIE_DOMAIN", ".surpluslayer.co")
+    for host in ("event.surpluslayer.com", "www.surpluslayer.com"):
+        r = Response()
+        auth.set_session_cookie(r, "tok", host=host)
+        sc = [v.decode() for k, v in r.raw_headers if k == b"set-cookie"][0]
+        assert "Domain=.surpluslayer.com" in sc, host
+        assert ".surpluslayer.co;" not in sc and "Domain=.surpluslayer.co " not in sc
