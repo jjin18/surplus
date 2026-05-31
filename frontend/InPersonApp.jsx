@@ -569,15 +569,24 @@ function ScanResult({ event, result, onDone, onCancel, canSend }) {
   const [draftMsg, setDraftMsg] = useState(result.draft_message || "");
   const [note, setNote] = useState(p.note || "");               // fun fact
   const [privateNote, setPrivateNote] = useState(p.private_note || "");
+  const [contactType, setContactType] = useState(p.contact_type || "");
+  const [nextStep, setNextStep] = useState(p.next_step || "");
   const [busy, setBusy] = useState("");      // "" | "send" | "save" | "personalize" | "nonote"
   const [err, setErr] = useState("");
   // The draft on screen was composed BEFORE the fun fact was typed. Track
   // whether the saved fun fact still matches what produced the current draft.
   const [draftFromNote, setDraftFromNote] = useState(p.note || "");
+  const [draftFromStep, setDraftFromStep] = useState(p.next_step || "");
   // Once the operator hand-edits the draft, stop auto-recomposing so we never
   // clobber their wording. They can still personalize manually.
   const [draftEdited, setDraftEdited] = useState(false);
-  const stale = (note || "").trim() !== (draftFromNote || "").trim();
+  // Capture stays minimal for mobile : the optional extras (note, private memo,
+  // first message, contact type, next step) all hide behind a disclosure.
+  const [showMore, setShowMore] = useState(false);
+  // Re-compose when EITHER the fun fact or the next step moved the draft out of
+  // sync : both feed the composed copy.
+  const stale = (note || "").trim() !== (draftFromNote || "").trim()
+             || (nextStep || "").trim() !== (draftFromStep || "").trim();
 
   // Persist the fun fact + private note onto the capture and RE-COMPOSE the
   // draft from the just-saved fun fact. This is the fix for "the message won't
@@ -589,14 +598,17 @@ function ScanResult({ event, result, onDone, onCancel, canSend }) {
       const r = await api.inpersonScan({
         event_id: event.event_id, linkedin_url: p.linkedin_url,
         source: p.source || "scan", note, private_note: privateNote,
+        contact_type: contactType || undefined, next_step: nextStep || undefined,
       });
       setDraftNote(r.draft_note || "");
       setDraftMsg(r.draft_message || "");
       setDraftFromNote(note || "");
+      setDraftFromStep(nextStep || "");
       setDraftEdited(false);
     } catch (e) { setErr(e.message || "Couldn’t personalize"); }
     finally { setBusy(""); }
-  }, [event.event_id, p.linkedin_url, p.source, note, privateNote]);
+  }, [event.event_id, p.linkedin_url, p.source, note, privateNote,
+      contactType, nextStep]);
 
   // Quick + frictionless : auto-personalize ~0.7s after the fun fact stops
   // changing, so the operator never has to tap a button. We only do this while
@@ -612,10 +624,13 @@ function ScanResult({ event, result, onDone, onCancel, canSend }) {
   // for Save/Send when the operator already edited the draft by hand.
   const persistNotes = async () => {
     if ((note || "") === (p.note || "") &&
-        (privateNote || "") === (p.private_note || "")) return;
+        (privateNote || "") === (p.private_note || "") &&
+        (contactType || "") === (p.contact_type || "") &&
+        (nextStep || "") === (p.next_step || "")) return;
     await api.inpersonScan({
       event_id: event.event_id, linkedin_url: p.linkedin_url,
       source: p.source || "scan", note, private_note: privateNote,
+      contact_type: contactType || undefined, next_step: nextStep || undefined,
     });
   };
   const stashDraft = () => {
@@ -681,47 +696,97 @@ function ScanResult({ event, result, onDone, onCancel, canSend }) {
             ? <div className="ip-dim ip-microw-hint"><Check size={13} /> Draft personalized</div>
             : null}
 
-      <label className="ip-lbl">Connection note
-        <span className="ip-dim"> · optional, ≤300</span></label>
-      <textarea className="ip-area" rows={3} maxLength={300}
-        value={draftNote}
-        onChange={(e) => { setDraftNote(e.target.value); setDraftEdited(true); }} />
+      {/* Everything below is OPTIONAL at capture : the note auto-personalizes
+          and the first message can be drafted later from People. Keep the
+          capture moment to person + fun fact + Connect. */}
+      <button className="ip-disclosure" onClick={() => setShowMore((s) => !s)}>
+        <ChevronRight size={15} className={showMore ? "rot" : ""} />
+        {showMore ? "Hide extras" : "Add more · message, type, next step"}
+      </button>
+      {showMore && (
+        <div className="ip-more">
+          {/* Who is this to you : tags the capture for later triage. */}
+          <label className="ip-lbl">This person is…</label>
+          <div className="ip-chiprow">
+            {[["sales", "Sales"], ["recruiting", "Recruiting"],
+              ["follow_up", "Follow-up"], ["other", "Other"]].map(([v, lbl]) => (
+              <button key={v} type="button"
+                      className={`ip-chip${contactType === v ? " on" : ""}`}
+                      onClick={() => setContactType(contactType === v ? "" : v)}>
+                {lbl}
+              </button>
+            ))}
+          </div>
 
-      <label className="ip-lbl">First message
-        <span className="ip-dim"> · sent after they accept</span></label>
-      <textarea className="ip-area" rows={5}
-        value={draftMsg}
-        onChange={(e) => { setDraftMsg(e.target.value); setDraftEdited(true); }} />
+          {/* Next step : woven into the first message. Quick presets for the
+              common call/coffee ask; the input takes a Calendly link or text. */}
+          <label className="ip-lbl">Next step
+            <span className="ip-dim"> · added to the first message</span></label>
+          <div className="ip-chiprow">
+            {["grab a coffee", "hop on a quick call", "follow up next week"].map((preset) => (
+              <button key={preset} type="button"
+                      className={`ip-chip${nextStep === preset ? " on" : ""}`}
+                      onClick={() => { setNextStep(preset); }}>
+                {preset}
+              </button>
+            ))}
+          </div>
+          <div className="ip-microw">
+            <input className="ip-input" placeholder="…or paste a Calendly link"
+              value={nextStep} onChange={(e) => setNextStep(e.target.value)} />
+            <MicButton value={nextStep} onChange={setNextStep} title="Dictate the next step" />
+          </div>
 
-      <label className="ip-lbl">Private note <span className="ip-dim">· just for you, never sent</span></label>
-      <div className="ip-microw">
-        <input className="ip-input" placeholder="reminder to self…"
-          value={privateNote} onChange={(e) => setPrivateNote(e.target.value)} />
-        <MicButton value={privateNote} onChange={setPrivateNote} title="Dictate a private note" />
-      </div>
+          <label className="ip-lbl">Connection note
+            <span className="ip-dim"> · optional, ≤300</span></label>
+          <textarea className="ip-area" rows={3} maxLength={300}
+            value={draftNote}
+            onChange={(e) => { setDraftNote(e.target.value); setDraftEdited(true); }} />
+
+          <label className="ip-lbl">First message
+            <span className="ip-dim"> · sent after they accept</span></label>
+          <textarea className="ip-area" rows={5}
+            value={draftMsg}
+            onChange={(e) => { setDraftMsg(e.target.value); setDraftEdited(true); }} />
+
+          <label className="ip-lbl">Private note <span className="ip-dim">· just for you, never sent</span></label>
+          <div className="ip-microw">
+            <input className="ip-input" placeholder="reminder to self…"
+              value={privateNote} onChange={(e) => setPrivateNote(e.target.value)} />
+            <MicButton value={privateNote} onChange={setPrivateNote} title="Dictate a private note" />
+          </div>
+        </div>
+      )}
 
       {err && <div className="ip-err"><AlertCircle size={14} /> {err}</div>}
 
+      {/* Connect is the one obvious action. "Save for later" and the bare-invite
+          variant are secondary. The first message is drafted later in People. */}
       <div className="ip-actions">
-        <button className="ip-btn primary" onClick={save} disabled={!!busy}>
-          {busy === "save" ? <Loader2 className="spin" size={16} />
-            : <><Bookmark size={16} /> Save to review</>}
-        </button>
-        <button className="ip-btn ghost" onClick={() => send(false)}
+        <button className="ip-btn primary" onClick={() => send(false)}
                 disabled={!!busy || !canSend}
                 title={canSend ? "" : "Connect LinkedIn to send"}>
           {busy === "send" ? <Loader2 className="spin" size={16} />
-            : <><Send size={16} /> Send with note</>}
+            : <><Send size={16} /> Connect</>}
         </button>
-        <button className="ip-btn ghost" onClick={() => send(true)}
-                disabled={!!busy || !canSend}
-                title={canSend ? "Send a bare invite; the message goes out once accepted"
-                              : "Connect LinkedIn to send"}>
-          {busy === "nonote" ? <Loader2 className="spin" size={16} />
-            : <><Send size={16} /> Connect without note</>}
-        </button>
+        <div className="ip-actions-row">
+          <button className="ip-btn ghost sm" onClick={save} disabled={!!busy}>
+            {busy === "save" ? <Loader2 className="spin" size={15} />
+              : <><Bookmark size={15} /> Save for later</>}
+          </button>
+          <button className="ip-btn ghost sm" onClick={() => send(true)}
+                  disabled={!!busy || !canSend}
+                  title={canSend ? "Send a bare invite; the message goes out once accepted"
+                                : "Connect LinkedIn to send"}>
+            {busy === "nonote" ? <Loader2 className="spin" size={15} />
+              : "Connect, no note"}
+          </button>
+        </div>
       </div>
       {!canSend && <div className="ip-dim ip-center">Connect LinkedIn to send now.</div>}
+      <div className="ip-dim ip-center ip-laterhint">
+        You can also edit any of this later from <b>People</b>.
+      </div>
     </div>
   );
 }
@@ -936,6 +1001,14 @@ function CaptureDetail({ event, capture, onBack, canSend }) {
             </div>
           : <div className="ip-dim">Nothing sent yet.</div>}
         {capture.note && <div className="ip-privnote">Talked about: “{capture.note}”</div>}
+        {capture.next_step && (
+          <div className="ip-privnote">Next step: “{capture.next_step}”</div>
+        )}
+        {capture.contact_type && (
+          <div className="ip-row-chips" style={{ marginTop: 6 }}>
+            <span className="ip-st st-contacted">{capture.contact_type.replace("_", " ")}</span>
+          </div>
+        )}
         {capture.private_note && (
           <div className="ip-privnote">Private: “{capture.private_note}”</div>
         )}
@@ -1087,7 +1160,10 @@ const IP_CSS = `
 .ip-eventrow { display:flex; gap:8px; }
 .ip-recents { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .ip-chip { border:1px solid var(--ip-line); background:#fff; border-radius:999px;
-  padding:5px 11px; font-size:12px; color:var(--ip-ink); }
+  padding:5px 11px; font-size:12px; color:var(--ip-ink); cursor:pointer; }
+.ip-chip.on { background:var(--ip-accent); color:var(--ip-accent-ink);
+  border-color:var(--ip-accent); }
+.ip-chiprow { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:4px; }
 
 /* screens */
 .ip-screen { flex:1; padding:14px 14px 88px; overflow-y:auto; }
@@ -1128,7 +1204,15 @@ button.ip-microw-hint { cursor:pointer; }
 .ip-btn.sm { padding:10px 13px; font-size:13px; }
 .ip-btn.block { width:100%; }
 .ip-actions { display:flex; flex-direction:column; gap:9px; margin-top:16px; }
-.ip-actions .ip-btn { width:100%; }
+.ip-actions > .ip-btn { width:100%; }
+.ip-actions-row { display:flex; gap:9px; }
+.ip-actions-row .ip-btn { flex:1; }
+.ip-disclosure { display:flex; align-items:center; gap:6px; margin-top:14px;
+  background:none; border:0; color:var(--ip-accent); font-size:13px; font-weight:600;
+  padding:4px 0; cursor:pointer; }
+.ip-disclosure .rot { transform:rotate(90deg); }
+.ip-more { margin-top:4px; }
+.ip-laterhint { margin-top:10px; font-size:12px; }
 
 /* camera */
 .ip-cam { position:relative; margin-top:14px; border-radius:16px; overflow:hidden;
