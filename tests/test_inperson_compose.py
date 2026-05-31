@@ -1,6 +1,39 @@
+"""
+In-person connection-note composition (event.surpluslayer.com flow).
+
+These exercise the deterministic template branch (_compose_inperson_template via
+compose()), which is what runs offline / without an API key. With no
+ANTHROPIC_API_KEY in the test env, compose() falls back to the template, so we
+get stable strings to assert on. The goal: a BRIEF invite that LEADS with the
+specific thing you talked about (the "fun fact"), not a generic template.
+"""
+from __future__ import annotations
+
+import os
+from types import SimpleNamespace as N
+
+import pytest
+
+from backend.agents.outreach import compose
 
 
-# ── brief, catered connection note (the "fun fact" callback) ─────────────────
+@pytest.fixture(autouse=True)
+def _no_llm(monkeypatch):
+    # Force the deterministic template path so assertions are stable.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OUTREACH_COMPOSE_DISABLE", "1")
+    yield
+
+
+def _p(name="Maya Rodriguez", note=None):
+    return N(name=name, note=note, role=None, company=None,
+             works_on=None, offers=None, headline=None, linkedin_url=None)
+
+
+def _ev(label="SF Mixer", city=None):
+    return N(kind="in_person", label=label, city=city,
+             event_name=None, format=None, user=None)
+
 
 def test_topic_note_leads_with_the_callback():
     # A topic-style note ("the Ottawa bagel spot") slots after "about" and the
