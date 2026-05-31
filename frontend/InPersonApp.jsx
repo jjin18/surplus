@@ -17,6 +17,7 @@ import jsQR from "jsqr";
 import {
   Camera, Link2, Search, Send, Bookmark, ArrowLeft, Check, Loader2,
   QrCode, User, Users, RefreshCw, AlertCircle, ChevronRight, Activity,
+  LogOut,
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import { ensureNotifyPermission, notifyDevice } from "./lib/notify.js";
@@ -31,6 +32,9 @@ function loadActiveEvent() {
 }
 function saveActiveEvent(ev) {
   try { sessionStorage.setItem(ACTIVE_EVENT_KEY, JSON.stringify(ev)); } catch {}
+}
+function clearActiveEvent() {
+  try { sessionStorage.removeItem(ACTIVE_EVENT_KEY); } catch {}
 }
 function loadRecentLabels() {
   try { return JSON.parse(localStorage.getItem(RECENT_LABELS_KEY) || "[]"); }
@@ -128,6 +132,22 @@ export default function InPersonApp() {
 
   const pickEvent = (ev) => { setEvent(ev); saveActiveEvent(ev); };
 
+  // Sign out : revoke the session, drop the picked event, and reset to the
+  // sign-in screen. For a guest this is the path to "upgrade" to a real
+  // LinkedIn account. We deliberately do NOT bump reloadKey (that effect would
+  // auto-mint a fresh guest on the /guest path) : staying on SignInBounce lets
+  // the user choose how to come back.
+  const signOut = async () => {
+    try { await api.logout(); } catch { /* best-effort : clear locally anyway */ }
+    clearActiveEvent();
+    setEvent(null);
+    setResult(null);
+    setOpenCapture(null);
+    setTab("capture");
+    setIsOperator(false);
+    setUser(undefined);
+  };
+
   if (user === null) {
     return <Centered><Loader2 className="spin" size={28} /></Centered>;
   }
@@ -142,7 +162,7 @@ export default function InPersonApp() {
     <div className="ip-root">
       <style>{IP_CSS}</style>
 
-      <EventBar event={event} onPick={pickEvent} />
+      <EventBar event={event} onPick={pickEvent} user={user} onSignOut={signOut} />
 
       {notConnected && (
         <div className="ip-banner">
@@ -266,7 +286,7 @@ function SignInBounce({ authError = null, onRetry = null }) {
 
 // ── event bar ────────────────────────────────────────────────────────────────
 
-function EventBar({ event, onPick }) {
+function EventBar({ event, onPick, user, onSignOut }) {
   const [open, setOpen] = useState(!event);
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
@@ -289,12 +309,24 @@ function EventBar({ event, onPick }) {
 
   return (
     <div className="ip-eventbar">
-      <button className="ip-eventpick" onClick={() => setOpen((o) => !o)}>
-        <span className="ip-eventlabel">
-          {event ? <><b>I’m at:</b> {event.label}</> : "Pick event"}
-        </span>
-        <ChevronRight size={16} className={open ? "rot" : ""} />
-      </button>
+      <div className="ip-eventhead">
+        <button className="ip-eventpick" onClick={() => setOpen((o) => !o)}>
+          <span className="ip-eventlabel">
+            {event ? <><b>I’m at:</b> {event.label}</> : "Pick event"}
+          </span>
+          <ChevronRight size={16} className={open ? "rot" : ""} />
+        </button>
+        {onSignOut && (
+          <button className="ip-signout"
+                  title={user?.unipile_account_id
+                    ? `Sign out${user?.name ? ` (${user.name})` : ""}`
+                    : "Sign out of guest"}
+                  onClick={onSignOut}>
+            <LogOut size={15} />
+            <span>{user?.unipile_account_id ? "Sign out" : "Guest"}</span>
+          </button>
+        )}
+      </div>
       {open && (
         <div className="ip-eventmenu">
           <div className="ip-eventrow">
@@ -898,10 +930,15 @@ const IP_CSS = `
 /* event bar */
 .ip-eventbar { position:sticky; top:0; z-index:5; background:var(--ip-card);
   border-bottom:1px solid var(--ip-line); }
-.ip-eventpick { width:100%; display:flex; align-items:center; justify-content:space-between;
+.ip-eventhead { display:flex; align-items:center; gap:8px; padding-right:12px; }
+.ip-eventpick { flex:1; min-width:0; display:flex; align-items:center; justify-content:space-between;
   padding:13px 16px; background:none; border:0; font-size:15px; color:var(--ip-ink); }
 .ip-eventlabel b { color:var(--ip-dim); font-weight:600; margin-right:4px; }
 .ip-eventpick .rot { transform:rotate(90deg); }
+.ip-signout { flex-shrink:0; display:flex; align-items:center; gap:6px;
+  background:none; border:1px solid var(--ip-line); border-radius:8px;
+  padding:6px 10px; color:var(--ip-dim); font-size:13px; cursor:pointer; }
+.ip-signout:active { background:var(--ip-line); }
 .ip-eventmenu { padding:0 12px 12px; }
 .ip-eventrow { display:flex; gap:8px; }
 .ip-recents { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
