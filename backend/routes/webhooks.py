@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from .. import models
 from ..db import get_db
+from ..agents import relationships
 from ..agents.outreach import compose
 from ..agents.reply_agent import (
     ReplyDecision, ThreadMessage, decide_reply, should_auto_send,
@@ -227,7 +228,17 @@ def _handle_ai_reply(
           f"messages={len(thread)} (calling Claude...)")
 
     host = event.user
-    decision = decide_reply(thread, event, prospect, host=host)
+    # Ground the reply in prior relationship history (outbound-safe : the brief
+    # firewalls private notes). None on a fresh contact / on any read error, so
+    # the reply path degrades to thread-only context rather than failing.
+    try:
+        relationship_ctx = relationships.relationship_context(
+            prospect, relationships.fetch_interactions(db, prospect))
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [ai_reply] relationship_context skipped: {type(exc).__name__}: {exc}")
+        relationship_ctx = None
+    decision = decide_reply(thread, event, prospect, host=host,
+                            relationship_ctx=relationship_ctx)
     print(f"  [ai_reply] decision: classification={decision.classification} "
           f"elapsed={decision.elapsed_s}s draft_chars={len(decision.draft_text)} "
           f"error={decision.error}")

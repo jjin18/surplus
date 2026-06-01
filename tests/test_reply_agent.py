@@ -135,6 +135,45 @@ def test_decide_reply_catches_anthropic_exception():
     assert "api down" in decision.error
 
 
+def _captured_user_message(client) -> str:
+    """Pull the user-role content out of the mocked messages.create call."""
+    kwargs = client.messages.create.call_args.kwargs
+    for m in kwargs["messages"]:
+        if m["role"] == "user":
+            return m["content"]
+    return ""
+
+
+def test_decide_reply_injects_relationship_context_when_present():
+    client = MagicMock()
+    client.messages.create.return_value = _fake_anthropic_response(
+        '{"classification":"clarifying","draft_text":"sure","reasoning":"r"}'
+    )
+    brief = ("PRIOR RELATIONSHIP (background only, do not quote verbatim):\n"
+             "- Captured at Founders Dinner\n- Relationship stage: replied")
+    decide_reply(
+        [ThreadMessage(direction="inbound", text="hey")],
+        _fake_event(), _fake_prospect(), host=None,
+        relationship_ctx=brief, client=client,
+    )
+    sent = _captured_user_message(client)
+    assert "Founders Dinner" in sent
+    assert "PRIOR RELATIONSHIP" in sent
+
+
+def test_decide_reply_omits_relationship_block_by_default():
+    client = MagicMock()
+    client.messages.create.return_value = _fake_anthropic_response(
+        '{"classification":"clarifying","draft_text":"sure","reasoning":"r"}'
+    )
+    decide_reply(
+        [ThreadMessage(direction="inbound", text="hey")],
+        _fake_event(), _fake_prospect(), host=None, client=client,  # no ctx
+    )
+    sent = _captured_user_message(client)
+    assert "PRIOR RELATIONSHIP" not in sent
+
+
 # ── should_auto_send() gate ─────────────────────────────────────────────
 
 def test_should_auto_send_true_for_clarifying_first_time():

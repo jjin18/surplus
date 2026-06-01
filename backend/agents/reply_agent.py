@@ -188,6 +188,7 @@ def decide_reply(
     prospect,
     host=None,
     *,
+    relationship_ctx: Optional[str] = None,
     client=None,
 ) -> ReplyDecision:
     """
@@ -200,15 +201,25 @@ def decide_reply(
         event    : the Event ORM row
         prospect : the Prospect ORM row (recipient)
         host     : the User ORM row (the human whose LinkedIn this is); may be None
+        relationship_ctx : optional outbound-safe relationship brief
+                   (relationships.relationship_context). Grounds the reply in
+                   prior history — how we met, stage, planned next step, recent
+                   non-private touches. None = no prior history / unchanged
+                   behavior. It is firewalled of private notes by construction,
+                   so it is safe to influence an outbound draft.
         client   : optional Anthropic client (for tests). Real path constructs
                    a fresh client per call : these are rare enough that pooling
                    isn't worth the import-time cost.
     """
+    ctx_block = (
+        f"{relationship_ctx.strip()}\n\n" if (relationship_ctx or "").strip() else ""
+    )
     user_message = (
         "EVENT CONTEXT\n"
         f"{_format_event_context(event, host)}\n\n"
         "RECIPIENT\n"
         f"{_format_recipient_context(prospect)}\n\n"
+        f"{ctx_block}"
         "CONVERSATION SO FAR\n"
         f"{_format_thread(thread)}\n\n"
         "Produce the JSON decision now."
