@@ -51,6 +51,16 @@ _SOURCE_RANK = {
 # to the end of the chronological timeline rather than the beginning.
 _FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
 
+# Channel inferred from a stored interaction's source_type when it doesn't carry
+# one explicitly. Keeps the timeline item shape uniform across derived + stored.
+_CHANNEL_BY_SOURCE = {
+    "manual_note": "manual",
+    "email_interaction": "email",
+    "calendar_meeting": "calendar",
+    "relationship_interaction": "manual",
+    "draft_generated": "manual",
+}
+
 
 def _as_aware(dt: Optional[datetime]) -> Optional[datetime]:
     """Normalize to tz-aware UTC. Naive datetimes are common in this codebase
@@ -96,10 +106,44 @@ def _event_title(event: Any) -> Optional[str]:
     return f"event #{eid}" if eid is not None else None
 
 
-def build_timeline(prospect: Any) -> list[dict]:
+def _interaction_item(ri: Any) -> dict:
+    """Map a stored RelationshipInteraction to the timeline item shape."""
+    import json
+    meta: dict = {}
+    raw = getattr(ri, "meta_json", None)
+    if raw:
+        try:
+            decoded = json.loads(raw)
+            if isinstance(decoded, dict):
+                meta = decoded
+        except (ValueError, TypeError):
+            meta = {}
+    source_type = _clean(getattr(ri, "source_type", None)) or "relationship_interaction"
+    meta = {**meta, "visibility": _clean(getattr(ri, "visibility", None)) or "private",
+            "interaction_id": getattr(ri, "id", None)}
+    return _item(
+        source_type,
+        _clean(getattr(ri, "interaction_type", None)) or "interaction",
+        getattr(ri, "occurred_at", None),
+        title=_clean(getattr(ri, "title", None)) or "",
+        summary=_clean(getattr(ri, "summary", None)) or "",
+        channel=_CHANNEL_BY_SOURCE.get(source_type, "manual"),
+        direction=_clean(getattr(ri, "direction", None)) or "none",
+        **meta,
+    )
+
+
+def build_timeline(prospect: Any, interactions: Any = None) -> list[dict]:
     """Assemble the chronological (oldest-first) relationship timeline for one
-    Prospect from existing persisted data. Pure read; never raises on missing
-    optional fields."""
+    Prospect. Unions two sources:
+
+      1. derived items reconstructed from existing persisted data (capture
+         metadata, OutreachLog, Conversion), and
+      2. stored RelationshipInteraction rows passed in via `interactions`
+         (manual notes, email, calendar) — fetch them with fetch_interactions.
+
+    Pure read; never raises on missing optional fields. When `interactions` is
+    None this is exactly the Milestone-1 derived-only timeline."""
     items: list[dict] = []
 
     event = getattr(prospect, "event", None)
@@ -176,6 +220,10 @@ def build_timeline(prospect: Any) -> list[dict]:
             value=getattr(conv, "value", None),
         ))
 
+    # ── stored interactions (manual notes, email, calendar, intros) ───
+    for ri in (interactions or []):
+        items.append(_interaction_item(ri))
+
     items.sort(key=lambda it: (
         it["occurred_at"] or _FAR_FUTURE,
         _SOURCE_RANK.get(it["source_type"], 99),
@@ -235,13 +283,14 @@ def _how_we_met(prospect: Any) -> dict:
     }
 
 
-def relationship_summary(prospect: Any) -> dict:
+def relationship_summary(prospect: Any, interactions: Any = None) -> dict:
     """Deterministic, ML-free snapshot of where this relationship stands.
 
     Stage precedence (strongest signal wins):
         converted  > replied > contacted > captured
     with `stale` overlaid when a captured/contacted relationship has gone quiet
-    past STALE_AFTER_DAYS.
+    past STALE_AFTER_DAYS. `interactions` (stored RelationshipInteraction rows)
+    contribute to last_touch but not to stage classification.
     """
     conv = getattr(prospect, "conversion", None)
     conv_state = _clean(getattr(conv, "state", None)) if conv is not None else None
@@ -257,7 +306,7 @@ def relationship_summary(prospect: Any) -> dict:
     captured_at = getattr(prospect, "captured_at", None)
 
     # last_touch = most recent item that carries a real timestamp.
-    timeline = build_timeline(prospect)
+    timeline = build_timeline(prospect, interactions)
     touched = [it for it in timeline if it["occurred_at"] is not None]
     last_touch_at = touched[-1]["occurred_at"] if touched else None
     last_touch_type = touched[-1]["interaction_type"] if touched else None
@@ -292,3 +341,98 @@ def relationship_summary(prospect: Any) -> dict:
         "identity": _identity(prospect),
         "how_we_met": _how_we_met(prospect),
     }
+
+
+# ── DB-aware helpers (Milestone 3) ───────────────────────────────────────
+# These touch the database; the pure functions above do not. Kept here so the
+# whole relationship read/write surface lives in one module.
+
+
+def fetch_interactions(db, prospect) -> list:
+    """All stored RelationshipInteraction rows relevant to one Prospect : those
+    tied to the prospect directly, plus those tied to its linked Contact (so a
+    note logged against the durable person shows on every per-event timeline).
+    Returns [] on any error — a broken read must never sink a timeline."""
+    from .. import models
+    try:
+        clauses = [models.RelationshipInteraction.prospect_id == prospect.id]
+        contact_id = getattr(prospect, "contact_id", None)
+        if contact_id is not None:
+            clauses.append(models.RelationshipInteraction.contact_id == contact_id)
+        from sqlalchemy import or_
+        return (db.query(models.RelationshipInteraction)
+                  .filter(or_(*clauses))
+                  .all())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def link_contact(db, prospect, owner_user_id: int):
+    """Lazily find-or-create the Contact for a Prospect and link it.
+
+    Idempotent and conservative : only links when a STRONG identity (LinkedIn
+    slug / email) is derivable — no fuzzy/name dedup. Returns the Contact, or
+    None when there's no stable identity to key on (the Prospect simply stays
+    contact-less, which every flow supports). Never raises."""
+    from .. import models
+    from ..triage.enrichment_cache import identity_keys
+    try:
+        if getattr(prospect, "contact_id", None) is not None:
+            return db.get(models.Contact, prospect.contact_id)
+
+        keys = identity_keys(
+            email=_clean(getattr(prospect, "email", None)) or "",
+            linkedin_url=_clean(getattr(prospect, "linkedin_url", None)) or "",
+        )
+        if not keys:
+            return None
+        primary = keys[0]
+
+        contact = (db.query(models.Contact)
+                     .filter_by(user_id=owner_user_id, primary_identity_key=primary)
+                     .first())
+        if contact is None:
+            contact = models.Contact(
+                user_id=owner_user_id,
+                primary_identity_key=primary,
+                name=_clean(getattr(prospect, "name", None)),
+                linkedin_url=_clean(getattr(prospect, "linkedin_url", None)),
+                linkedin_public_id=_clean(getattr(prospect, "linkedin_provider_id", None)),
+                company=_clean(getattr(prospect, "company", None)),
+            )
+            db.add(contact)
+            db.flush()  # assign contact.id without committing the caller's tx
+
+        prospect.contact_id = contact.id
+        db.commit()
+        db.refresh(contact)
+        return contact
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        return None
+
+
+def add_note(db, prospect, owner_user_id: int, summary: str,
+             title: str = "Note", visibility: str = "private"):
+    """Record a manual note as a stored RelationshipInteraction, linking the
+    Contact spine opportunistically. Returns the created row."""
+    from .. import models
+    contact = link_contact(db, prospect, owner_user_id)
+    vis = visibility if visibility in {"private", "team"} else "private"
+    ri = models.RelationshipInteraction(
+        actor_user_id=owner_user_id,
+        prospect_id=prospect.id,
+        contact_id=getattr(contact, "id", None),
+        event_id=getattr(prospect, "event_id", None),
+        source_type="manual_note",
+        interaction_type="note",
+        direction="none",
+        occurred_at=datetime.now(timezone.utc),
+        title=(title or "Note").strip()[:200],
+        summary=(summary or "").strip(),
+        visibility=vis,
+    )
+    db.add(ri)
+    db.commit()
+    db.refresh(ri)
+    return ri

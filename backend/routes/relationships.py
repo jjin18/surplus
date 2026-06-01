@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -54,6 +55,12 @@ def _prospect_brief(p: models.Prospect) -> dict:
         "source": p.source,
         "captured_at": p.captured_at,
     }
+
+
+class NoteIn(BaseModel):
+    summary: str
+    title: str = "Note"
+    visibility: str = "private"      # "private" | "team"
 
 
 @router.get("/prospects")
@@ -104,10 +111,36 @@ def prospect_timeline(
     db: Session = Depends(get_db),
     user: models.User = Depends(current_user),
 ):
-    """The full relationship timeline + summary for one owned prospect."""
+    """The full relationship timeline + summary for one owned prospect, unioning
+    derived touches with stored RelationshipInteraction rows (notes, etc.)."""
     p = _owned_prospect(db, prospect_id, user)
+    interactions = relationships.fetch_interactions(db, p)
     return {
         "prospect": _prospect_brief(p),
-        "relationship_summary": relationships.relationship_summary(p),
-        "timeline": relationships.build_timeline(p),
+        "relationship_summary": relationships.relationship_summary(p, interactions),
+        "timeline": relationships.build_timeline(p, interactions),
+    }
+
+
+@router.post("/prospects/{prospect_id}/notes")
+def create_note(
+    prospect_id: int,
+    body: NoteIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(current_user),
+):
+    """Record a manual note against an owned prospect (stored as a
+    RelationshipInteraction; links the Contact spine opportunistically) and
+    return the refreshed timeline."""
+    p = _owned_prospect(db, prospect_id, user)
+    summary = (body.summary or "").strip()
+    if not summary:
+        raise HTTPException(422, "summary is required")
+    relationships.add_note(db, p, user.id, summary,
+                           title=body.title, visibility=body.visibility)
+    interactions = relationships.fetch_interactions(db, p)
+    return {
+        "prospect": _prospect_brief(p),
+        "relationship_summary": relationships.relationship_summary(p, interactions),
+        "timeline": relationships.build_timeline(p, interactions),
     }

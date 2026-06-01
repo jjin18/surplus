@@ -128,6 +128,7 @@ def init_db() -> None:
         _migrate_event_brief,
         _migrate_prospect_live_enrichment,
         _migrate_user_voice_synced_at,
+        _migrate_prospect_contact_id,
     ]
     for migration in migrations:
         try:
@@ -314,6 +315,30 @@ def _migrate_user_voice_synced_at() -> None:
     with ENGINE.begin() as conn:
         conn.execute(text(
             f"ALTER TABLE users ADD COLUMN {ine}voice_synced_at TIMESTAMP"
+        ))
+
+
+def _migrate_prospect_contact_id() -> None:
+    """Add prospects.contact_id (INTEGER, NULL) : the lazy link to the Contact
+    spine (relationship graph). NULL is fully supported — event-scoped Prospect
+    flows never require it.
+
+    Added as a plain INTEGER with no inline FK : SQLite's ALTER TABLE can't add
+    a column with a REFERENCES clause. On a fresh DB, Base.metadata.create_all
+    wires the real FK; on an existing DB the value is just an int we resolve in
+    Python. The contacts/relationship_interactions TABLES themselves are created
+    by create_all (no migration needed — they're brand new)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(ENGINE)
+    if "prospects" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("prospects")}
+    if "contact_id" in cols:
+        return
+    ine = "IF NOT EXISTS " if ENGINE.dialect.name == "postgresql" else ""
+    with ENGINE.begin() as conn:
+        conn.execute(text(
+            f"ALTER TABLE prospects ADD COLUMN {ine}contact_id INTEGER"
         ))
 
 

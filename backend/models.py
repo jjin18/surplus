@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -185,7 +185,17 @@ class Prospect(Base):
     connection_status: Mapped[str] = mapped_column(String(20), default="unknown")
     connection_checked_at: Mapped[Optional[datetime]] = mapped_column(default=None)
 
+    # Lazy link to the cross-event Contact spine (the relationship graph). NULL
+    # is the norm and fully supported : a Prospect is the per-event record; the
+    # Contact is the durable person across events. Set opportunistically when a
+    # stable identity (LinkedIn slug / email) is known (see agents/relationships
+    # .link_contact). Event-scoped Prospect flows never depend on this being set.
+    contact_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contacts.id"), default=None, index=True,
+    )
+
     event: Mapped["Event"] = relationship(back_populates="prospects")
+    contact: Mapped[Optional["Contact"]] = relationship(back_populates="prospects")
     outreach: Mapped[list["OutreachLog"]] = relationship(
         back_populates="prospect", cascade="all, delete-orphan"
     )
@@ -751,3 +761,89 @@ class Session(Base):
     expires_at: Mapped[datetime]
     last_seen_at: Mapped[datetime] = mapped_column(default=_utcnow)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+
+
+# ─── Relationship graph (the cross-event spine) ──────────────────────
+# Surplus is event-native relationship intelligence. A Prospect is the
+# per-event record of someone you met; a Contact is the DURABLE person
+# across every event, owned by one user. RelationshipInteraction is the
+# normalized, append-only touch log that net-new touch types (manual
+# notes, email, calendar, intros) write into — derived touches
+# (capture / OutreachLog / Conversion) are NOT duplicated here; the
+# timeline assembler in agents/relationships.py unions both sources.
+
+
+class Contact(Base):
+    """One durable person in a user's relationship graph, deduped across events
+    by a strong identity key (LinkedIn slug or salted email hash — never a
+    name). Lazily created : a Prospect links to a Contact only when a stable
+    identity is known. Event-scoped Prospect flows work fine with no Contact."""
+    __tablename__ = "contacts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "primary_identity_key",
+                         name="uq_contact_owner_identity"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Owner : the relationship graph is per-user, never shared across users.
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Strongest identity_keys() key for this person ("li:<slug>" | "em:<hash>").
+    primary_identity_key: Mapped[str] = mapped_column(String(120), index=True)
+
+    name: Mapped[Optional[str]] = mapped_column(String(120), default=None)
+    linkedin_url: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    linkedin_public_id: Mapped[Optional[str]] = mapped_column(String(120), default=None)
+    email: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    company: Mapped[Optional[str]] = mapped_column(String(120), default=None)
+    company_domain: Mapped[Optional[str]] = mapped_column(String(160), default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
+
+    prospects: Mapped[list["Prospect"]] = relationship(back_populates="contact")
+    interactions: Mapped[list["RelationshipInteraction"]] = relationship(
+        back_populates="contact", cascade="all, delete-orphan",
+    )
+
+
+class RelationshipInteraction(Base):
+    """One stored touch in the relationship graph : a manual note, an email, a
+    calendar meeting, an intro. Append-only. Derived touches (capture,
+    OutreachLog, Conversion) are reconstructed on read, NOT stored here, so this
+    table only holds net-new signal the rest of the schema can't reproduce."""
+    __tablename__ = "relationship_interactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Who recorded it (the owning user).
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Either / both may be set : prospect_id ties it to a per-event record,
+    # contact_id to the durable person. Both nullable so a touch can attach to
+    # whichever exists.
+    prospect_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("prospects.id"), default=None, index=True,
+    )
+    contact_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contacts.id"), default=None, index=True,
+    )
+    event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("events.id"), default=None, index=True,
+    )
+    company_domain: Mapped[Optional[str]] = mapped_column(String(160), default=None)
+
+    # Timeline-item shape (see agents/relationships.py).
+    source_type: Mapped[str] = mapped_column(String(40))
+    interaction_type: Mapped[str] = mapped_column(String(40))
+    direction: Mapped[str] = mapped_column(String(10), default="none")
+    occurred_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    # JSON-encoded dict (Text for cross-dialect portability — same convention as
+    # Sponsor.buyer_profile). Named meta_json because `metadata` is reserved on
+    # the SQLAlchemy declarative Base.
+    meta_json: Mapped[str] = mapped_column(Text, default="{}")
+    # private = visible only to the owner; team = shared with the owner's team.
+    visibility: Mapped[str] = mapped_column(String(10), default="private")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    contact: Mapped[Optional["Contact"]] = relationship(back_populates="interactions")
+    prospect: Mapped[Optional["Prospect"]] = relationship()
