@@ -334,6 +334,50 @@ class ApplicantEvaluation(Base):
     applicant: Mapped["Applicant"] = relationship(back_populates="evaluation")
 
 
+class TriageEnrichmentCache(Base):
+    """Cross-event, identity-keyed enrichment cache.
+
+    WHY THIS EXISTS
+    ---------------
+    Applicant.enrichment_raw freezes evidence per *applicant row*, so it makes a
+    re-run of ONE event free — but the same person applying to a DIFFERENT event
+    is a different applicant row and gets re-enriched from scratch, burning a real
+    LinkedIn (Unipile) account action every time. At prod scale the same people
+    apply to many events, so we re-fetch identical profiles repeatedly.
+
+    This table caches the frozen RawEvidence by *resolved identity* instead of by
+    row, shared across events, so a person enriched once is reused everywhere:
+
+      - KEYED on a STRONG identity key only — a LinkedIn slug ("li:<slug>") or a
+        salted email hash ("em:<sha256>"). Never a name (name-only collides across
+        people — the Brittany/Kyndred class of bug). One logical profile is written
+        under EVERY strong key we have, so a future event that knows EITHER the
+        email OR the LinkedIn URL hits without a fetch.
+      - email-first matters: the email hash is derivable from every Luma row for
+        free, whereas the slug costs a people-search to obtain — so an email hit
+        short-circuits the search itself.
+      - VALUE is json.dumps(RawEvidence.as_dict()); rehydrated with from_dict.
+      - fetched_at drives a TTL (see enrichment_cache._ttl_days): stale entries are
+        treated as a miss so job/company facts don't ossify.
+      - PII-safe: the email appears only as a salted hash in the KEY, never stored
+        in cleartext. The evidence blob holds the same profile facts we already
+        persist on Applicant.enrichment_raw.
+
+    This is a brand-new table, so Base.metadata.create_all builds it on startup;
+    no hand-rolled ALTER migration is needed (those are only for adding columns to
+    existing tables)."""
+    __tablename__ = "triage_enrichment_cache"
+
+    # "li:<linkedin-slug>" or "em:<salted-email-sha256>". The only PK.
+    cache_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    # json.dumps(RawEvidence.as_dict()) — the frozen, trimmed evidence.
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    # Which provider produced it: "unipile" | "data_api" | "exa" | ...
+    source: Mapped[str] = mapped_column(String(20), default="")
+    # When the live fetch happened — drives the freshness/TTL check.
+    fetched_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
 class ReviewDecision(Base):
     """Operator's accept/reject decision on an Applicant. Empty until the
     review UI (PR E) lets the operator act. One row per Applicant."""

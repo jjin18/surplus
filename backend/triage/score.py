@@ -473,6 +473,8 @@ async def evaluate_all(db, event: models.Event, rubric: Rubric, *,
     from .answers import parse_claims
     from .disambiguate import disambiguate_company
     from .enrich import enrich_applicant, RawEvidence
+    from .enrichment_cache import (cache_enabled, identity_keys,
+                                   cache_get, cache_put)
     from .reconcile import reconcile
     from .verify_score import should_verify, verify_score
 
@@ -508,6 +510,25 @@ async def evaluate_all(db, event: models.Event, rubric: Rubric, *,
                         raw = RawEvidence.from_dict(json.loads(persisted))
                     except (json.JSONDecodeError, TypeError, ValueError):
                         raw = None  # corrupt cache → fall through to re-enrich
+                # Cross-event identity cache (shared, Postgres-backed): a person
+                # who applied to an EARLIER event was already enriched — reuse that
+                # frozen evidence with ZERO LinkedIn actions before spending a
+                # fetch. Keyed on identity (email hash / LinkedIn slug), so it hits
+                # across events where Applicant.enrichment_raw (per-row) cannot.
+                # Email-first: an email hit avoids even the people-search action.
+                if (raw is None and not force_reenrich and not is_retry
+                        and cache_enabled()):
+                    ckeys = identity_keys(
+                        email=getattr(a, "email", "") or "",
+                        linkedin_url=getattr(a, "linkedin_url", "") or "")
+                    if ckeys:
+                        cached = await asyncio.to_thread(cache_get, ckeys)
+                        if cached is not None and not cached.is_empty():
+                            raw = cached
+                            # Freeze on the row too so re-runs of THIS event skip
+                            # even the cache lookup (same reproducibility contract
+                            # as the enrichment_raw reuse above).
+                            a.enrichment_raw = json.dumps(raw.as_dict())
                 fresh_fetch = raw is None
                 if raw is None:
                     raw = await enrich_applicant(a, claims)
@@ -518,6 +539,17 @@ async def evaluate_all(db, event: models.Event, rubric: Rubric, *,
                     # recover the real history once the account cools down.
                     if not raw.is_empty() and not raw.person.work_unreliable:
                         a.enrichment_raw = json.dumps(raw.as_dict())
+                        # Write-through to the shared identity cache under EVERY
+                        # strong key we now have — including the slug the
+                        # people-search just resolved — so a future event with
+                        # this person's email OR LinkedIn skips the fetch entirely.
+                        if cache_enabled():
+                            wkeys = identity_keys(
+                                email=getattr(a, "email", "") or "",
+                                linkedin_url=(raw.person.profile_url
+                                              or getattr(a, "linkedin_url", "") or ""))
+                            if wkeys:
+                                await asyncio.to_thread(cache_put, wkeys, raw)
                     # Queue a freshly-stripped applicant for one cooled-down retry.
                     if (fresh_fetch and not is_retry
                             and raw.person.work_unreliable):
