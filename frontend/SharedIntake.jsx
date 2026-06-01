@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ArrowRight, CornerDownRight, Loader2, AlertCircle, Link2, Check } from "lucide-react";
+import { ArrowRight, CornerDownRight, Loader2, AlertCircle, Link2, Check, Sparkles } from "lucide-react";
 import { api } from "./lib/api.js";
 
 // Unified intake form for the merged app. Mode-less : both downstream
@@ -71,8 +71,79 @@ export default function SharedIntake({ initialProfile, onSubmitted, onError }) {
   const [lumaError, setLumaError] = useState(null);
   const [lumaImported, setLumaImported] = useState(null);
 
+  // "Describe your event" : the host types a sentence and we parse it into the
+  // form's chips (api.intakeFromText → /events/intake/from-text). Mode-less :
+  // nothing is persisted, we only fill the profile state for the operator to
+  // edit. Only fields the model returned are applied, so the form's defaults
+  // survive for anything the description didn't mention.
+  const [describeText, setDescribeText] = useState("");
+  const [describing, setDescribing] = useState(false);
+  const [describeError, setDescribeError] = useState(null);
+  const [describeSummary, setDescribeSummary] = useState(null);
+
   const set = (k, v) => setProfile((p) => ({ ...p, [k]: v }));
   const toggle = (k, v) => setProfile((p) => ({ ...p, [k]: toggleIn(p[k], v) }));
+
+  const applyExtractedProfile = (p, triageConfig) => {
+    setProfile((prev) => {
+      const next = { ...prev };
+      // Stash the rich ICP (anti-fit / nice-to-have / archetype_priority /
+      // thresholds) the model captured beyond the chips. The form doesn't
+      // render it, but it rides along in profile state and is persisted later
+      // at the inbound commit (Stage02.startInbound -> setTriageConfig), so the
+      // host's full intent survives even though the screen stays mode-less.
+      if (triageConfig && Object.keys(triageConfig).length) {
+        next.triageConfig = triageConfig;
+      }
+      if (p.role) next.role = p.role;
+      if (p.city) next.city = p.city;
+      if (p.event_name) next.eventName = p.event_name;
+      if (Array.isArray(p.seniority) && p.seniority.length) next.seniority = p.seniority;
+      if (Array.isArray(p.co_stage) && p.co_stage.length) next.coStage = p.co_stage;
+      if (Array.isArray(p.yoe) && p.yoe.length) next.yoe = p.yoe;
+      if (Array.isArray(p.goal) && p.goal.length) next.goal = p.goal;
+      if (Array.isArray(p.sources) && p.sources.length) {
+        // linkedin is the locked, always-on source : keep it first.
+        next.sources = Array.from(new Set(["linkedin", ...p.sources]));
+      }
+      if (p.format && FORMATS.includes(p.format)) next.format = p.format;
+      if (typeof p.headcount === "number") {
+        next.headcount = Math.max(0, Math.min(160, Math.round(p.headcount)));
+      }
+      if (typeof p.budget === "number") {
+        next.budget = Math.max(0, Math.min(40000, Math.round(p.budget)));
+      }
+      return next;
+    });
+  };
+
+  const handleDescribe = async () => {
+    setDescribeError(null);
+    setDescribeSummary(null);
+    const text = (describeText || "").trim();
+    if (!text) {
+      setDescribeError("Describe your event in a sentence or two first.");
+      return;
+    }
+    setDescribing(true);
+    try {
+      const res = await api.intakeFromText(text);
+      if (res?.error && (!res.profile || Object.keys(res.profile).every((k) => res.profile[k] == null))) {
+        setDescribeError(`Couldn't read that (${res.error}). Try adding a bit more detail.`);
+        return;
+      }
+      applyExtractedProfile(res?.profile || {}, res?.triage_config || null);
+      // Tell the host what we pulled beyond the chips (anti-fit, nice-to-haves,
+      // archetype priority) so they trust nothing was dropped on the floor.
+      const captured = Array.isArray(res?.captured) ? res.captured : [];
+      const base = res?.summary || "Filled in the fields below — review and tweak before continuing.";
+      setDescribeSummary(captured.length ? `${base} (Also captured: ${captured.join("; ")}.)` : base);
+    } catch (err) {
+      setDescribeError(err?.message || "Could not generate from that description.");
+    } finally {
+      setDescribing(false);
+    }
+  };
 
   const handleLumaImport = async (maybeUrl) => {
     setLumaError(null);
@@ -181,6 +252,48 @@ export default function SharedIntake({ initialProfile, onSubmitted, onError }) {
       <header className="stage-head">
         <h1>Define the event</h1>
       </header>
+
+      {/* "Describe your event" : natural-language fast-path. Sits at the very
+          top because it's the primary way to fill the form — the host types a
+          sentence and we snap it onto the A/B/C chips below. */}
+      <div className="luma-quick" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
+        <Sparkles size={14} aria-hidden className="luma-quick-icon" />
+        <label htmlFor="describe-event" className="luma-quick-label">
+          Describe it
+        </label>
+        <textarea
+          id="describe-event"
+          className="text-in luma-quick-input"
+          style={{ minHeight: 48, resize: "vertical", flex: "1 1 320px" }}
+          rows={2}
+          value={describeText}
+          onChange={(e) => setDescribeText(e.target.value)}
+          placeholder="e.g. Intimate dinner for seed-stage ML infra founders in SF, ~40 seats, no recruiters."
+        />
+        <button
+          type="button"
+          className="btn-primary luma-quick-btn"
+          onClick={handleDescribe}
+          disabled={describing || !describeText.trim()}
+        >
+          {describing ? (
+            <><Loader2 className="spin" size={14} /> Reading</>
+          ) : (
+            <>Fill form <Sparkles size={14} /></>
+          )}
+        </button>
+        <span className="hint luma-quick-hint">*we&apos;ll fill the fields below — edit anything after</span>
+      </div>
+      {describeError && (
+        <div className="api-error" role="alert" style={{ marginTop: 4 }}>
+          <AlertCircle size={14} /> {describeError}
+        </div>
+      )}
+      {describeSummary && !describeError && (
+        <div className="luma-ok-banner" style={{ marginTop: 4 }}>
+          <Check size={14} /> {describeSummary}
+        </div>
+      )}
 
       {/* One-line Luma pre-fill row. Sits above the form so the three
           A/B/C cards stay on screen without extra scrolling. Styled as

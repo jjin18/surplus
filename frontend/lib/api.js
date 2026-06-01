@@ -39,6 +39,14 @@ export const api = {
   createEvent: (body) =>
     request("/events", { method: "POST", body: JSON.stringify(body) }),
   getEvent: (id) => request(`/events/${id}`),
+  // Describe an event in plain English -> normalized intake profile snapped to
+  // the form's chip vocabulary. Mode-less : nothing is persisted, the caller
+  // merges the returned fields onto its profile state for the operator to edit.
+  intakeFromText: (description) =>
+    request("/events/intake/from-text", {
+      method: "POST",
+      body: JSON.stringify({ description }),
+    }),
 
   // 02 prospecting
   runProspect: (id) => request(`/events/${id}/prospect`, { method: "POST" }),

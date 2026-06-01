@@ -38,6 +38,7 @@ from ..triage.luma import (
     fetch_luma_event, suggest_triage_config,
 )
 from ..triage.rubric import synthesize_rubric, icp_from_event
+from ..triage.intake_extract import extract_intake_profile
 from ..triage.score import evaluate_all
 
 
@@ -61,6 +62,14 @@ class TriageConfig(BaseModel):
     anti_fit_examples: list[str] = []
     capacity: Optional[int] = None
     notes: Optional[str] = None
+    # Operator's archetype-priority policy (boost founders / cap investors /
+    # auto-accept) + score thresholds, compiled by icp_compiler.compile_icp from
+    # the "Describe your event" box. These MUST round-trip : evaluate_all reads
+    # triage_config["archetype_priority"] directly to make the boost/cap
+    # structural (score.py). Without declaring them here Pydantic drops them on
+    # save and the scorer silently falls back to generic scoring.
+    archetype_priority: Optional[dict] = None
+    thresholds: Optional[dict] = None
     # UI-only round-trip for Triage "Configure" when it mirrors outbound Intake.
     # Stripped before the rubric LLM sees the config (see triage.rubric).
     intake_snapshot: Optional[dict] = None
@@ -178,6 +187,64 @@ def preview_luma_event(
         raise HTTPException(400, str(exc))
     suggestions = suggest_triage_config(event)
     return LumaPreviewResponse(event=event, suggestions=suggestions)
+
+
+class IntakeFromTextBody(BaseModel):
+    description: str = ""
+
+
+class IntakeProfile(BaseModel):
+    """Normalized intake profile : ONLY fields the description implied, each
+    snapped to the form's fixed chip vocabulary. Omitted fields are absent (not
+    null) so the frontend merges them onto its own defaults without clobbering."""
+    role: Optional[str] = None
+    seniority: Optional[list[str]] = None
+    co_stage: Optional[list[str]] = None
+    yoe: Optional[list[str]] = None
+    format: Optional[str] = None
+    city: Optional[str] = None
+    event_name: Optional[str] = None
+    headcount: Optional[int] = None
+    goal: Optional[list[str]] = None
+    budget: Optional[int] = None
+    sources: Optional[list[str]] = None
+
+
+class IntakeFromTextResponse(BaseModel):
+    profile: IntakeProfile
+    # Rich ICP (anti-fit / nice-to-have / archetype_priority / thresholds),
+    # compile_icp output shaped like icp_bryankim.json's triage_config. The
+    # frontend stashes it in client state and persists it later at the inbound
+    # commit (Stage02.startInbound -> setTriageConfig); nothing is saved here.
+    triage_config: dict = {}
+    # Human-readable names of the non-chip signals we pulled, so the UI can
+    # reassure the host nothing was dropped (e.g. "2 anti-fit signals").
+    captured: list[str] = []
+    summary: str = ""
+    error: str = ""
+
+
+@router.post("/intake/from-text", response_model=IntakeFromTextResponse)
+def intake_from_text(
+    body: IntakeFromTextBody,
+    user: models.User = Depends(current_user),
+):
+    """Turn a plain-English event description into a normalized intake profile
+    the 'Define the event' form can auto-fill from.
+
+    Mode-less : no event is created and nothing is persisted — this only parses
+    text into the form's fixed-vocabulary chips so the operator can review +
+    edit before continuing. Auth-gated so anonymous traffic can't use us as a
+    free LLM proxy. Fail-soft : a missing key / model error returns an empty
+    profile + error, never a 500, so the host can fill the form by hand."""
+    result = extract_intake_profile(body.description or "")
+    return IntakeFromTextResponse(
+        profile=IntakeProfile(**result.profile),
+        triage_config=result.triage_config,
+        captured=result.captured,
+        summary=result.summary,
+        error=result.error,
+    )
 
 
 @router.post("/{event_id}/triage/config", response_model=TriageConfig)

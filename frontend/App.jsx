@@ -2839,6 +2839,24 @@ function UnifiedShell({
 // Pure : turn the SharedIntake chip profile into a triage_config payload.
 // Used only when the operator picks the inbound branch at stage 02.
 function deriveTriageConfig(profile) {
+  // If the host used the "Describe your event" box, SharedIntake stashed a rich
+  // ICP (anti-fit / nice-to-have / archetype_priority / thresholds, compiled by
+  // icp_compiler) on profile.triageConfig. Prefer it verbatim — it carries the
+  // curation intent the chips can't hold. We only layer in event_type/capacity
+  // when the compiled config didn't already set them.
+  const rich = profile?.triageConfig;
+  if (rich && typeof rich === "object" && Object.keys(rich).length) {
+    return {
+      ...rich,
+      event_type: rich.event_type || "other",
+      sponsor_name: rich.sponsor_name ?? null,
+      // The slider is the host's last word on capacity; prefer it over the
+      // compiled value, falling back to whatever compile_icp inferred.
+      capacity: Number.isFinite(profile?.headcount) ? profile.headcount : (rich.capacity ?? null),
+      notes: rich.notes ?? null,
+    };
+  }
+
   const role = (profile?.role || "").trim();
   const seniorityList = (profile?.seniority || []).join(", ");
   const stageList = (profile?.coStage || []).join(", ");
