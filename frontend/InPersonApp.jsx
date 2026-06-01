@@ -17,7 +17,7 @@ import jsQR from "jsqr";
 import {
   Camera, Link2, Search, Send, Bookmark, ArrowLeft, Check, Loader2,
   QrCode, User, Users, RefreshCw, AlertCircle, ChevronRight, Activity,
-  LogOut, Mic, MicOff,
+  LogOut, Mic, MicOff, MapPin,
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import { ensureNotifyPermission, notifyDevice } from "./lib/notify.js";
