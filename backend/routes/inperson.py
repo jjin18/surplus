@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..agents import resolver
+from ..agents import relationships, resolver
 from ..agents.outreach import compose
 from ..agents.send_flow import route_and_send
 from ..auth import (
@@ -138,6 +138,10 @@ def _capture_row(p: models.Prospect) -> dict:
         "resolve_failed": p.linkedin_provider_id is None,
         "last_outreach": last,
         "conversion": p.conversion.state if p.conversion else None,
+        # Relationship-aware summary (additive : existing fields above are
+        # untouched). Lets the CRM show stage / last-touch / next-step without
+        # a second round-trip. See agents/relationships.py.
+        "relationship_summary": relationships.relationship_summary(p),
     }
 
 
