@@ -6,7 +6,7 @@ Repo convention : call route functions directly with an in-memory SQLAlchemy
 session + real ORM rows. No TestClient / auth cookies; UNIPILE_DRY_RUN on.
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -115,3 +115,77 @@ def test_capture_row_keeps_existing_fields_and_adds_summary(db):
     assert "relationship_summary" in row
     assert row["relationship_summary"]["next_step"] == "send deck"
     assert row["relationship_summary"]["relationship_stage"] == "captured"
+
+
+# ── list endpoint (all relationships across events) ───────────────────────
+
+def _captured_at_event(db, user, label, name, captured_at, **kw):
+    ev = models.Event(user_id=user.id, kind="in_person", label=label, city="SF")
+    db.add(ev); db.commit()
+    p = models.Prospect(
+        event_id=ev.id, identity=name.lower(), name=name, role="Eng",
+        company="Co", linkedin_url=f"https://linkedin.com/in/{name.lower()}",
+        status="pending", source="scan", captured_at=captured_at,
+        contact_type=kw.get("contact_type"),
+    )
+    db.add(p); db.commit()
+    return ev, p
+
+
+def test_list_returns_all_user_relationships_across_events(db):
+    u = _user(db)
+    _captured_at_event(db, u, "Dinner", "Maya", datetime.now(timezone.utc))
+    _captured_at_event(db, u, "Mixer", "Sam", datetime.now(timezone.utc))
+    out = rel_route.list_relationships(db=db, user=u)
+    assert out["count"] == 2
+    names = {r["prospect"]["name"] for r in out["relationships"]}
+    assert names == {"Maya", "Sam"}
+
+
+def test_list_is_owner_scoped(db):
+    owner = _user(db, email="owner@x.com", acct="o")
+    other = _user(db, email="other@x.com", acct="x")
+    _captured_at_event(db, owner, "Dinner", "Maya", datetime.now(timezone.utc))
+    out = rel_route.list_relationships(db=db, user=other)
+    assert out["count"] == 0
+
+
+def test_list_filters_by_event(db):
+    u = _user(db)
+    ev1, _ = _captured_at_event(db, u, "Dinner", "Maya", datetime.now(timezone.utc))
+    _captured_at_event(db, u, "Mixer", "Sam", datetime.now(timezone.utc))
+    out = rel_route.list_relationships(event_id=ev1.id, db=db, user=u)
+    assert out["count"] == 1
+    assert out["relationships"][0]["prospect"]["name"] == "Maya"
+
+
+def test_list_filters_by_stage(db):
+    u = _user(db)
+    _, p = _captured_at_event(db, u, "Dinner", "Maya", datetime.now(timezone.utc))
+    _captured_at_event(db, u, "Mixer", "Sam", datetime.now(timezone.utc))
+    # Maya gets outreach -> "contacted"; Sam stays "captured".
+    db.add(models.OutreachLog(prospect_id=p.id, channel="linkedin",
+                              state="invite_sent")); db.commit()
+    out = rel_route.list_relationships(stage="contacted", db=db, user=u)
+    assert out["count"] == 1
+    assert out["relationships"][0]["prospect"]["name"] == "Maya"
+
+
+def test_list_filters_by_contact_type(db):
+    u = _user(db)
+    _captured_at_event(db, u, "Dinner", "Maya", datetime.now(timezone.utc),
+                       contact_type="sponsor")
+    _captured_at_event(db, u, "Mixer", "Sam", datetime.now(timezone.utc))
+    out = rel_route.list_relationships(contact_type="sponsor", db=db, user=u)
+    assert out["count"] == 1
+    assert out["relationships"][0]["prospect"]["name"] == "Maya"
+
+
+def test_list_sorted_newest_touch_first(db):
+    u = _user(db)
+    _captured_at_event(db, u, "Old", "Older",
+                       datetime.now(timezone.utc) - timedelta(days=10))
+    _captured_at_event(db, u, "New", "Newer",
+                       datetime.now(timezone.utc) - timedelta(days=1))
+    out = rel_route.list_relationships(db=db, user=u)
+    assert [r["prospect"]["name"] for r in out["relationships"]] == ["Newer", "Older"]

@@ -8,6 +8,9 @@ data never leaks across users.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -17,6 +20,10 @@ from ..auth import current_user
 from ..db import get_db
 
 router = APIRouter(prefix="/api/relationships", tags=["relationships"])
+
+# Sorts never-touched / timeless relationships to the END when sorting newest
+# touch first (reverse=True).
+_MIN_DT = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _owned_prospect(db: Session, prospect_id: int, user: models.User) -> models.Prospect:
@@ -47,6 +54,48 @@ def _prospect_brief(p: models.Prospect) -> dict:
         "source": p.source,
         "captured_at": p.captured_at,
     }
+
+
+@router.get("/prospects")
+def list_relationships(
+    event_id: Optional[int] = None,
+    stage: Optional[str] = None,
+    contact_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(current_user),
+):
+    """Every relationship the user has built across their events — the
+    accumulated 'who I've met' list — newest touch first.
+
+    Each row pairs the safe prospect header (no private_note) with its
+    relationship_summary, so a 'relationships' view and a 'needs follow-up'
+    view both render off this one call. The summary's source_event carries
+    which event each person came from.
+
+    Owner-scoped: only the caller's own events are reachable. Optional filters:
+      event_id      one event (e.g. a single dinner / conference)
+      stage         captured | contacted | replied | converted | stale
+      contact_type  sponsor | sales | recruiting | follow_up | ...
+    """
+    q = (db.query(models.Prospect)
+           .join(models.Event, models.Prospect.event_id == models.Event.id)
+           .filter(models.Event.user_id == user.id))
+    if event_id is not None:
+        q = q.filter(models.Prospect.event_id == event_id)
+    if contact_type:
+        q = q.filter(models.Prospect.contact_type == contact_type)
+
+    rows = []
+    for p in q.all():
+        summary = relationships.relationship_summary(p)
+        if stage and summary["relationship_stage"] != stage:
+            continue
+        rows.append({"prospect": _prospect_brief(p),
+                     "relationship_summary": summary})
+
+    rows.sort(key=lambda r: r["relationship_summary"]["last_touch_at"] or _MIN_DT,
+              reverse=True)
+    return {"count": len(rows), "relationships": rows}
 
 
 @router.get("/prospects/{prospect_id}/timeline")
