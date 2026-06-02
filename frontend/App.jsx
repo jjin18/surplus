@@ -921,6 +921,12 @@ function Prospects({ profile, runResult, eventId, onError, onNext, locked = fals
     <div className="stage">
       <header className="stage-head">
           <h1>No candidates surfaced</h1>
+          {/* Surface the actual backend-reported reason(s) HERE too : the
+              empty-pool case is exactly when the operator most needs to know
+              *why* (rate-limit vs ICP gate dropped everyone vs source crash).
+              Without this the screen showed only the generic help below and
+              silently discarded the reason the backend already reported. */}
+          <FailureStrip failures={runResult?.failures} />
         <p className="lede">
             Prospecting completed but returned an empty pool. Check the backend
             logs : the cause is one of:

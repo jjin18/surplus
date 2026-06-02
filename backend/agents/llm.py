@@ -24,6 +24,7 @@ Design notes:
 from __future__ import annotations
 import json
 import os
+import time
 from typing import Optional
 
 try:
@@ -390,6 +391,57 @@ _BATCH_VERDICT_TOOL = {
 }
 
 
+def _is_retryable_anthropic_error(exc: Exception) -> bool:
+    """True for transient infra failures worth one more attempt : rate-limit,
+    timeout, connection, overloaded, or any 5xx. Class-name based so we don't
+    import the SDK here (keeps this module importable without anthropic)."""
+    name = type(exc).__name__
+    if any(m in name for m in ("RateLimit", "Timeout", "APIConnection",
+                               "InternalServer", "Overloaded", "ServiceUnavailable")):
+        return True
+    status = getattr(exc, "status_code", None)
+    return isinstance(status, int) and (status >= 500 or status == 429)
+
+
+def _judge_create(user_msg: str):
+    """Issue the batched judge call with ONE extra backoff retry on top of the
+    SDK's built-in max_retries.
+
+    The SDK already retries 429/5xx a couple times, but under a sustained
+    rate-limit burst those can still exhaust. A single extra pause clears most
+    transient bursts. Raises on final failure : the caller fails OPEN, so a
+    judge outage never empties the pool.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            return _client().messages.create(
+                model=JUDGE_MODEL,
+                # 4096 gives Haiku room to emit a verdict for every candidate
+                # in the batch without truncating mid-output : truncated
+                # verdicts default to "drop" which silently dropped real hits.
+                max_tokens=4096,
+                system=[{
+                    "type": "text",
+                    "text": _RELEVANCE_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                tools=[_BATCH_VERDICT_TOOL],
+                tool_choice={"type": "tool", "name": "emit_verdicts"},
+                messages=[{"role": "user", "content": user_msg}],
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt == 0 and _is_retryable_anthropic_error(exc):
+                wait = 2.0
+                print(f"  [llm.judge] {type(exc).__name__} : retrying once in {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+    assert last_exc is not None  # loop only exits via return or raise
+    raise last_exc
+
+
 def judge_relevance_batch(candidates: list[dict], icp: dict) -> dict[str, tuple[bool, str]]:
     """
     Run the ICP gatekeeper over a whole pool in ONE Haiku call.
@@ -400,7 +452,13 @@ def judge_relevance_batch(candidates: list[dict], icp: dict) -> dict[str, tuple[
     Returns a dict keyed by candidate `identity` → (relevant, reason).
     Missing entries default to (False, "no verdict emitted") so callers
     can treat unjudged candidates as dropped (fail-closed, same as the
-    single-call version).
+    single-call version) : this applies ONLY when the call SUCCEEDED and
+    Haiku simply omitted some candidates.
+
+    If the call itself fails (rate-limit / timeout / 5xx / connection),
+    this RAISES after one backoff retry rather than returning an all-drop
+    dict. The caller (_judge_all) catches that and fails OPEN, keeping every
+    candidate : a transient judge outage must never empty the pool.
     """
     if not candidates:
         return {}
@@ -413,33 +471,22 @@ def judge_relevance_batch(candidates: list[dict], icp: dict) -> dict[str, tuple[
     )
     out: dict[str, tuple[bool, str]] = {}
     try:
-        response = _client().messages.create(
-            model=JUDGE_MODEL,
-            # 4096 gives Haiku room to emit a verdict for every candidate
-            # in the batch without truncating mid-output : truncated
-            # verdicts default to "drop" which silently dropped real hits.
-            max_tokens=4096,
-            system=[{
-                "type": "text",
-                "text": _RELEVANCE_SYSTEM,
-                "cache_control": {"type": "ephemeral"},
-            }],
-            tools=[_BATCH_VERDICT_TOOL],
-            tool_choice={"type": "tool", "name": "emit_verdicts"},
-            messages=[{"role": "user", "content": user_msg}],
-        )
+        response = _judge_create(user_msg)
     except Exception as exc:  # noqa: BLE001
+        # The judge is a SECOND-PASS quality gate over candidates that Exa /
+        # discovery already surfaced and self-filtered. If the call itself
+        # never produced a verdict (429 rate-limit, timeout, 5xx, connection
+        # error, …) we must NOT silently reject the entire pool : that turns a
+        # transient infra blip into "0 candidates surfaced". Re-raise so the
+        # caller (_judge_all) fails OPEN and keeps every candidate. We only
+        # ever DROP a candidate on a REAL verdict (a successful response, below
+        # — including its per-candidate fail-closed defaults). _judge_all owns
+        # the failure_log entry so we don't double-report.
         cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
         print(f"  [llm] judge_relevance_batch failed: {type(exc).__name__}: {exc}"
-              + (f"  (cause: {type(cause).__name__}: {cause})" if cause else ""))
-        from . import failure_log
-        failure_log.report_failure(
-            failure_log.classify_anthropic_exception(exc),
-            source="judge",
-            detail=f"{type(exc).__name__}: {str(exc)[:160]}",
-        )
-        # Fail-closed: every candidate gets dropped with the error as reason.
-        return {c["identity"]: (False, f"verdict error: {exc}") for c in candidates}
+              + (f"  (cause: {type(cause).__name__}: {cause})" if cause else "")
+              + " : failing OPEN (keeping all candidates)")
+        raise
 
     saw_tool_use = False
     for block in response.content:

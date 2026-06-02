@@ -124,9 +124,10 @@ def test_adapter_timeout_default_is_thirty_seconds():
     assert prospector._adapter_timeout() == 30.0
 
 
-def test_judge_timeout_default_is_six_seconds():
-    """Restored to 6s after the 4s default was too aggressive : Haiku
-    occasionally needs the extra room to finish the batch, and a timeout
-    silently bypasses the ICP gate."""
+def test_judge_timeout_default_is_thirty_seconds():
+    """Bumped to 30s : Railway→Anthropic round-trips routinely need 6-12s for
+    a batched judge call of ~50 candidates, and a premature timeout silently
+    bypasses the ICP gate (surfacing wrong-person matches). 6s was forcing
+    constant fail-open, so the headroom is deliberate."""
     os.environ.pop("PROSPECTING_JUDGE_TIMEOUT", None)
-    assert prospector._judge_timeout() == 6.0
+    assert prospector._judge_timeout() == 30.0
