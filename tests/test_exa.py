@@ -486,3 +486,44 @@ def test_fetch_url_snippet_returns_empty_on_502(monkeypatch):
 
     # acme.com isn't in the skip list, so it goes through the network path
     assert exa.fetch_url_snippet("https://acme.com/about") == ""
+
+
+# ---- discover_candidates short-circuit -----------------------------------
+# Regression: when Exa is configured but returns empty for an ICP, we must
+# NOT fall through to the Claude + web_search fallback. That call takes
+# 60-110s but prospector.py caps each adapter at 30s, so the fallback is
+# always killed mid-flight and surfaces a misleading "source took too long"
+# instead of an honest empty pool. The short-circuit keeps the source fast.
+
+def test_discover_candidates_short_circuits_when_exa_empty(monkeypatch):
+    from backend.agents import llm
+
+    monkeypatch.setattr(exa, "exa_available", lambda: True)
+    monkeypatch.setattr(exa, "discover_via_exa", lambda *a, **kw: [])
+
+    # If the Claude fallback were reached it would touch the SDK client;
+    # make that an explicit failure so the test catches a regression.
+    def _boom(*a, **kw):  # pragma: no cover : asserts via raise on call
+        raise AssertionError(
+            "Claude fallback must not run when Exa is configured but empty")
+
+    monkeypatch.setattr(llm, "_client", _boom)
+
+    out = llm.discover_candidates("linkedin", {"role": "founder"})
+    assert out == []
+
+
+def test_discover_candidates_returns_exa_results_when_present(monkeypatch):
+    from backend.agents import llm
+
+    monkeypatch.setattr(exa, "exa_available", lambda: True)
+    monkeypatch.setattr(
+        exa, "discover_via_exa",
+        lambda *a, **kw: [{"name": "Ada", "profile_url": "https://x/in/ada"}])
+    monkeypatch.setattr(
+        llm, "_client",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Exa returned results : Claude must not run")))
+
+    out = llm.discover_candidates("linkedin", {"role": "founder"})
+    assert out == [{"name": "Ada", "profile_url": "https://x/in/ada"}]

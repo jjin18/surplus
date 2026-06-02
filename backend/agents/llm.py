@@ -264,17 +264,15 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
         out = exa.discover_via_exa(source, icp, max_candidates)
         if out:
             return out
-        # Scholar is Exa-only by design : Claude + web_search for
-        # researcher pages takes 60-90s and the results don't carry the
-        # name-slug we need to merge onto an existing LinkedIn record,
-        # so the fallback would just burn 30s of adapter-timeout for
-        # zero useful signal. Return empty and let the merge proceed.
-        if source == "scholar":
-            return []
-        # Exa returned empty : fall through to Claude if we have it,
-        # otherwise return the empty list.
-        if not (_SDK_AVAILABLE and bool(_api_key())):
-            return []
+        # Exa is configured but returned nothing for this ICP. Do NOT fall
+        # through to Claude + web_search here: that call takes 60-110s, but
+        # prospector.py caps each adapter at 30s (PROSPECTING_ADAPTER_TIMEOUT,
+        # lowered from 120s so one stuck source can't pin the pipeline). The
+        # fallback is therefore guaranteed to be killed mid-flight, producing
+        # a misleading "source took too long" instead of an honest empty pool.
+        # Return [] so the source resolves fast. The Claude fallback below is
+        # reachable only when Exa is NOT configured at all.
+        return []
 
     tool = _SOURCE_TOOL[source]
     guidance = _SOURCE_GUIDANCE[source]
@@ -297,9 +295,11 @@ def discover_candidates(source: str, icp: dict, max_candidates: int | None = Non
         # `output_config` is intentionally NOT set here: the pinned
         # anthropic==0.42.0 raises TypeError on it. Re-add when we bump
         # the SDK to a version that knows the parameter.
-        # 110s SDK timeout : slightly under the 120s adapter timeout in
-        # prospector.py so the SDK raises a clean APITimeoutError that
-        # our except catches, instead of getting cancelled mid-flight.
+        # This path is reached only when Exa is NOT configured (no EXA_API_KEY);
+        # with Exa present we short-circuit above. The 110s SDK timeout assumes
+        # a generous PROSPECTING_ADAPTER_TIMEOUT: under the default 30s cap this
+        # call is killed by prospector.py first, so deployments relying on the
+        # Claude backend must raise PROSPECTING_ADAPTER_TIMEOUT accordingly.
         response = _client().with_options(timeout=110.0).messages.create(
             model=MODEL,
             max_tokens=8000,
