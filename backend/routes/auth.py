@@ -197,13 +197,40 @@ def _reconnect_body(dsn: str, expires: str, state_token: str, base: str,
 
 
 def _resolve_returning_user(request: Request, db: DbSession) -> Optional[User]:
-    """Look up the User whose Unipile account_id matches the cookie,
-    if any. Returns None on missing/stale cookie : caller falls back
-    to create."""
+    """Find the returning user so we reconnect their existing Unipile account
+    (and re-point it onto the same User row) instead of minting a brand-new
+    account + duplicate User that orphans their events.
+
+    Resolution order:
+      1. LAST_ACCOUNT_COOKIE -> User.unipile_account_id : the same-browser
+         marker (set on every successful auth, 365-day TTL).
+      2. SESSION_COOKIE -> the currently-logged-in User, IF they already
+         have a live unipile_account_id to reconnect. This is the fix for
+         re-auth from a browser that lost the LAST_ACCOUNT_COOKIE (different
+         device, cleared cookies, cookie expiry, or the prior account was
+         deleted upstream). Without it, a logged-in operator re-connecting
+         looked like a brand-new caller -> create -> orphaned events.
+
+    Returns None only for genuinely new/anonymous callers (no cookie, no
+    session, or a session user who has never connected LinkedIn) : caller
+    then falls back to create."""
     last_account = (request.cookies.get(LAST_ACCOUNT_COOKIE) or "").strip()
-    if not last_account:
-        return None
-    return db.query(User).filter(User.unipile_account_id == last_account).first()
+    if last_account:
+        by_cookie = db.query(User).filter(
+            User.unipile_account_id == last_account).first()
+        if by_cookie is not None:
+            return by_cookie
+
+    # Fallback : a logged-in user re-connecting without a usable
+    # LAST_ACCOUNT_COOKIE. Only reconnect if they already hold a live
+    # account_id; a triage / email-only user with no Unipile account must
+    # still go through create (reconnect needs an account to reconnect to).
+    session_user = _load_user_by_session(
+        db, (request.cookies.get(SESSION_COOKIE) or "").strip() or None
+    )
+    if session_user is not None and session_user.unipile_account_id:
+        return session_user
+    return None
 
 
 async def _post_hosted_link(dsn: str, api_key: str, body: dict) -> tuple[int, dict]:
@@ -274,8 +301,14 @@ async def linkedin_start(
         # API change, etc.) : fall back to create so the user isn't locked out.
         if status >= 400 and body["type"] == "reconnect":
             print(f"  [auth] reconnect rejected ({status}); falling back to create")
-            auth_state.user_id = None  # un-prefill : webhook will resolve
-            db.commit()
+            # Keep auth_state.user_id pointing at the returning user. Reconnect
+            # most often fails because the OLD account was deleted upstream :
+            # exactly the case where we must re-point the existing User row
+            # onto the new account. The callback/webhook adopt-pre-tagged
+            # branch does that (and backfills the now-known provider_id),
+            # which is what stops the duplicate-User orphaning. Clearing it
+            # here was the bug : it forced dedup-by-keys, which misses when
+            # the old row's linkedin_provider_id is NULL.
             body = _create_body(dsn, expires, state_token, base, failure_url)
             status, data = await _post_hosted_link(dsn, api_key, body)
         if status >= 400:
@@ -337,8 +370,9 @@ async def linkedin_start_redirect(
         status, data = await _post_hosted_link(dsn, api_key, body)
         if (status >= 400 or not data.get("url")) and body["type"] == "reconnect":
             print(f"  [auth] reconnect rejected ({status}); falling back to create")
-            auth_state.user_id = None
-            db.commit()
+            # Keep the pre-tag : see linkedin_start() : the callback adopts
+            # the returning User row onto the new account instead of minting
+            # a duplicate that orphans events.
             body = _create_body(dsn, expires, state_token, base, failure_url)
             status, data = await _post_hosted_link(dsn, api_key, body)
         if status >= 400 or not data.get("url"):

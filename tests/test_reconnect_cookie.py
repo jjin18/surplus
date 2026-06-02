@@ -32,10 +32,26 @@ def db():
         session.close()
 
 
-def _request(cookie_value=None):
+def _request(cookie_value=None, session_token=None):
+    from backend.auth import SESSION_COOKIE
+    cookies = {}
+    if cookie_value:
+        cookies["surplus_last_account"] = cookie_value
+    if session_token:
+        cookies[SESSION_COOKIE] = session_token
     req = MagicMock()
-    req.cookies = {"surplus_last_account": cookie_value} if cookie_value else {}
+    req.cookies = cookies
     return req
+
+
+def _seed_session(db, user, token="sess-tok"):
+    """Create a live (non-revoked, unexpired) Session for `user`."""
+    from datetime import datetime, timedelta, timezone
+    db.add(models.Session(
+        session_token=token, user_id=user.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=7)))
+    db.commit()
+    return token
 
 
 # ── _create_body shape ────────────────────────────────────────────────
@@ -120,6 +136,56 @@ def test_cookie_pointing_at_existing_user_returns_user(db):
     user = _resolve_returning_user(_request("acct-abc"), db)
     assert user is not None
     assert user.unipile_account_id == "acct-abc"
+
+
+# ── session fallback : the orphaning-prevention fix ───────────────────
+
+def test_session_fallback_finds_logged_in_user_without_cookie(db):
+    """A logged-in operator re-connecting from a browser that lost the
+    LAST_ACCOUNT_COOKIE must still resolve to their existing row (so we
+    reconnect / re-point onto it) instead of looking brand-new -> create
+    -> orphaned events. This is the core recurrence fix."""
+    from backend.routes.auth import _resolve_returning_user
+    u = models.User(unipile_account_id="acct-live", name="Jia")
+    db.add(u); db.commit()
+    tok = _seed_session(db, u)
+    # No LAST_ACCOUNT_COOKIE at all, only a session.
+    user = _resolve_returning_user(_request(None, session_token=tok), db)
+    assert user is not None
+    assert user.id == u.id
+
+
+def test_session_fallback_skips_user_without_unipile_account(db):
+    """A triage / email-only user has no account to reconnect to : must
+    fall through to create, not attempt a bogus reconnect."""
+    from backend.routes.auth import _resolve_returning_user
+    u = models.User(unipile_account_id=None, name="Triage user")
+    db.add(u); db.commit()
+    tok = _seed_session(db, u)
+    assert _resolve_returning_user(_request(None, session_token=tok), db) is None
+
+
+def test_cookie_takes_precedence_over_session(db):
+    from backend.routes.auth import _resolve_returning_user
+    cookie_user = models.User(unipile_account_id="acct-cookie", name="ByCookie")
+    sess_user = models.User(unipile_account_id="acct-sess", name="BySession")
+    db.add_all([cookie_user, sess_user]); db.commit()
+    tok = _seed_session(db, sess_user)
+    user = _resolve_returning_user(_request("acct-cookie", session_token=tok), db)
+    assert user.unipile_account_id == "acct-cookie"
+
+
+def test_stale_cookie_falls_through_to_session(db):
+    """Cookie points at a deleted account (no matching row) but the user is
+    still logged in : resolve via session, not None."""
+    from backend.routes.auth import _resolve_returning_user
+    u = models.User(unipile_account_id="acct-live", name="Jia")
+    db.add(u); db.commit()
+    tok = _seed_session(db, u)
+    user = _resolve_returning_user(
+        _request("deleted-acct", session_token=tok), db)
+    assert user is not None
+    assert user.id == u.id
 
 
 # ── cookie / TTL constants sanity ─────────────────────────────────────

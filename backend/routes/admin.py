@@ -61,6 +61,16 @@ class VoiceExamplesBody(BaseModel):
     examples: list[str]
 
 
+class MergeUsersBody(BaseModel):
+    """Merge `from_user_id` (the orphaned/duplicate row) INTO `to_user_id`
+    (the survivor). Re-points every FK, optionally copies billing forward,
+    then deletes the source row. dry_run defaults True : preview the counts
+    before committing anything."""
+    from_user_id: int
+    to_user_id: int
+    dry_run: bool = True
+
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -382,3 +392,149 @@ def set_voice_examples(
     from ..agents.outreach import reset_compose_cache
     reset_compose_cache()
     return {"saved": len(cleaned), "examples": cleaned}
+
+
+# ── User lookup + merge : un-orphan events after a re-auth duplicate ─────
+#
+# Background: a LinkedIn re-auth can mint a NEW Unipile account_id AND a NEW
+# User row when dedup misses (old row had NULL linkedin_provider_id, so the
+# provider-id join couldn't match). The new empty row owns nothing, so the
+# operator's real Events 404 ("Event not found") because get_owned_event
+# filters Event.user_id == user.id. These two endpoints let an operator
+# (1) confirm the duplicate-row state read-only, then (2) merge the orphaned
+# row into the survivor, re-pointing every FK. See routes/auth.py dedup.
+
+
+def _user_fk_counts(db: Session, user_id: int) -> dict:
+    """Count every row that points at this user, across all FK tables.
+    Read-only : used by both the lookup (display) and merge (preview)."""
+    return {
+        "events": db.query(models.Event).filter(
+            models.Event.user_id == user_id).count(),
+        "contacts": db.query(models.Contact).filter(
+            models.Contact.user_id == user_id).count(),
+        "interactions": db.query(models.RelationshipInteraction).filter(
+            models.RelationshipInteraction.actor_user_id == user_id).count(),
+        "sessions": db.query(models.Session).filter(
+            models.Session.user_id == user_id).count(),
+    }
+
+
+def _user_summary(db: Session, u: models.User) -> dict:
+    return {
+        "id": u.id,
+        "name": u.name,
+        "email": u.email,
+        "unipile_account_id": u.unipile_account_id,
+        "linkedin_provider_id": u.linkedin_provider_id,
+        "linkedin_public_id": u.linkedin_public_id,
+        "linkedin_status": u.linkedin_status,
+        "paid_at": u.paid_at.isoformat() if u.paid_at else None,
+        "stripe_customer_id": u.stripe_customer_id,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+        "owns": _user_fk_counts(db, u.id),
+    }
+
+
+@router.get("/users")
+def lookup_users(
+    identity: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_admin_token),
+):
+    """Read-only. List users matching `identity` (substring match against
+    unipile_account_id / linkedin_provider_id / linkedin_public_id / email /
+    name), each with a count of the rows that FK to them. Omit `identity`
+    to list every user (capped at 200). Use this to confirm a duplicate /
+    orphaned row before calling /admin/merge-users."""
+    q = db.query(models.User)
+    if identity and identity.strip():
+        term = f"%{identity.strip()}%"
+        q = q.filter(
+            (models.User.unipile_account_id.ilike(term))
+            | (models.User.linkedin_provider_id.ilike(term))
+            | (models.User.linkedin_public_id.ilike(term))
+            | (models.User.email.ilike(term))
+            | (models.User.name.ilike(term))
+        )
+    rows = q.order_by(models.User.id.asc()).limit(200).all()
+    return {"count": len(rows), "users": [_user_summary(db, u) for u in rows]}
+
+
+@router.post("/merge-users")
+def merge_users(
+    body: MergeUsersBody,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_admin_token),
+):
+    """Merge the orphaned/duplicate `from_user_id` INTO the survivor
+    `to_user_id`. Re-points events / contacts / interactions / sessions,
+    copies billing forward when the survivor lacks it, then deletes the
+    source row. dry_run=True (default) previews the move without writing.
+
+    Idempotent-ish: re-pointing is an UPDATE keyed on the source id, so a
+    second non-dry run after the source is deleted is a no-op."""
+    if body.from_user_id == body.to_user_id:
+        raise HTTPException(400, "from_user_id and to_user_id are identical")
+
+    src = db.get(models.User, body.from_user_id)
+    dst = db.get(models.User, body.to_user_id)
+    if src is None or dst is None:
+        raise HTTPException(404, "Not Found")
+
+    before = {
+        "from": _user_summary(db, src),
+        "to": _user_summary(db, dst),
+    }
+
+    # Billing: only copy forward when the survivor has none and the source does.
+    billing_copied = False
+    if dst.paid_at is None and src.paid_at is not None:
+        billing_copied = True
+
+    moved = dict(before["from"]["owns"])  # counts that WILL move
+
+    if body.dry_run:
+        return {
+            "dry_run": True,
+            "would_move": moved,
+            "would_copy_billing": billing_copied,
+            "from": before["from"],
+            "to": before["to"],
+        }
+
+    # ── Commit path : re-point every FK, then delete the source row. ──
+    db.query(models.Event).filter(
+        models.Event.user_id == src.id).update(
+        {models.Event.user_id: dst.id}, synchronize_session=False)
+    db.query(models.Contact).filter(
+        models.Contact.user_id == src.id).update(
+        {models.Contact.user_id: dst.id}, synchronize_session=False)
+    db.query(models.RelationshipInteraction).filter(
+        models.RelationshipInteraction.actor_user_id == src.id).update(
+        {models.RelationshipInteraction.actor_user_id: dst.id},
+        synchronize_session=False)
+    db.query(models.Session).filter(
+        models.Session.user_id == src.id).update(
+        {models.Session.user_id: dst.id}, synchronize_session=False)
+    # AuthState is ephemeral, but re-point any dangling pre-tags so a stale
+    # in-flight flow can't resurrect the deleted row.
+    db.query(models.AuthState).filter(
+        models.AuthState.user_id == src.id).update(
+        {models.AuthState.user_id: dst.id}, synchronize_session=False)
+
+    if billing_copied:
+        dst.paid_at = src.paid_at
+        if dst.stripe_customer_id is None:
+            dst.stripe_customer_id = src.stripe_customer_id
+
+    db.delete(src)
+    db.commit()
+
+    return {
+        "dry_run": False,
+        "moved": moved,
+        "billing_copied": billing_copied,
+        "survivor": _user_summary(db, dst),
+    }
