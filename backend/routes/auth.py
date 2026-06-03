@@ -45,11 +45,13 @@ from ..auth import (
     create_session,
     current_user,
     is_demo_user,
+    require_paid_to_connect_linkedin,
     revoke_session,
     set_last_account_cookie,
     set_session_cookie,
 )
 from ..db import get_db
+from ..hosts import is_first_party, is_inperson_host, request_browser_host
 from ..models import AuthState, Session, User
 from ..rate_limit import per_ip_rate_limit
 
@@ -256,6 +258,22 @@ async def linkedin_start(
 ) -> JSONResponse:
     dsn, api_key = _ensure_unipile_configured()
 
+    # Pay-first paywall : connecting LinkedIn (which is also how you sign in)
+    # requires a paid Stripe account, EXCEPT on the in-person host
+    # (event.surpluslayer.com) where connect + send stay free. Resolve the
+    # best-known user (live session first, then the same-browser returning
+    # account) so a PAID user reconnecting from a cookie-only browser isn't
+    # bounced to Stripe. Gate before we create any AuthState so a blocked
+    # caller leaves no dangling pending row.
+    host = request_browser_host(request)
+    if not (is_first_party(host) and is_inperson_host(host)):
+        gate_user = _load_user_by_session(
+            db, (request.cookies.get(SESSION_COOKIE) or "").strip() or None
+        )
+        if gate_user is None:
+            gate_user = _resolve_returning_user(request, db)
+        require_paid_to_connect_linkedin(gate_user)
+
     state_token = secrets.token_urlsafe(32)
     auth_state = AuthState(state_token=state_token, status="pending")
     db.add(auth_state)
@@ -265,10 +283,10 @@ async def linkedin_start(
     expires = _unipile_iso_timestamp(_utcnow() + timedelta(hours=1))
     failure_url = f"{base}/signin?error=linkedin_auth_failed"
 
-    # Connect-first : signing in + connecting LinkedIn is FREE. The single
-    # paywall is at SEND (require_can_send_linkedin), not here. An anonymous
-    # caller starts the flow with no session : the callback mints the User
-    # when LinkedIn comes back.
+    # Pay-first (gated above, except on the in-person host). On the apex the
+    # caller is already paid by the time we get here; on the in-person host
+    # connecting stays free. An anonymous in-person caller starts with no
+    # session : the callback mints the User when LinkedIn comes back.
     active_user = _load_user_by_session(
         db, (request.cookies.get(SESSION_COOKIE) or "").strip() or None
     )

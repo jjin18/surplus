@@ -240,6 +240,56 @@ def billing_status(
     }
 
 
+class GrantPaidIn(BaseModel):
+    email: str
+
+
+@router.post("/grant-paid")
+def grant_paid(
+    body: GrantPaidIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_admin_token),
+):
+    """Stamp paid_at on a user by EMAIL — recovery for payments that Stripe
+    confirms but the app DB doesn't reflect (webhook missed it, or the paid
+    User row was lost to a DB reset / migration so the webhook's id-based
+    lookup can no longer find it).
+
+    Keyed by email rather than user.id precisely because id isn't stable
+    across a DB reset. Idempotent : a no-op (returns already_paid) when
+    paid_at is already set. Read the current state first via /billing-status.
+    """
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    user = (
+        db.query(models.User)
+        .filter(models.User.email == email)
+        .order_by(models.User.id.desc())
+        .first()
+    )
+    if user is None:
+        raise HTTPException(404, f"no user with email {email!r}")
+    if user.paid_at is not None:
+        return {
+            "ok": True,
+            "already_paid": True,
+            "user_id": user.id,
+            "email": user.email,
+            "paid_at": user.paid_at.isoformat(),
+        }
+    user.paid_at = datetime.now(timezone.utc)
+    db.commit()
+    print(f"  [admin.grant_paid] stamped paid_at on user.id={user.id} email={email}")
+    return {
+        "ok": True,
+        "already_paid": False,
+        "user_id": user.id,
+        "email": user.email,
+        "paid_at": user.paid_at.isoformat(),
+    }
+
+
 # ── Pending AI replies : list, approve, reject ──────────────────────────
 
 @router.get("/pending-replies", response_model=list[PendingReplyOut])
