@@ -43,13 +43,18 @@ from .base import (
 )
 
 
-# Unipile webhook event -> our canonical state
+# Unipile webhook event -> our canonical state.
+# Unipile's dialect varies by webhook source : the "messaging" source emits
+# `message_received` for inbound DMs, while older/relations payloads use
+# `new_message`. We accept both so auto-reply fires regardless of which the
+# dashboard subscription produces.
 _EVENT_MAP: dict[str, str] = {
-    "new_relation":   "invite_accepted",   # they accepted the invite
-    "relation":       "invite_accepted",
-    "invite_sent":    "invite_sent",
-    "new_message":    "message_replied",   # incoming msg = they replied
-    "message_sent":   "message_sent",
+    "new_relation":     "invite_accepted",   # they accepted the invite
+    "relation":         "invite_accepted",
+    "invite_sent":      "invite_sent",
+    "new_message":      "message_replied",    # incoming msg = they replied
+    "message_received": "message_replied",    # "messaging" source dialect
+    "message_sent":     "message_sent",
 }
 
 
@@ -572,11 +577,19 @@ class UnipileProvider(LinkedInProvider):
         if state is None or state not in CANONICAL_STATES:
             return None
 
-        # try multiple places Unipile may surface the user's provider_id
+        # try multiple places Unipile may surface the OTHER party's
+        # provider_id. The "messaging" source nests the counterpart under
+        # `sender` (inbound DM) as attendee_provider_id; relations payloads
+        # surface it at the top level. We match a Prospect by this id, so
+        # checking every known shape is what makes inbound messages resolve.
+        sender = raw.get("sender") if isinstance(raw.get("sender"), dict) else {}
         provider_user_id = (
             raw.get("user_provider_id")
             or (raw.get("user") or {}).get("provider_id")
             or (raw.get("user") or {}).get("id")
+            or sender.get("attendee_provider_id")
+            or sender.get("provider_id")
+            or raw.get("attendee_provider_id")
             or raw.get("provider_id")
         )
 
@@ -609,6 +622,17 @@ class UnipileProvider(LinkedInProvider):
         if not self.webhook_secret:
             return not self.require_signature
         lower = {k.lower(): v for k, v in (headers or {}).items()}
+
+        # Path A : static shared-secret header. Unipile doesn't body-HMAC its
+        # webhooks : it lets you attach STATIC custom headers to every
+        # delivery. register_inbound_webhook() sets X-Webhook-Secret to our
+        # secret, so a constant-time match on that header is how real inbound
+        # traffic authenticates.
+        token = (lower.get("x-webhook-secret") or "").strip()
+        if token and hmac.compare_digest(token, self.webhook_secret):
+            return True
+
+        # Path B : body-HMAC (legacy / providers that do sign the body).
         sig = lower.get("x-unipile-signature") or lower.get("x-signature") or ""
         if not sig:
             return False
@@ -620,3 +644,61 @@ class UnipileProvider(LinkedInProvider):
             digestmod=hashlib.sha256,
         ).hexdigest()
         return hmac.compare_digest(mac, sig.strip())
+
+    # ---- webhook registration (the inbound trigger wiring) --------------
+
+    def register_inbound_webhook(self, callback_url: str) -> dict:
+        """Ensure a Unipile "messaging" webhook exists that POSTs inbound
+        DMs to ``callback_url`` (our /webhooks/unipile route). Idempotent :
+        if one already targets this URL we return it instead of creating a
+        duplicate. This is the auto-reply analog of the follow-up cron : the
+        message_received handler already exists, this is what makes Unipile
+        actually call it.
+
+        Attaches X-Webhook-Secret (our UNIPILE_WEBHOOK_SECRET) as a static
+        custom header so verify_webhook can authenticate each delivery.
+        """
+        if not (self.api_key and self.dsn):
+            return {"ok": False, "reason": "UNIPILE_DSN + UNIPILE_API_KEY required"}
+
+        import httpx
+        headers = {"X-API-KEY": self.api_key, "accept": "application/json"}
+
+        # 1. Idempotency : is one already pointed here?
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                listed = client.get(f"{self.dsn}/api/v1/webhooks", headers=headers)
+            existing = listed.json() if listed.text else {}
+        except Exception:
+            existing = {}
+        items = existing.get("items") if isinstance(existing, dict) else existing
+        for w in (items or []):
+            if isinstance(w, dict) and (w.get("request_url") or w.get("url")) == callback_url:
+                return {"ok": True, "created": False, "webhook": w}
+
+        # 2. Create it.
+        body: dict = {
+            "source": "messaging",
+            "request_url": callback_url,
+            "name": "surplus-inbound",
+            "enabled": True,
+        }
+        if self.webhook_secret:
+            # Static header echoed back on every delivery -> verify_webhook.
+            body["headers"] = [
+                {"key": "X-Webhook-Secret", "value": self.webhook_secret}
+            ]
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(f"{self.dsn}/api/v1/webhooks",
+                                   headers={**headers, "Content-Type": "application/json"},
+                                   json=body)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+        if resp.status_code >= 400:
+            return {"ok": False, "reason": f"unipile {resp.status_code}: {resp.text[:300]}"}
+        try:
+            created = resp.json() if resp.text else {}
+        except Exception:
+            created = {}
+        return {"ok": True, "created": True, "webhook": created}

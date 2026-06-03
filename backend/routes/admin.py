@@ -206,6 +206,35 @@ def run_followups(
     }
 
 
+class RegisterWebhooksBody(BaseModel):
+    """Optional explicit base URL for the callback. Falls back to the
+    SURPLUS_BASE_URL env var (the same one the follow-up cron uses)."""
+    base_url: Optional[str] = None
+
+
+@router.post("/register-webhooks", status_code=200)
+def register_webhooks(
+    body: RegisterWebhooksBody = RegisterWebhooksBody(),
+    _: None = Depends(_require_admin_token),
+) -> dict:
+    """Register the provider's inbound-messaging webhook so auto-reply fires.
+
+    This is the auto-reply analog of the follow-up cron : the
+    message_received handler at /webhooks/unipile already exists, but Unipile
+    never calls it until a "messaging" webhook is subscribed. Idempotent :
+    re-running won't create duplicates. Run once after deploy (or whenever the
+    base URL changes).
+    """
+    base = (body.base_url or os.environ.get("SURPLUS_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(
+            400, "no base_url provided and SURPLUS_BASE_URL is not set")
+    provider = get_provider()
+    callback_url = f"{base}/webhooks/unipile"
+    result = provider.register_inbound_webhook(callback_url)
+    return {"provider": provider.name, "callback_url": callback_url, **result}
+
+
 # ── Billing status : read-only paid-user audit ──────────────────────────
 #
 # Diagnostic for "are payments landing?". paid_at is stamped ONLY by the

@@ -242,6 +242,13 @@ class LinkedInProvider(abc.ABC):
         endpoint stays safe."""
         return False
 
+    def register_inbound_webhook(self, callback_url: str) -> dict:
+        """Ensure a provider-side webhook delivers inbound messaging events to
+        ``callback_url``. Idempotent. Returns a small status dict. Default is a
+        no-op for providers that don't have (or don't need) a registerable
+        messaging webhook."""
+        return {"ok": False, "reason": "provider has no inbound webhook to register"}
+
     @abc.abstractmethod
     def normalize_webhook(self, raw: dict) -> Optional[CanonicalEvent]:
         """

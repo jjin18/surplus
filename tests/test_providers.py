@@ -171,6 +171,24 @@ def test_unipile_normalize_new_message_event():
     assert ev.body == "yes, sounds great"
 
 
+def test_unipile_normalize_messaging_source_message_received():
+    """Unipile's "messaging" webhook source emits `message_received` (not
+    `new_message`) and nests the sender's provider_id under `sender`. Both
+    must resolve, or auto-reply never matches a prospect."""
+    p = UnipileProvider(dry_run=True)
+    raw = {
+        "event": "message_received",
+        "chat_id": "chat_abc",
+        "sender": {"attendee_provider_id": "ACoAAA_sender"},
+        "message": "are you still hiring?",
+    }
+    ev = p.normalize_webhook(raw)
+    assert ev is not None
+    assert ev.state == "message_replied"
+    assert ev.provider_lead_id == "ACoAAA_sender"
+    assert ev.body == "are you still hiring?"
+
+
 def test_unipile_normalize_unknown_event_returns_none():
     p = UnipileProvider(dry_run=True)
     assert p.normalize_webhook({"event": "ufo_detected"}) is None
@@ -194,6 +212,27 @@ def test_unipile_verify_webhook_fails_with_bad_signature():
     body = b'{"x":1}'
     assert p.verify_webhook({"x-unipile-signature": "sha256=deadbeef"}, body) is False
     assert p.verify_webhook({}, body) is False
+
+
+def test_unipile_verify_webhook_passes_with_static_secret_header():
+    """Real Unipile traffic authenticates via a STATIC custom header (Unipile
+    doesn't body-HMAC), so a matching X-Webhook-Secret must pass regardless of
+    body."""
+    secret = "static-shared-secret"
+    p = UnipileProvider(dry_run=True, webhook_secret=secret)
+    body = b'{"event":"message_received"}'
+    assert p.verify_webhook({"X-Webhook-Secret": secret}, body) is True
+    assert p.verify_webhook({"x-webhook-secret": secret}, body) is True
+    # Wrong token still fails (and no HMAC sig present).
+    assert p.verify_webhook({"X-Webhook-Secret": "nope"}, body) is False
+
+
+def test_unipile_register_inbound_webhook_needs_creds():
+    """Without DSN/API key (dry-run dev), registration declines cleanly rather
+    than attempting a live HTTP call."""
+    p = UnipileProvider(dry_run=True)
+    out = p.register_inbound_webhook("https://x.test/webhooks/unipile")
+    assert out["ok"] is False
 
 
 def test_unipile_verify_webhook_no_secret_denies_in_prod_allows_in_dev():
