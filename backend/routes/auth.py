@@ -45,7 +45,6 @@ from ..auth import (
     create_session,
     current_user,
     is_demo_user,
-    require_paid_to_connect_linkedin,
     revoke_session,
     set_last_account_cookie,
     set_session_cookie,
@@ -258,22 +257,6 @@ async def linkedin_start(
 ) -> JSONResponse:
     dsn, api_key = _ensure_unipile_configured()
 
-    # Pay-first paywall : connecting LinkedIn (which is also how you sign in)
-    # requires a paid Stripe account, EXCEPT on the in-person host
-    # (event.surpluslayer.com) where connect + send stay free. Resolve the
-    # best-known user (live session first, then the same-browser returning
-    # account) so a PAID user reconnecting from a cookie-only browser isn't
-    # bounced to Stripe. Gate before we create any AuthState so a blocked
-    # caller leaves no dangling pending row.
-    host = request_browser_host(request)
-    if not (is_first_party(host) and is_inperson_host(host)):
-        gate_user = _load_user_by_session(
-            db, (request.cookies.get(SESSION_COOKIE) or "").strip() or None
-        )
-        if gate_user is None:
-            gate_user = _resolve_returning_user(request, db)
-        require_paid_to_connect_linkedin(gate_user)
-
     state_token = secrets.token_urlsafe(32)
     auth_state = AuthState(state_token=state_token, status="pending")
     db.add(auth_state)
@@ -283,10 +266,11 @@ async def linkedin_start(
     expires = _unipile_iso_timestamp(_utcnow() + timedelta(hours=1))
     failure_url = f"{base}/signin?error=linkedin_auth_failed"
 
-    # Pay-first (gated above, except on the in-person host). On the apex the
-    # caller is already paid by the time we get here; on the in-person host
-    # connecting stays free. An anonymous in-person caller starts with no
-    # session : the callback mints the User when LinkedIn comes back.
+    # The LinkedIn round-trip ALWAYS proceeds : the pay-at-connect paywall is
+    # enforced in /linkedin/callback, AFTER we know the LinkedIn identity, so
+    # payment is tied to the LinkedIn account (provider_id) and portable across
+    # browsers/devices. Gating here (before identity is known) would wrongly
+    # bounce a PAID LinkedIn signing in from a fresh browser to Stripe again.
     active_user = _load_user_by_session(
         db, (request.cookies.get(SESSION_COOKIE) or "").strip() or None
     )
@@ -342,18 +326,24 @@ async def linkedin_start(
         raise HTTPException(status_code=502, detail=f"Could not reach Unipile: {e!r}")
 
 
-# ─── 1b. Redirect-style start (for landing-page links) ────────────
-# The POST /linkedin/start returns JSON for in-app fetch flows. This
-# variant accepts a top-level GET navigation (e.g. clicked from
-# join.surpluslayer.com) and 303-redirects the user straight to the
-# Unipile hosted-auth URL so the cookie set on /linkedin/callback
-# arrives in the same browser-driven navigation chain.
+# ─── 1b. Connect-first start (for landing-page links) ─────────────
+# The POST /linkedin/start returns JSON but is paywalled. The landing
+# page (join.surpluslayer.com) is connect-first/free, so it uses the
+# helper below via two thin endpoints:
+#   - start-redirect : top-level GET navigation, 303s straight to Unipile
+#     so the cookie set on /linkedin/callback arrives in the same chain.
+#   - start-url      : same minting, returns JSON {"url": ...} so the
+#     landing can PREFETCH the hosted link on hover/focus and make the
+#     actual click instant (the ~1s Unipile round-trip runs ahead of time).
 
-@router.get("/linkedin/start-redirect")
-async def linkedin_start_redirect(
-    request: Request,
-    db: DbSession = Depends(get_db),
-):
+async def _mint_connect_link(
+    request: Request, db: DbSession
+) -> tuple[str | None, str | None]:
+    """Connect-first (free) mint of a Unipile hosted-auth link.
+
+    Returns (url, None) on success or (None, error_key) on failure, where
+    error_key is one of the ?error= values the landing page understands.
+    """
     dsn, api_key = _ensure_unipile_configured()
 
     state_token = secrets.token_urlsafe(32)
@@ -394,12 +384,37 @@ async def linkedin_start_redirect(
             body = _create_body(dsn, expires, state_token, base, failure_url)
             status, data = await _post_hosted_link(dsn, api_key, body)
         if status >= 400 or not data.get("url"):
-            return RedirectResponse(
-                f"{base}/?error=linkedin_unipile_rejected", status_code=303,
-            )
-        return RedirectResponse(data["url"], status_code=303)
+            return None, "linkedin_unipile_rejected"
+        return data["url"], None
     except httpx.HTTPError:
-        return RedirectResponse(f"{base}/?error=linkedin_unreachable", status_code=303)
+        return None, "linkedin_unreachable"
+
+
+@router.get("/linkedin/start-redirect")
+async def linkedin_start_redirect(
+    request: Request,
+    db: DbSession = Depends(get_db),
+):
+    url, error = await _mint_connect_link(request, db)
+    if url is None:
+        base = _redirect_base(request)
+        return RedirectResponse(f"{base}/?error={error}", status_code=303)
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/linkedin/start-url")
+async def linkedin_start_url(
+    request: Request,
+    db: DbSession = Depends(get_db),
+) -> JSONResponse:
+    """JSON sibling of start-redirect for prefetch. The landing page calls
+    this on hover/focus, caches the url, then navigates to it on click so
+    the Unipile round-trip is already done. CORS is open (no credentials),
+    so the cross-origin fetch from join.surpluslayer.com just works."""
+    url, error = await _mint_connect_link(request, db)
+    if url is None:
+        return JSONResponse({"error": error}, status_code=502)
+    return JSONResponse({"url": url})
 
 
 # ─── 2. Webhook: Unipile tells us a new account was created ────────
@@ -773,6 +788,30 @@ async def linkedin_callback(
     auth_state.status = "callback_done"
     auth_state.completed_at = _utcnow()
     db.commit()
+
+    # Pay-at-connect paywall, tied to the LinkedIn identity. By here `user`
+    # is the DEDUPED row for this LinkedIn account (matched on provider_id /
+    # public_id / email above), so paid_at is portable across browsers and
+    # devices : a LinkedIn that paid once is recognized everywhere and skips
+    # Stripe. Only an unpaid LinkedIn is routed to Checkout, and only off the
+    # in-person host (event.surpluslayer.com stays free). We set the session
+    # cookie FIRST so the user returns from Stripe already signed in, and the
+    # checkout is tagged with user.id so the webhook stamps THIS row.
+    inperson = bool(_h and is_first_party(_h) and is_inperson_host(_h))
+    if (not inperson) and user.paid_at is None:
+        try:
+            from .billing import build_checkout_url
+            pay_url = build_checkout_url(request, db, user)
+        except Exception as exc:  # noqa: BLE001 : Stripe/SDK/config errors
+            print(f"  [auth.callback] pay-gate could not build checkout url "
+                  f"for user.id={user.id} : {type(exc).__name__}: {exc}")
+            pay_url = None
+        if pay_url:
+            response = RedirectResponse(pay_url, status_code=303)
+            set_session_cookie(response, sess.session_token, host=_h)
+            if user.unipile_account_id:
+                set_last_account_cookie(response, user.unipile_account_id, host=_h)
+            return response
 
     response = RedirectResponse(base_redirect, status_code=303)
     # Set the cookie Domain from the request host so the session is shared

@@ -117,6 +117,60 @@ def _success_cancel_urls(request: Request) -> tuple[str, str]:
     )
 
 
+def build_checkout_url(request: Request, db: DbSession,
+                       user: models.User) -> str:
+    """Return the Stripe URL to send `user` to, tagged with their id so the
+    webhook stamps THIS row's paid_at.
+
+    Two modes (same as create_checkout_session) :
+      - STRIPE_PAYMENT_LINK : append client_reference_id (+ prefilled_email)
+        to the preconfigured dashboard link. No Stripe API call.
+      - STRIPE_PRICE_ID     : create a Checkout Session via the API.
+
+    Shared by the SPA checkout endpoint AND the LinkedIn-callback pay-gate
+    (pay-at-connect, tied to the LinkedIn identity), so both produce an
+    identically-tagged checkout the webhook can resolve back to the user.
+    """
+    payment_link = _env("STRIPE_PAYMENT_LINK")
+    if payment_link:
+        from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
+        parsed = urlparse(payment_link)
+        params = dict(parse_qsl(parsed.query))
+        params["client_reference_id"] = str(user.id)
+        if _is_real_email(user.email):
+            params["prefilled_email"] = user.email
+        return urlunparse(parsed._replace(query=urlencode(params)))
+
+    price_id = _env("STRIPE_PRICE_ID")
+    if not price_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="neither STRIPE_PAYMENT_LINK nor STRIPE_PRICE_ID configured",
+        )
+    stripe = _stripe()
+    success_url, cancel_url = _success_cancel_urls(request)
+    real_email = user.email if _is_real_email(user.email) else None
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{"price": price_id, "quantity": 1}],
+            client_reference_id=str(user.id),
+            customer=user.stripe_customer_id or None,
+            customer_email=real_email if not user.stripe_customer_id else None,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"user_id": str(user.id)},
+        )
+    except Exception as exc:  # noqa: BLE001 : Stripe SDK throws many subclasses
+        print(f"  [billing] checkout.Session.create failed : "
+              f"{type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"stripe create_session error: {type(exc).__name__}",
+        ) from exc
+    return session.url
+
+
 @router.post("/checkout-session",
              dependencies=[Depends(_rl_checkout)])
 def create_checkout_session(
@@ -160,58 +214,8 @@ def create_checkout_session(
         db.refresh(user)
         sess = create_session(db, user)
         new_session_token = sess.session_token
-    payment_link = _env("STRIPE_PAYMENT_LINK")
-    if payment_link:
-        # Append client_reference_id + prefilled_email so the webhook can
-        # locate the right user. Stripe appends these as standard params
-        # on Payment Links : same behavior as Checkout Sessions, just
-        # configured upfront in the dashboard instead of per-call.
-        from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
-        parsed = urlparse(payment_link)
-        params = dict(parse_qsl(parsed.query))
-        params["client_reference_id"] = str(user.id)
-        # Only ship REAL user-owned emails to Stripe's prefilled_email.
-        # Our internal placeholders (prepay-*, triage-*) would surface
-        # as junk in the Checkout email field and make the form look
-        # broken : Stripe should ask the user instead.
-        if _is_real_email(user.email):
-            params["prefilled_email"] = user.email
-        url = urlunparse(parsed._replace(query=urlencode(params)))
-        resp = JSONResponse({"url": url})
-        if new_session_token:
-            set_session_cookie(resp, new_session_token)
-        return resp
-
-    price_id = _env("STRIPE_PRICE_ID")
-    if not price_id:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="neither STRIPE_PAYMENT_LINK nor STRIPE_PRICE_ID configured",
-        )
-    stripe = _stripe()
-    success_url, cancel_url = _success_cancel_urls(request)
-    try:
-        # Same placeholder-email guard as the Payment-Link path above :
-        # don't ship prepay-*/triage-* to Stripe as the customer email.
-        real_email = user.email if _is_real_email(user.email) else None
-        session = stripe.checkout.Session.create(
-            mode="payment",
-            line_items=[{"price": price_id, "quantity": 1}],
-            client_reference_id=str(user.id),
-            customer=user.stripe_customer_id or None,
-            customer_email=real_email if not user.stripe_customer_id else None,
-            success_url=success_url,
-            cancel_url=cancel_url,
-            metadata={"user_id": str(user.id)},
-        )
-    except Exception as exc:  # noqa: BLE001 : Stripe SDK throws many subclasses
-        print(f"  [billing] checkout.Session.create failed : "
-              f"{type(exc).__name__}: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"stripe create_session error: {type(exc).__name__}",
-        ) from exc
-    resp = JSONResponse({"url": session.url, "session_id": session.id})
+    url = build_checkout_url(request, db, user)
+    resp = JSONResponse({"url": url})
     if new_session_token:
         set_session_cookie(resp, new_session_token)
     return resp
