@@ -279,6 +279,7 @@ def exa_discover_probe(
     role: str = "ML platform engineer",
     seniority: str = "Senior",
     co_stage: str = "Seed",
+    city: str = "",
     max_candidates: int = 10,
 ):
     """
@@ -286,25 +287,41 @@ def exa_discover_probe(
     raw parsed candidates. Useful when /prospect feels like a black box :
     this is the exact list our SourceAdapter would feed into the merge.
 
+    `city` threads through exactly as the real pipeline does : it enters the
+    query AND (for linkedin) the `includeText` hard-filter, so this probe can
+    now reproduce the city-scoped empty result the pipeline hits. Leave it
+    blank to run the wide, no-city query.
+
     Example:
-        /api/diagnostics/exa/discover?source=linkedin&role=ML+engineer&seniority=Senior
+        /api/diagnostics/exa/discover?source=linkedin&role=ML+engineer&seniority=Senior&city=New+York
     """
     from .agents import exa
     if source not in ("linkedin", "github", "x"):
         from fastapi import HTTPException
         raise HTTPException(400, "source must be one of: linkedin, github, x")
     icp = {"role": role, "seniority": seniority, "co_stage": co_stage}
+    if city.strip():
+        icp["city"] = city.strip()
     available = exa.exa_available()
-    query = exa._build_query(source, icp)
+    city_cfg = exa._resolve_city(icp.get("city") or "")
+    query = exa._build_query(source, icp, city_cfg)
     # Run the parsed-output path the SourceAdapter uses, AND also surface
     # the raw Exa response so we can debug why parsing dropped fields.
-    candidates = exa.discover_via_exa(source, icp, max_candidates=max_candidates) if available else []
+    from .agents import llm
+    # Strict single-pass Exa : what the city `includeText` hard-filter returns
+    # on its own. This is the value that can come back empty for a tight ICP.
+    strict = exa.discover_via_exa(source, icp, max_candidates=max_candidates) if available else []
+    # Full adapter path : the exact call the SourceAdapter makes, including the
+    # relaxation-retry that loosens the city filter when the strict pass is
+    # empty. Comparing `strict_count` vs `count` shows the relaxation working.
+    candidates = llm.discover_candidates(source, icp, max_candidates) if available else []
     raw_results = _exa_raw_results(source, icp, max_candidates) if available else []
     return {
         "exa_configured": available,
         "source": source,
         "icp": icp,
         "exa_query": query,
+        "strict_count": len(strict),
         "count": len(candidates),
         "candidates": candidates,
         "raw": raw_results,
