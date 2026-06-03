@@ -104,28 +104,44 @@ def _eligible_prospects(db: Session) -> list[models.Prospect]:
                     .options(selectinload(models.Prospect.outreach))
                     .all())
 
+    # Outbound DM states we can both anchor timing on AND prove the thread is
+    # live enough to DM. We deliberately anchor on the MOST RECENT outbound
+    # touch (a first DM or any prior follow-up), not the first DM, so the
+    # cadence stays "time sensitive based on when you last wrote".
+    OUTBOUND_DM_STATES = {"message_sent", "follow_up_sent"}
+    REPLIED_STATES = {"message_replied", "replied"}  # canonical + legacy
+
     rows: list[models.Prospect] = []
     for p in candidates:
         if not p.outreach:
             continue
-        last_message_sent_ts: Optional[datetime] = None
+        last_outbound_ts: Optional[datetime] = None  # most recent DM we sent
+        has_dm = False                                # at least one real DM out
         replied = False
         followup_count = 0
         for o in p.outreach:
-            if o.state == "message_sent":
+            if o.state in OUTBOUND_DM_STATES:
+                if o.state == "message_sent":
+                    has_dm = True
+                if o.state == "follow_up_sent":
+                    followup_count += 1
                 ts = _as_aware_utc(o.ts)
-                if last_message_sent_ts is None or ts > last_message_sent_ts:
-                    last_message_sent_ts = ts
-            elif o.state == "message_replied":
+                if last_outbound_ts is None or ts > last_outbound_ts:
+                    last_outbound_ts = ts
+            elif o.state in REPLIED_STATES:
                 replied = True
-            elif o.state == "follow_up_sent":
-                followup_count += 1
 
         if replied:
             continue
         if followup_count >= config.FOLLOWUP_MAX_PER_PROSPECT:
             continue
-        if last_message_sent_ts is None or last_message_sent_ts > cutoff:
+        # DM-able guard : a bare unaccepted invite has no thread to nudge, so
+        # an invite_sent-only prospect is never eligible (no message_sent).
+        if not has_dm:
+            continue
+        # Timing : nudge only once the most recent outbound touch has aged past
+        # the delay window.
+        if last_outbound_ts is None or last_outbound_ts > cutoff:
             continue
         rows.append(p)
     return rows

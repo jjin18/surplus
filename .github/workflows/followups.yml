@@ -1,0 +1,59 @@
+name: run-followups
+
+# Pull-based follow-up trigger.
+#
+# The follow-up engine lives behind POST /admin/run-followups (admin-token
+# gated) and is otherwise never called : this cron is what actually fires it.
+# Running hourly is safe by design : eligibility is anchored on the most
+# recent outbound touch + FOLLOWUP_DELAY_HOURS, and the per-prospect cap
+# (FOLLOWUP_MAX_PER_PROSPECT) prevents double-nudging inside a window.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   SURPLUS_BASE_URL  e.g. https://www.surpluslayer.com   (no trailing slash)
+#   ADMIN_TOKEN       must match the ADMIN_TOKEN env var on Railway
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # top of every hour (UTC)
+  workflow_dispatch: {}    # allow a manual run from the Actions tab
+
+# Never run two passes at once : a slow request shouldn't overlap the next tick.
+concurrency:
+  group: run-followups
+  cancel-in-progress: false
+
+jobs:
+  run-followups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST /admin/run-followups
+        env:
+          BASE_URL: ${{ secrets.SURPLUS_BASE_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_URL:-}" ] || [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::SURPLUS_BASE_URL and/or ADMIN_TOKEN secret is not set"
+            exit 1
+          fi
+          # Strip any trailing slash so we don't build a //admin URL.
+          BASE_URL="${BASE_URL%/}"
+          echo "POST ${BASE_URL}/admin/run-followups"
+
+          # Capture body + status separately so a non-2xx fails the job loudly.
+          http_code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/admin/run-followups" \
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --max-time 120)
+
+          echo "HTTP ${http_code}"
+          echo "Response:"
+          cat /tmp/resp.json || true
+          echo
+
+          if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+            echo "::error::run-followups returned HTTP ${http_code}"
+            exit 1
+          fi

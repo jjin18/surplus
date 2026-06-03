@@ -12,10 +12,12 @@ FUNNEL_CONVERSION = 0.6   # good-fits needed per confirmed seat
 ABS_FLOOR = 55            # the floating threshold never drops below this fit score
 
 # --- follow-ups ------------------------------------------------------------
-# Wait this many hours after the first post-accept DM before sending the
-# follow-up. Tuned so a recipient gets ~2 weekday windows to reply before we
-# nudge : set lower for shorter ramps, higher for less aggressive sequences.
-FOLLOWUP_DELAY_HOURS = 48
+# Wait this many hours after the MOST RECENT outbound touch (invite, DM, or a
+# prior follow-up) before nudging again. Anchoring on the last thing we sent,
+# rather than the first DM, keeps the cadence "time sensitive based on when you
+# wrote" : a 12h nudge gives the recipient roughly a working-day window to
+# reply before we follow up. Lower for tighter ramps, higher for gentler ones.
+FOLLOWUP_DELAY_HOURS = 12
 # Hard cap on how many follow-ups a single prospect can receive. Currently
 # only one is composed by compose_followup(); raise this AND extend the
 # template when a longer sequence is needed.

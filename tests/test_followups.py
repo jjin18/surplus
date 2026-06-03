@@ -142,6 +142,42 @@ def test_not_eligible_at_max_followups(db):
     assert _eligible_prospects(db) == []
 
 
+def test_anchor_floats_to_most_recent_outbound_touch(db, monkeypatch):
+    """Timing anchors on the LAST thing we sent, not the first DM. An old DM
+    plus a recent follow-up should NOT re-trigger : the recent follow-up is
+    the live anchor and it's still inside the delay window. We raise the cap
+    so the eligibility decision is driven by timing, not the per-prospect
+    follow-up cap."""
+    monkeypatch.setattr(config, "FOLLOWUP_MAX_PER_PROSPECT", 5)
+    ev, p = _seed(db, last_message_hours_ago=config.FOLLOWUP_DELAY_HOURS + 100)
+    # A follow-up went out just an hour ago : that's the most recent touch.
+    db.add(models.OutreachLog(
+        prospect_id=p.id, channel="linkedin", state="follow_up_sent",
+        body="nudge", ts=datetime.now(timezone.utc) - timedelta(hours=1),
+        provider="unipile", provider_lead_id="fu_recent",
+    ))
+    db.commit()
+    # Anchored on the recent follow-up, not the stale first DM : too soon.
+    assert _eligible_prospects(db) == []
+
+
+def test_eligible_when_last_followup_aged_out(db, monkeypatch):
+    """Once the most recent outbound touch (a prior follow-up) ages past the
+    delay window, the prospect is due for the next nudge again."""
+    monkeypatch.setattr(config, "FOLLOWUP_MAX_PER_PROSPECT", 5)
+    ev, p = _seed(db, last_message_hours_ago=config.FOLLOWUP_DELAY_HOURS + 100)
+    db.add(models.OutreachLog(
+        prospect_id=p.id, channel="linkedin", state="follow_up_sent",
+        body="nudge",
+        ts=datetime.now(timezone.utc) - timedelta(
+            hours=config.FOLLOWUP_DELAY_HOURS + 1),
+        provider="unipile", provider_lead_id="fu_old",
+    ))
+    db.commit()
+    rows = _eligible_prospects(db)
+    assert len(rows) == 1
+
+
 def test_not_eligible_without_message_sent(db):
     """A prospect that only has an invite_sent row shouldn't be touched :
     they haven't accepted yet, so there's no DM to follow up on."""
