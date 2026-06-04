@@ -87,10 +87,48 @@ def sync_host_voice(user, provider) -> None:
     user.voice_synced_at = _utcnow()
 
 
+# Connected Unipile accounts that must NEVER be used to read LinkedIn, no
+# matter how the global switch is set. These belong to real people whose
+# accounts we will not risk to LinkedIn's anti-automation defenses.
+#   UibBNwdySzWz5RBV4rOGkw -> Jia (user 171)
+_ALWAYS_BLOCKED_ACCOUNTS = frozenset({"UibBNwdySzWz5RBV4rOGkw"})
+
+
+def _linkedin_read_disabled_for(account_id: str) -> bool:
+    """True when live LinkedIn reads (voice sync + prospect enrichment) must be
+    suppressed for this connected account, to avoid tripping LinkedIn's
+    anti-scraping defenses on a host's real account.
+
+    Resolution order:
+      1. _ALWAYS_BLOCKED_ACCOUNTS : hard-pinned accounts (e.g. Jia) — never read,
+         independent of any env switch.
+      2. LINKEDIN_READ_DISABLE (default True) : global kill; reads are suppressed
+         for everyone unless explicitly set to false.
+      3. LINKEDIN_READ_DISABLE_ACCOUNTS : extra comma-separated account ids to
+         suppress even if reads are globally re-enabled.
+
+    With reads suppressed, compose falls back to Exa discovery data + the host's
+    manually-set voice_examples — i.e. only the input the host provides.
+    """
+    import os
+    from ..providers.unipile import _env_bool
+    if account_id in _ALWAYS_BLOCKED_ACCOUNTS:
+        return True
+    if _env_bool("LINKEDIN_READ_DISABLE", True):
+        return True
+    blocked = os.environ.get("LINKEDIN_READ_DISABLE_ACCOUNTS", "")
+    ids = {a.strip() for a in blocked.split(",") if a.strip()}
+    return bool(account_id) and account_id in ids
+
+
 def _live_provider_for_user(user):
     """Return a LIVE (non-dry-run) provider for this user, or None when live
-    enrichment isn't possible (no connected account / dry-run / misconfig)."""
-    if not getattr(user, "unipile_account_id", None):
+    enrichment isn't possible (no connected account / dry-run / misconfig) or
+    when LinkedIn reads are explicitly disabled for this account."""
+    account_id = getattr(user, "unipile_account_id", None)
+    if not account_id:
+        return None
+    if _linkedin_read_disabled_for(account_id):
         return None
     try:
         from ..providers import get_provider_for_user
