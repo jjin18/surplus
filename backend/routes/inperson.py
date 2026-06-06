@@ -103,20 +103,6 @@ def _handle_from_url(url: str) -> str:
     return (url or "").rstrip("/").split("/")[-1]
 
 
-def _clip(val: Optional[str], n: int) -> Optional[str]:
-    """Clamp a string to a column's max width so a long resolver/operator value
-    can never overflow a VARCHAR(n) and 500 the capture (Postgres raises
-    StringDataRightTruncation instead of truncating). None passes through.
-
-    Resolver titles are the real-world offender : a LinkedIn 'title' can be a
-    whole headline (e.g. '... founder of Jetzy (Building Agentic AI with VIP
-    perks ...)'), well past role's 160 chars. We'd rather store a clipped value
-    than lose the capture."""
-    if val is None:
-        return None
-    return val[:n]
-
-
 def _owned_prospect(db: Session, prospect_id: int, user: models.User) -> models.Prospect:
     p = db.get(models.Prospect, prospect_id)
     if p is None:
@@ -264,36 +250,32 @@ def scan_capture(
                .first())
 
     handle = _handle_from_url(canonical)
-    # Every captured string is clipped to its column width : resolver titles and
-    # operator free-text are unbounded, but the columns are VARCHAR(n) and
-    # Postgres 500s (StringDataRightTruncation) rather than truncating. Lengths
-    # mirror models.Prospect.
     if p is None:
         p = models.Prospect(
             event_id=ev.id,
-            identity=_clip(handle or canonical, 120),
-            name=_clip((body.name or "").strip() or handle or "Unknown", 120),
-            linkedin_url=_clip(canonical, 200),
+            identity=handle or canonical,
+            name=(body.name or "").strip() or handle or "Unknown",
+            linkedin_url=canonical,
             sources="inperson",
         )
         db.add(p)
 
     # Apply / refresh the capture fields on every scan.
     if provider_id:
-        p.linkedin_provider_id = _clip(provider_id, 120)
+        p.linkedin_provider_id = provider_id
     if body.name and body.name.strip():
-        p.name = _clip(body.name.strip(), 120)
+        p.name = body.name.strip()
     if body.role and body.role.strip():
-        p.role = _clip(body.role.strip(), 300)
+        p.role = body.role.strip()
     if body.company and body.company.strip():
-        p.company = _clip(body.company.strip(), 120)
+        p.company = body.company.strip()
     p.status = "pending"
-    p.source = _clip((body.source or "").strip() or None, 20)
+    p.source = (body.source or "").strip() or None
     p.captured_at = datetime.now(timezone.utc)
-    p.note = _clip(body.note or None, 300)             # fun fact : drives draft
-    p.private_note = _clip(body.private_note or None, 500)  # operator-only
-    p.contact_type = _clip(body.contact_type or None, 20)
-    p.next_step = _clip(body.next_step or None, 300)   # woven into 1st message
+    p.note = (body.note or None)                  # fun fact : drives the draft
+    p.private_note = (body.private_note or None)   # operator-only : never sent
+    p.contact_type = (body.contact_type or None)
+    p.next_step = (body.next_step or None)         # woven into the first message
     db.commit()
     db.refresh(p)
 
