@@ -129,6 +129,7 @@ def init_db() -> None:
         _migrate_prospect_live_enrichment,
         _migrate_user_voice_synced_at,
         _migrate_prospect_contact_id,
+        _migrate_prospect_role_width,
     ]
     for migration in migrations:
         try:
@@ -428,6 +429,34 @@ def _migrate_applicant_enrichment_raw() -> None:
         conn.execute(text(
             f"ALTER TABLE applicants ADD COLUMN {if_not_exists}"
             "enrichment_raw TEXT DEFAULT ''"
+        ))
+
+
+def _migrate_prospect_role_width() -> None:
+    """Widen prospects.role from VARCHAR(160) to VARCHAR(300).
+
+    The in-person scan resolver can put a full LinkedIn headline (not a short
+    title) into `role`, e.g. "Seasoned entrepreneur, ... founder of Jetzy
+    (Building Agentic AI with VIP perks ...)" — past 160 chars. Postgres then
+    raises StringDataRightTruncation on INSERT and 500s the capture instead of
+    truncating, so the column must be wide enough. No-op on SQLite (it doesn't
+    enforce VARCHAR length) and idempotent on Postgres (skips when already >=300)."""
+    from sqlalchemy import inspect, text
+    if ENGINE.dialect.name != "postgresql":
+        return  # SQLite ignores VARCHAR length; nothing to do.
+    insp = inspect(ENGINE)
+    if "prospects" not in insp.get_table_names():
+        return
+    role = next((c for c in insp.get_columns("prospects")
+                 if c["name"] == "role"), None)
+    if role is None:
+        return
+    length = getattr(role.get("type"), "length", None)
+    if length is not None and length >= 300:
+        return  # already widened
+    with ENGINE.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE prospects ALTER COLUMN role TYPE VARCHAR(300)"
         ))
 
 

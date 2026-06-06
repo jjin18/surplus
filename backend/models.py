@@ -110,7 +110,11 @@ class Prospect(Base):
     identity: Mapped[str] = mapped_column(String(120))  # stable cross-source key
 
     name: Mapped[str] = mapped_column(String(120))
-    role: Mapped[str] = mapped_column(String(160), default="Unknown")
+    # 300 (not 160) because the in-person resolver can put a full LinkedIn
+    # headline here, not just a short title (e.g. "... founder of Jetzy
+    # (Building Agentic AI with VIP perks ...)"). Postgres 500s on overflow
+    # rather than truncating, so the column must be wide enough.
+    role: Mapped[str] = mapped_column(String(300), default="Unknown")
     company: Mapped[str] = mapped_column(String(120), default="Unknown")
     seniority: Mapped[str] = mapped_column(String(40), default="Mid")
 
