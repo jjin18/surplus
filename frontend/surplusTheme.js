@@ -595,6 +595,26 @@ export const SURPLUS_APP_CSS = `
   cursor:pointer; text-align:left;
 }
 .user-dropdown-action:hover { background:var(--panel-3); color:var(--ink); }
+.user-dropdown-toggle {
+  display:flex; align-items:center; gap:8px; width:100%;
+  padding:9px 12px; border-radius:8px;
+  font-size:13px; color:var(--ink-dim);
+}
+.user-dropdown-toggle .toggle-label { display:flex; flex-direction:column; gap:1px; flex:1; }
+.user-dropdown-toggle .toggle-sub { font-size:11px; color:var(--ink-faint); }
+.switch {
+  position:relative; flex-shrink:0; width:34px; height:20px;
+  border-radius:999px; border:0; padding:0; cursor:pointer;
+  background:var(--line); transition:background .15s ease;
+}
+.switch[aria-checked="true"] { background:#10b981; }
+.switch[disabled] { opacity:.55; cursor:default; }
+.switch .knob {
+  position:absolute; top:2px; left:2px; width:16px; height:16px;
+  border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.2);
+  transition:transform .15s ease;
+}
+.switch[aria-checked="true"] .knob { transform:translateX(14px); }
 textarea.text-in { min-height:72px; resize:vertical; line-height:1.5; }
 .luma-import-row { display:flex; gap:8px; align-items:stretch; flex-wrap:wrap; }
 .luma-import-row .text-in { flex:1; min-width:200px; }

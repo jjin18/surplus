@@ -251,6 +251,16 @@ export const api = {
   runRelationshipAgent: () =>
     request("/api/relationships/agent/run", { method: "POST" }),
 
+  // ── scheduled follow-ups : per-user auto-message preference ──
+  // Whether a follow-up is auto-staged when a first DM goes out. Off by
+  // default; the host opts in. Returns { auto_followups_enabled }.
+  getFollowupSettings: () => request("/api/followups/settings"),
+  setFollowupSettings: (enabled) =>
+    request("/api/followups/settings", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
   // meta
   health: () => request("/api/health"),
 
