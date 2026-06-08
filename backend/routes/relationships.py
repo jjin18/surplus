@@ -281,7 +281,8 @@ def relationship_chat(
     staged proposals (each a contact + drafted follow-up + rationale). NOTHING
     is sent here — the host approves a draft separately via the followup route,
     which is where the auto-send toggle is honored. Owner-scoped."""
-    from ..agents.relationship_agent import run_relationship_agent as _run
+    from ..agents.relationship_agent import (
+        run_relationship_agent_concurrent as _run)
     res = _run(db, user.id, instruction=(body.message or "").strip())
     out = res.as_dict()
     # Surface the host's auto-send preference so the chat can label the approve
@@ -337,8 +338,14 @@ def relationship_chat_stream(
 
     The agent runs in a worker thread with its OWN DB session (the request's
     session can't cross threads), pushing onto a queue the SSE generator drains.
-    user.id is captured up front so the thread never touches the request user."""
-    from ..agents.relationship_agent import run_relationship_agent as _run
+    user.id is captured up front so the thread never touches the request user.
+
+    The agent runs the two-phase concurrent variant: one triage call, then a
+    bounded parallel fan-out of per-person drafts, each card streaming the moment
+    its draft resolves. Cards arrive in completion order (not strict priority),
+    which is the trade for collapsing time-to-all-cards from Σ to ~max."""
+    from ..agents.relationship_agent import (
+        run_relationship_agent_concurrent as _run)
 
     user_id = user.id
     auto = bool(getattr(user, "auto_followups_enabled", False))

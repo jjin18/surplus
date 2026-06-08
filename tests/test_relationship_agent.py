@@ -16,6 +16,8 @@ rest of the relationship-layer suite).
 from __future__ import annotations
 
 import json
+import re
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -609,3 +611,217 @@ def test_mark_thread_cache_moves_single_breakpoint_to_tail():
         if isinstance(b, dict) and "cache_control" in b
     ]
     assert marked == [(2, 0)]  # exactly one, on the last message's last block
+
+
+# ── concurrent variant: triage + parallel fan-out drafts ──────────────────────
+# run_relationship_agent_concurrent splits the run into ONE triage call (roster
+# -> ranked selections) then a parallel per-person draft call. The fan-out races,
+# so the fake client routes by call TYPE (triage vs draft) and looks the draft up
+# by contact_id from the prompt — deterministic regardless of completion order.
+
+class ConcurrentScriptedClient:
+    """Order-independent stand-in for the two-phase concurrent path.
+
+    The triage call (its tools include `select_followups`) returns `triage`;
+    every draft call returns the entry in `drafts` keyed by the contact_id the
+    prompt names. Thread-safe call recording (the drafts fan out across threads).
+    """
+
+    def __init__(self, *, triage, drafts):
+        self._triage = list(triage)          # content blocks for select_followups
+        self._drafts = dict(drafts)          # {contact_id: [content blocks]}
+        self.calls = []
+        self._lock = threading.Lock()
+        self.messages = self                 # so client.messages.create works
+
+    def create(self, **kwargs):
+        with self._lock:
+            self.calls.append(kwargs)
+        tool_names = {t["name"] for t in kwargs.get("tools", [])}
+        if "select_followups" in tool_names:
+            return SimpleNamespace(stop_reason="tool_use", content=self._triage)
+        # Draft call: the prompt opens with "... (contact_id N)." — match that
+        # (the ctx JSON's "contact_id": N has no space, so it won't false-match).
+        text = "".join(m["content"] for m in kwargs["messages"]
+                       if isinstance(m.get("content"), str))
+        m = re.search(r"contact_id (\d+)", text)
+        cid = int(m.group(1)) if m else None
+        return SimpleNamespace(stop_reason="tool_use",
+                               content=self._drafts.get(cid, []))
+
+    def triage_calls(self):
+        return [c for c in self.calls
+                if any(t["name"] == "select_followups" for t in c.get("tools", []))]
+
+    def draft_calls(self):
+        return [c for c in self.calls
+                if all(t["name"] != "select_followups" for t in c.get("tools", []))]
+
+
+def _stale_contact(db, u, ev, *, name, ident, days=40):
+    p = _prospect(db, ev, name=name, identity=ident,
+                  linkedin_url=f"https://linkedin.com/in/{ident}",
+                  captured_at=datetime.now(timezone.utc) - timedelta(days=days))
+    return rel.link_contact(db, p, u.id)
+
+
+def test_concurrent_triages_then_drafts_in_parallel(db):
+    """One triage call selects two people; each is drafted in its own call. All
+    proposals are staged with real names, on_proposal fires per draft, and the
+    SAFETY invariant holds: nothing is sent (no OutreachLog)."""
+    u = _user(db)
+    ev = _event(db, u)
+    a = _stale_contact(db, u, ev, name="Maya Rodriguez", ident="maya")
+    b = _stale_contact(db, u, ev, name="Shama Patel", ident="shama")
+
+    triage = [_tool_use("select_followups", "tg",
+                        selections=[{"contact_id": a.id, "reason": "40d cold",
+                                     "angle": "Seed Dinner"},
+                                    {"contact_id": b.id, "reason": "40d cold",
+                                     "angle": "warm intro"}],
+                        closing="Drafted both, Maya's the one I'd prioritize.")]
+    drafts = {
+        a.id: [_tool_use("draft_message", "da", contact_id=a.id,
+                         message="Hey Maya, great chatting at the Seed Dinner.",
+                         rationale="40d cold")],
+        b.id: [_tool_use("draft_message", "db", contact_id=b.id,
+                         message="Hey Shama, want that intro still?",
+                         rationale="warm intro")],
+    }
+    client = ConcurrentScriptedClient(triage=triage, drafts=drafts)
+
+    seen = []
+    res = ragent.run_relationship_agent_concurrent(
+        db, u.id, client=client, on_proposal=lambda pr: seen.append(pr))
+
+    assert res.error is None
+    assert res.contacts_seen == 2
+    # Exactly one triage call, one draft call PER selected person.
+    assert len(client.triage_calls()) == 1
+    assert len(client.draft_calls()) == 2
+    # Both drafts staged, names resolved from the real spine (order-independent).
+    assert len(res.proposals) == 2
+    assert {pr.contact_name for pr in res.proposals} == {"Maya Rodriguez", "Shama Patel"}
+    assert {pr.kind for pr in res.proposals} == {"draft_message"}
+    # on_proposal fired once per staged proposal.
+    assert len(seen) == 2 and all(pr in res.proposals for pr in seen)
+    # Closing line from triage becomes the summary.
+    assert "prioritize" in res.summary
+    # SAFETY: nothing sent.
+    assert db.query(models.OutreachLog).count() == 0
+
+
+def test_concurrent_skip_suppresses_draft(db):
+    """The draft phase can decline via skip_contact (the loop's suppression rule,
+    now that it has the full thread): a selected person who's already handled
+    produces NO staged proposal."""
+    u = _user(db)
+    ev = _event(db, u)
+    c = _stale_contact(db, u, ev, name="Maya Rodriguez", ident="maya")
+
+    triage = [_tool_use("select_followups", "tg",
+                        selections=[{"contact_id": c.id, "reason": "marked",
+                                     "angle": "x"}],
+                        closing="One marked, already handled.")]
+    drafts = {c.id: [_tool_use("skip_contact", "sk", contact_id=c.id,
+                               reason="already replied")]}
+    client = ConcurrentScriptedClient(triage=triage, drafts=drafts)
+
+    res = ragent.run_relationship_agent_concurrent(db, u.id, client=client)
+    assert res.error is None
+    assert len(client.draft_calls()) == 1     # we DID try to draft
+    assert res.proposals == []                # but skip staged nothing
+
+
+def test_concurrent_empty_selection_skips_fan_out(db):
+    """If triage selects nobody, there are zero draft calls and the warm closing
+    line is surfaced — the silent path costs exactly one Claude call."""
+    u = _user(db)
+    ev = _event(db, u)
+    # A fresh contact the host hasn't gone cold on.
+    _stale_contact(db, u, ev, name="Maya Rodriguez", ident="maya", days=1)
+
+    triage = [_tool_use("select_followups", "tg", selections=[],
+                        closing="Everyone's warm right now, nothing urgent.")]
+    client = ConcurrentScriptedClient(triage=triage, drafts={})
+
+    res = ragent.run_relationship_agent_concurrent(db, u.id, client=client)
+    assert res.error is None
+    assert res.proposals == []
+    assert len(client.draft_calls()) == 0
+    assert "warm" in res.summary
+
+
+def test_concurrent_uses_sonnet_for_every_call(db):
+    """Quality + voice depend on Sonnet: BOTH the triage and the draft calls must
+    run on the Sonnet model, never silently downgraded to a cheaper one."""
+    u = _user(db)
+    ev = _event(db, u)
+    c = _stale_contact(db, u, ev, name="Maya Rodriguez", ident="maya")
+
+    triage = [_tool_use("select_followups", "tg",
+                        selections=[{"contact_id": c.id, "reason": "cold",
+                                     "angle": "x"}], closing="done")]
+    drafts = {c.id: [_tool_use("draft_message", "da", contact_id=c.id,
+                               message="Hey Maya, reconnecting.", rationale="cold")]}
+    client = ConcurrentScriptedClient(triage=triage, drafts=drafts)
+
+    ragent.run_relationship_agent_concurrent(db, u.id, client=client)
+    assert "sonnet" in ragent._AGENT_MODEL
+    assert all(call["model"] == ragent._AGENT_MODEL for call in client.calls)
+
+
+def test_concurrent_caps_selections_at_max_deep_dives(db):
+    """A runaway triage that names more people than MAX_DEEP_DIVES is capped, so
+    the fan-out width stays bounded regardless of roster size (the 100+-contact
+    safety property)."""
+    u = _user(db)
+    ev = _event(db, u)
+    contacts = [_stale_contact(db, u, ev, name=f"P{i}", ident=f"p{i}")
+                for i in range(ragent.MAX_DEEP_DIVES + 5)]
+    triage = [_tool_use(
+        "select_followups", "tg",
+        selections=[{"contact_id": c.id, "reason": "cold", "angle": "x"}
+                    for c in contacts],
+        closing="lots")]
+    drafts = {c.id: [_tool_use("draft_message", f"d{c.id}", contact_id=c.id,
+                               message=f"Hi {c.id}", rationale="cold")]
+              for c in contacts}
+    client = ConcurrentScriptedClient(triage=triage, drafts=drafts)
+
+    res = ragent.run_relationship_agent_concurrent(db, u.id, client=client)
+    assert len(client.draft_calls()) == ragent.MAX_DEEP_DIVES   # capped
+    assert len(res.proposals) == ragent.MAX_DEEP_DIVES
+
+
+def test_concurrent_unknown_selection_is_dropped(db):
+    """A triage selection naming a contact_id the host doesn't own never resolves
+    (owner-scoping) — it's dropped before any draft call, nothing staged."""
+    u = _user(db)
+    ev = _event(db, u)
+    c = _stale_contact(db, u, ev, name="Maya Rodriguez", ident="maya")
+
+    triage = [_tool_use("select_followups", "tg",
+                        selections=[{"contact_id": 999999, "reason": "ghost",
+                                     "angle": "x"},
+                                    {"contact_id": c.id, "reason": "real",
+                                     "angle": "y"}],
+                        closing="done")]
+    drafts = {c.id: [_tool_use("draft_message", "da", contact_id=c.id,
+                               message="Hey Maya.", rationale="real")]}
+    client = ConcurrentScriptedClient(triage=triage, drafts=drafts)
+
+    res = ragent.run_relationship_agent_concurrent(db, u.id, client=client)
+    # Only the real contact was drafted; the invented id was dropped pre-fan-out.
+    assert len(client.draft_calls()) == 1
+    assert [pr.contact_id for pr in res.proposals] == [c.id]
+
+
+def test_concurrent_empty_spine_short_circuits(db):
+    """No contacts -> no LLM call at all (not even triage), friendly summary."""
+    u = _user(db)
+    client = ConcurrentScriptedClient(triage=[], drafts={})
+    res = ragent.run_relationship_agent_concurrent(db, u.id, client=client)
+    assert res.stop_reason == "empty"
+    assert res.proposals == []
+    assert client.calls == []

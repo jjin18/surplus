@@ -1,0 +1,4 @@
+# Local-only PII harness: contains real contact data, must never enter a build
+# context or image. Untracked in git; this keeps `railway up` from uploading it.
+scripts/run_relationship_agent_live.py
+.env
