@@ -257,6 +257,53 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  // Streaming twin of relationshipChat: opens the SSE endpoint and invokes the
+  // callbacks as frames arrive so the UI can reveal each drafted person the
+  // moment the agent stages it. Callbacks: onMeta({auto_send_enabled}),
+  // onProposal(proposal), onDone({summary, auto_send_enabled}), onError({message}).
+  // Resolves when the stream closes. Nothing is sent — proposals are staged only.
+  relationshipChatStream: async (message, { onMeta, onProposal, onDone, onError } = {}) => {
+    const res = await fetch("/api/relationships/chat/stream", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`${res.status} ${res.statusText} : ${text.slice(0, 240)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    // SSE frames are separated by a blank line; each frame has an `event:` and
+    // a `data:` line. Buffer across chunks since a frame can split mid-read.
+    const dispatch = (frame) => {
+      let ev = "message", data = "";
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) ev = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (!data) return;
+      let payload;
+      try { payload = JSON.parse(data); } catch { return; }
+      if (ev === "meta") onMeta?.(payload);
+      else if (ev === "proposal") onProposal?.(payload);
+      else if (ev === "done") onDone?.(payload);
+      else if (ev === "error") onError?.(payload);
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) !== -1) {
+        dispatch(buf.slice(0, i));
+        buf = buf.slice(i + 2);
+      }
+    }
+    if (buf.trim()) dispatch(buf);
+  },
   // Approve one drafted follow-up for a contact. Honors the host's auto-send
   // toggle server-side: returns { status: "sent" | "drafted", ... }.
   sendContactFollowup: (contactId, message) =>

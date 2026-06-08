@@ -8,17 +8,21 @@ data never leaks across users.
 """
 from __future__ import annotations
 
+import json
+import queue
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..agents import relationships
 from ..auth import current_user
-from ..db import get_db
+from ..db import SessionLocal, get_db
 
 router = APIRouter(prefix="/api/relationships", tags=["relationships"])
 
@@ -272,6 +276,70 @@ def relationship_chat(
     # second round-trip.
     out["auto_send_enabled"] = bool(getattr(user, "auto_followups_enabled", False))
     return out
+
+
+def _sse(event: str, data: dict) -> str:
+    """One Server-Sent-Events frame: an event name + a JSON data line."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/chat/stream")
+def relationship_chat_stream(
+    body: ChatIn,
+    user: models.User = Depends(current_user),
+):
+    """Streaming twin of /chat: same propose-only loop, but each drafted
+    follow-up is pushed to the client the instant the agent stages it (SSE),
+    so the chat reveals people one-by-one as the survey runs instead of
+    freezing on a spinner until the whole loop finishes.
+
+    Frames: `meta` (auto-send pref, sent first) -> `proposal` (one per staged
+    draft) -> `done` (closing summary) -> `error` (if the run blew up). Still
+    NOTHING is sent here; proposals are staged suggestions only. Owner-scoped.
+
+    The agent runs in a worker thread with its OWN DB session (the request's
+    session can't cross threads), pushing onto a queue the SSE generator drains.
+    user.id is captured up front so the thread never touches the request user."""
+    from ..agents.relationship_agent import run_relationship_agent as _run
+
+    user_id = user.id
+    auto = bool(getattr(user, "auto_followups_enabled", False))
+    instruction = (body.message or "").strip()
+    q: "queue.Queue" = queue.Queue()
+
+    def _worker():
+        db = SessionLocal()
+        try:
+            def _emit(p):
+                q.put(("proposal", {
+                    "kind": p.kind, "contact_id": p.contact_id,
+                    "contact_name": p.contact_name, "text": p.text,
+                    "rationale": p.rationale,
+                }))
+            res = _run(db, user_id, instruction=instruction, on_proposal=_emit)
+            q.put(("done", {"summary": res.summary or "Done.",
+                            "auto_send_enabled": auto}))
+        except Exception as exc:  # noqa: BLE001 : surface to the client, don't 500 mid-stream
+            q.put(("error", {"message": str(exc)}))
+        finally:
+            db.close()
+            q.put((None, None))
+
+    def _stream():
+        yield _sse("meta", {"auto_send_enabled": auto})
+        threading.Thread(target=_worker, daemon=True).start()
+        while True:
+            event, data = q.get()
+            if event is None:
+                break
+            yield _sse(event, data)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        # Defeat proxy buffering so frames arrive as they're produced.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 class FollowupSendIn(BaseModel):

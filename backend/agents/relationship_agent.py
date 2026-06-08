@@ -82,8 +82,13 @@ _SYSTEM_PROMPT = (
     "already said or the initial context, and only then add the new reason to "
     "reach out (a job change, a post, time passing). Never generic, never a "
     "restart that ignores the first message. Quality over quantity.\n"
-    "5. When you've worked the priority list, stop and give a one-paragraph "
-    "summary of what you found and proposed.\n\n"
+    "5. When you've worked the priority list, stop and give a SHORT, "
+    "conversational closing line, like you're texting the host back. ONE or two "
+    "sentences, plain prose. NEVER use markdown tables, headers (#), or bullet "
+    "lists — the per-person detail already rides along in each draft's "
+    "`rationale`, so the summary is just a friendly wrap-up (e.g. \"Drafted "
+    "first-touches for all 5, Shama's the one I'd prioritize.\"). Do not "
+    "re-list everyone you already drafted.\n\n"
     "Rules: Only use facts returned by the tools — never invent an event, a "
     "name, or a detail. You CANNOT send anything; you only propose. Keep "
     "drafts under ~60 words and human, not salesy. NEVER use em dashes (—) or "
@@ -224,7 +229,9 @@ _TOOLS = [
                 "message": {"type": "string",
                             "description": "The message, under ~60 words."},
                 "rationale": {"type": "string",
-                              "description": "What history this is grounded in."},
+                              "description": "ONE short, friendly sentence on why "
+                              "this person / why now, grounded in history. Reads "
+                              "as a chat aside to the host, not a report."},
             },
             "required": ["contact_id", "message"],
         },
@@ -321,6 +328,7 @@ def run_relationship_agent(
     instruction: str = "",
     max_steps: int = 12,
     client: Any = None,
+    on_proposal: Any = None,
 ) -> RelationshipAgentResult:
     """Run the propose-only relationship agent for one host.
 
@@ -347,6 +355,17 @@ def run_relationship_agent(
     # re-querying. Owner-scoped already (list_contacts filters by user_id), so
     # a contact_id the model invents simply won't resolve.
     by_id = {c.id: c for c in contacts}
+
+    def _stage(p: Proposal) -> None:
+        # Single place a proposal lands: append to the result AND notify any
+        # streaming caller so the chat can reveal each person the moment it's
+        # drafted, instead of waiting for the whole loop to finish.
+        result.proposals.append(p)
+        if on_proposal is not None:
+            try:
+                on_proposal(p)
+            except Exception:  # noqa: BLE001 : a slow/broken consumer must not break the run
+                pass
 
     # ── tool implementations (closures over db + this run's contacts) ──────
     def _list_contacts() -> list[dict]:
@@ -398,7 +417,7 @@ def run_relationship_agent(
         c = by_id.get(int(contact_id))
         if c is None:
             return {"error": f"no contact {contact_id} for this host"}
-        result.proposals.append(Proposal(
+        _stage(Proposal(
             kind="next_step", contact_id=int(contact_id),
             contact_name=_name_of(contact_id),
             text=_strip_dashes(next_step), rationale=_strip_dashes(rationale)))
@@ -408,7 +427,7 @@ def run_relationship_agent(
         c = by_id.get(int(contact_id))
         if c is None:
             return {"error": f"no contact {contact_id} for this host"}
-        result.proposals.append(Proposal(
+        _stage(Proposal(
             kind="draft_message", contact_id=int(contact_id),
             contact_name=_name_of(contact_id),
             text=_strip_dashes(message), rationale=_strip_dashes(rationale)))
@@ -435,8 +454,9 @@ def run_relationship_agent(
         user_prompt = (
             f"The host asked: \"{steer}\"\n\n"
             f"Answer their request by working the contact spine. {user_prompt} "
-            f"Prioritise whoever the host's ask points at. Your one-paragraph "
-            f"summary at the end should directly answer what they asked."
+            f"Prioritise whoever the host's ask points at. Your closing line at "
+            f"the end should directly answer what they asked, in one short "
+            f"conversational sentence (no tables, no lists)."
         )
 
     # Speak in the host's voice: reuse the SAME captured voice_examples the

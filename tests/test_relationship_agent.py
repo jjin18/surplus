@@ -225,6 +225,36 @@ def test_agent_stages_proposals_never_sends(db):
     assert db.query(models.OutreachLog).count() == 0
 
 
+def test_on_proposal_fires_for_each_staged_proposal(db):
+    """The streaming chat route relies on on_proposal firing the instant each
+    proposal is staged (so cards reveal one-by-one). Verify it's called once
+    per staged proposal, in order, with the resolved Proposal."""
+    u = _user(db)
+    ev = _event(db, u)
+    p = _prospect(db, ev, captured_at=datetime.now(timezone.utc) - timedelta(days=40))
+    c = rel.link_contact(db, p, u.id)
+
+    script = [
+        ("tool_use", [_tool_use("list_contacts", "t1")]),
+        ("tool_use", [_tool_use("get_contact", "t2", contact_id=c.id)]),
+        ("tool_use", [
+            _tool_use("propose_next_step", "t3", contact_id=c.id,
+                      next_step="Re-intro.", rationale="cold"),
+            _tool_use("draft_message", "t4", contact_id=c.id,
+                      message="Hey Maya, great chatting.", rationale="grounded"),
+        ]),
+        ("end_turn", [_text("done")]),
+    ]
+    seen = []
+    res = ragent.run_relationship_agent(
+        db, u.id, client=ScriptedClient(script), on_proposal=lambda pr: seen.append(pr))
+
+    # Fired once per staged proposal, in staging order, with real names.
+    assert [pr.kind for pr in seen] == ["next_step", "draft_message"]
+    assert seen == res.proposals
+    assert all(pr.contact_name == "Maya Rodriguez" for pr in seen)
+
+
 def test_agent_proposal_for_unknown_contact_is_rejected(db):
     """If the model proposes against a contact_id that isn't the host's, the
     tool refuses (owner-scoping) and no proposal is staged."""

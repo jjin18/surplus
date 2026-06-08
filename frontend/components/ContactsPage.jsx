@@ -319,14 +319,27 @@ function FollowupChat() {
     setInput("");
     setTurns((t) => [...t, { role: "host", text: q }]);
     setBusy(true);
+    // auto-send pref arrives in the `meta` frame before any card; hold it so
+    // each streamed proposal card labels its button correctly.
+    let auto = false;
     try {
-      const r = await api.relationshipChat(q);
-      setTurns((t) => [...t, {
-        role: "agent",
-        text: r.summary || "Done.",
-        proposals: (r.proposals || []).filter((p) => p.kind === "draft_message"),
-        auto: !!r.auto_send_enabled,
-      }]);
+      await api.relationshipChatStream(q, {
+        onMeta: (m) => { auto = !!m.auto_send_enabled; },
+        // Reveal each person the instant the agent stages them — one card per
+        // turn, so they pop into the chat one-by-one as the survey runs.
+        onProposal: (p) => {
+          if (p.kind !== "draft_message") return;
+          setTurns((t) => [...t, { role: "agent", proposals: [p], auto }]);
+        },
+        // Closing line lands last, under the cards it summarizes.
+        onDone: (d) => {
+          if (d.summary) setTurns((t) => [...t, { role: "agent", text: d.summary }]);
+        },
+        onError: (e) => {
+          setTurns((t) => [...t, { role: "agent",
+            text: `Sorry — ${e.message || "something went wrong"}`, proposals: [] }]);
+        },
+      });
     } catch (e) {
       setTurns((t) => [...t, { role: "agent",
         text: `Sorry — ${e.message || String(e)}`, proposals: [] }]);
@@ -408,11 +421,13 @@ function FollowupChat() {
               </div>
             ) : (
               <div>
-                <div style={{ background: C.bg, color: C.ink, borderRadius: 12,
-                              padding: "10px 14px", fontSize: 13.5,
-                              lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-                  {t.text}
-                </div>
+                {t.text && (
+                  <div style={{ background: C.bg, color: C.ink, borderRadius: 12,
+                                padding: "10px 14px", fontSize: 13.5,
+                                lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                    {t.text}
+                  </div>
+                )}
                 {(t.proposals || []).map((p) => (
                   <ProposalCard key={`${p.contact_id}-${p.text.slice(0,12)}`}
                                 proposal={p} auto={t.auto} />
@@ -424,7 +439,9 @@ function FollowupChat() {
 
         {busy && (
           <div style={{ color: C.faint, fontSize: 13, fontStyle: "italic" }}>
-            Reading your relationship history…
+            {turns.some((t) => t.role === "agent" && t.proposals?.length)
+              ? "Drafting the next one…"
+              : "Reading your relationship history…"}
           </div>
         )}
       </div>
