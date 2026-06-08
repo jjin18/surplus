@@ -291,9 +291,34 @@ def relationship_chat(
     return out
 
 
+# How often to trickle a keepalive comment while the agent is mid-think and has
+# no frame to send. Must stay well under the edge proxy's idle timeout (~30s+ on
+# Railway/Cloudflare) so a silent stream never gets cut with a 502.
+_HEARTBEAT_SECS = 10
+
+
 def _sse(event: str, data: dict) -> str:
     """One Server-Sent-Events frame: an event name + a JSON data line."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _drain_stream(q: "queue.Queue", *, heartbeat_secs: float = _HEARTBEAT_SECS):
+    """Yield SSE bytes off the worker queue until the sentinel (None, None).
+
+    During a silence (the agent mid-think, nothing staged yet) trickle a
+    keepalive comment every `heartbeat_secs` so the connection never goes quiet
+    long enough for an edge proxy to idle-time-out and 502 the browser. Comment
+    frames (": ...") carry no event:/data: line, so the client parser drops them.
+    """
+    while True:
+        try:
+            event, data = q.get(timeout=heartbeat_secs)
+        except queue.Empty:
+            yield ": keepalive\n\n"
+            continue
+        if event is None:
+            return
+        yield _sse(event, data)
 
 
 @router.post("/chat/stream")
@@ -346,11 +371,7 @@ def relationship_chat_stream(
     def _stream():
         yield _sse("meta", {"auto_send_enabled": auto})
         threading.Thread(target=_worker, daemon=True).start()
-        while True:
-            event, data = q.get()
-            if event is None:
-                break
-            yield _sse(event, data)
+        yield from _drain_stream(q)
 
     return StreamingResponse(
         _stream(),

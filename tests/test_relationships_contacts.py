@@ -327,3 +327,45 @@ def test_schedule_followup_now_sends_immediately(db):
     assert out["status"] == "sent"
     assert db.query(models.ScheduledFollowup).count() == 0
     assert db.query(models.OutreachLog).count() == 1
+
+
+# ── chat stream keepalive (the 502 fix) ────────────────────────────────────
+# The follow-up chat streams SSE; the gap before the first draft is several
+# sequential LLM calls. An edge proxy idle-times-out a silent stream and 502s
+# the browser even though the server is fine (confirmed in prod). _drain_stream
+# trickles keepalive comments during that silence so the connection stays alive.
+import queue as _queue
+
+
+def test_drain_stream_emits_keepalive_during_silence():
+    """A queue that's empty past the heartbeat interval yields a keepalive
+    comment, then resumes with real frames once they land."""
+    q: "_queue.Queue" = _queue.Queue()
+    # Nothing queued yet, then a proposal, then the sentinel — but the FIRST
+    # get() will time out (empty), forcing a heartbeat before the proposal.
+    out = []
+    gen = rel_route._drain_stream(q, heartbeat_secs=0.01)
+    out.append(next(gen))                       # times out empty -> keepalive
+    q.put(("proposal", {"contact_id": 1}))
+    out.append(next(gen))                       # real frame
+    q.put((None, None))                         # sentinel -> StopIteration
+    with pytest.raises(StopIteration):
+        next(gen)
+
+    assert out[0].startswith(":")               # SSE comment (ignored by client)
+    assert "keepalive" in out[0]
+    assert out[1].startswith("event: proposal")
+    assert '"contact_id": 1' in out[1]
+
+
+def test_drain_stream_stops_on_sentinel_without_keepalive():
+    """When frames are already waiting, the drain forwards them and stops at the
+    sentinel with no spurious keepalive."""
+    q: "_queue.Queue" = _queue.Queue()
+    q.put(("done", {"summary": "ok"}))
+    q.put((None, None))
+    frames = list(rel_route._drain_stream(q, heartbeat_secs=5))
+
+    assert len(frames) == 1
+    assert frames[0].startswith("event: done")
+    assert all("keepalive" not in f for f in frames)
