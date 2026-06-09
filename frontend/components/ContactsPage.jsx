@@ -77,8 +77,7 @@ function StarToggle({ starred, onToggle, size = 18 }) {
   };
   return (
     <span role="button" aria-pressed={starred} onClick={click}
-          title={starred ? "Important — click to unstar"
-                          : "Star as an important person"}
+          title={starred ? "Starred" : "Star"}
           style={{ display: "inline-flex", cursor: busy ? "default" : "pointer",
                    color: starred ? C.star : C.faint, opacity: busy ? 0.5 : 1,
                    flexShrink: 0 }}>
@@ -759,7 +758,7 @@ function ProposalCard({ proposal, auto, schedulingLink = "" }) {
                  onChange={toggleIncludeLink}
                  style={{ accentColor: C.accent, cursor: "inherit" }} />
           <Link2 size={13} color={C.accent} />
-          Include my booking link
+          Add booking link
         </label>
       )}
 
