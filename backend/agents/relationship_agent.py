@@ -407,6 +407,167 @@ def _thread_signals(thread: list[dict]) -> dict:
     return sig
 
 
+# ── Phase-2 context brief (deterministic, no LLM call) ────────────────────────
+# Phase-2 currently hands the drafting model a one-line triage reason plus the
+# raw context JSON and asks it, every time, to (a) reconstruct the thread
+# situation and (b) decide what is safe to assert. That reconstruction is where
+# grounding and voice slip: the model re-guesses the state of play and sometimes
+# treats the LOOSE triage angle as established fact, then writes from it.
+#
+# The brief is a small, PRE-DIGESTED read of the situation built from the same
+# thread signals Phase-1 used plus the rollup summary. It is purely deterministic
+# (no extra Anthropic call, so it adds no latency) and it is NOT authoritative
+# over the actual conversation: the heuristics that feed it (open_loop_type, the
+# promise/question keyword match) are best-guesses, so the drafting prompt tells
+# the model that prior_messages wins on any conflict. Its value is to let the
+# prompt lead with "here is the situation, here is what is safe to say, here is
+# what to treat as uncertain" instead of making the model derive all of that
+# from scratch under a 1024-token budget.
+
+def _last_text(thread: list[dict], who: Optional[str] = None) -> Optional[str]:
+    """The most recent message text in `thread`, optionally restricted to a
+    speaker ('host' | 'them'). Trimmed for prompt economy; None when absent."""
+    for m in reversed(thread or []):
+        if who is not None and m.get("who") != who:
+            continue
+        t = (m.get("text") or "").strip()
+        if t:
+            return t[:200]
+    return None
+
+
+def _context_brief(sel: dict, ctx: dict) -> dict:
+    """Deterministic situation brief for the Phase-2 drafting model.
+
+    Pure function of the triage selection (`sel`: contact_id/reason/angle) and
+    the materialised context (`ctx`: summary/events/timeline/prior_messages), so
+    it is directly unit-testable and adds no latency. Every field is derived from
+    data already in `ctx`; nothing here overrides the real thread.
+
+    Fields:
+      - relationship_state: stage + staleness + days since last touch
+      - thread_status: who spoke last and who owes the next move
+      - natural_action: the single most likely next action, from the signals
+      - safe_facts_to_use: facts actually present in the data (name/company/
+        shared events / host's noted next step / quoted open-loop evidence)
+      - facts_to_avoid_or_treat_as_uncertain: the heuristic angle + the classes
+        of fact the model must not invent
+      - desired_next_step: the host's own written next_step, if any
+      - continue_from: the last message in the thread, to continue from
+      - do_not_repeat: the host's most recent message, so the draft doesn't
+        restate what was already said
+      - drafting_risks: deterministic skip/caution flags (too soon, their court,
+        no prior thread)
+    """
+    summary = ctx.get("summary") or {}
+    thread = ctx.get("prior_messages") or []
+    events = ctx.get("events") or []
+    sig = _thread_signals(thread)
+
+    name = (summary.get("name") or "").strip()
+    company = (summary.get("company") or "").strip()
+    stage = summary.get("relationship_stage")
+    next_step = (summary.get("next_step") or "").strip()
+    days = _days_since(summary.get("last_touch_at"))
+    is_stale = bool(stage == "stale")
+    age = sig["last_message_age_days"]
+
+    # relationship_state -------------------------------------------------------
+    rel_bits = []
+    if stage:
+        rel_bits.append(str(stage))
+    if is_stale and stage != "stale":
+        rel_bits.append("stale")
+    if days is not None:
+        rel_bits.append(f"{days}d since last touch")
+    relationship_state = ", ".join(rel_bits) or "unknown"
+
+    # thread_status ------------------------------------------------------------
+    if not thread:
+        thread_status = "no prior messages on file"
+    elif sig["awaiting_host_reply"]:
+        thread_status = (f"contact spoke last ({age}d ago); the host owes a reply"
+                         if age is not None else
+                         "contact spoke last; the host owes a reply")
+    elif sig["awaiting_contact_reply"]:
+        thread_status = (f"host spoke last ({age}d ago); waiting on the contact"
+                         if age is not None else
+                         "host spoke last; waiting on the contact")
+    else:
+        thread_status = "thread present"
+
+    # natural_action -----------------------------------------------------------
+    if next_step:
+        natural_action = f"act on the host's written next step: {next_step}"
+    elif sig["contact_open_question"]:
+        natural_action = "answer the question the contact asked"
+    elif sig["host_open_promise"]:
+        kind = sig["open_loop_type"] or "what was promised"
+        natural_action = f"deliver on the host's open promise ({kind})"
+    elif sig["awaiting_host_reply"]:
+        natural_action = "respond to the contact's most recent message"
+    elif is_stale:
+        natural_action = "reconnect after time has passed, only if a natural angle exists"
+    else:
+        natural_action = (sel.get("angle") or "").strip() or \
+            "decide from the thread whether any touch is warranted"
+
+    # safe_facts_to_use --------------------------------------------------------
+    safe: list[str] = []
+    if name:
+        safe.append(f"name: {name}")
+    if company:
+        safe.append(f"company: {company}")
+    if events:
+        labels = [str(e.get("name") or e.get("title") or "").strip()
+                  for e in events if isinstance(e, dict)]
+        labels = [l for l in labels if l]
+        if labels:
+            safe.append("shared events: " + ", ".join(labels[:4]))
+        else:
+            safe.append(f"{len(events)} shared event(s)")
+    if next_step:
+        safe.append(f"host's noted next step: {next_step}")
+    if sig["open_loop_evidence"]:
+        safe.append("open-loop evidence (verify against prior_messages): "
+                    + sig["open_loop_evidence"])
+
+    # facts_to_avoid_or_treat_as_uncertain -------------------------------------
+    avoid = [
+        "any life, work, company, funding, job-change, move, launch, or milestone "
+        "update that is NOT visible in prior_messages",
+        "warmth, interest, or intent the thread does not actually show",
+    ]
+    angle = (sel.get("angle") or "").strip()
+    if angle:
+        avoid.append(f"the triage angle is a hint to verify, not a confirmed fact: {angle}")
+    if sig["open_loop_type"] and sig["host_open_promise"]:
+        avoid.append(f"open_loop_type ('{sig['open_loop_type']}') is a keyword guess; "
+                     "confirm the actual promise in prior_messages")
+
+    # drafting_risks -----------------------------------------------------------
+    risks: list[str] = []
+    if not thread:
+        risks.append("no prior thread on file; do not fabricate shared history")
+    if sig["awaiting_contact_reply"]:
+        risks.append("the contact has the next natural move; the host may owe nothing")
+        if (age or 0) < 3:
+            risks.append(f"host messaged recently ({age}d ago) with no reply yet; "
+                         "likely TOO SOON or THEIR COURT, consider skip")
+
+    return {
+        "relationship_state": relationship_state,
+        "thread_status": thread_status,
+        "natural_action": natural_action,
+        "safe_facts_to_use": safe,
+        "facts_to_avoid_or_treat_as_uncertain": avoid,
+        "desired_next_step": next_step or None,
+        "continue_from": _last_text(thread),
+        "do_not_repeat": _last_text(thread, who="host"),
+        "drafting_risks": risks,
+    }
+
+
 def run_relationship_agent(
     db,
     user_id: int,
@@ -890,10 +1051,10 @@ You are deciding whether to draft ONE follow-up for ONE person. The person was n
 You are the real filter.
 
 You are given the person's full relationship context inline below, including:
-- rollup summary
-- shared events
-- cross-event timeline
-- prior_messages, which is the actual host/contact conversation thread in chronological order
+- a context_brief: a deterministic pre-read of the situation (relationship state, who owes the next move, the likely natural action, facts that are safe to use, facts to treat as uncertain, what not to repeat, and drafting risks)
+- the full context as JSON: rollup summary, shared events, cross-event timeline, and prior_messages, which is the actual host/contact conversation thread in chronological order
+
+The context_brief is a convenience, not an authority. It is built from loose signals. If anything in the context_brief conflicts with prior_messages, prior_messages wins. Never assert a fact that the brief lists under facts_to_avoid_or_treat_as_uncertain unless prior_messages independently confirms it.
 
 Your first job is to read prior_messages and decide from the actual conversation content whether a follow-up is genuinely warranted right now.
 
@@ -962,8 +1123,11 @@ Important distinctions:
 - Conversion alone is not a reason to message again.
 - Do not send "just checking in" unless the context supports a natural check-in.
 
+Before you draft, weigh the context_brief's drafting_risks: if it flags TOO SOON or THEIR COURT and prior_messages does not show a new reason to reach out, prefer skip_contact.
+
 If you draft:
 - The message must be grounded in prior_messages and the provided context.
+- Do not restate the host's do_not_repeat line from the brief; move the thread forward instead.
 - The message must make sense as the next message in the existing thread.
 - The message should be short, natural, and specific.
 - Under 60 words unless the context clearly requires slightly more.
@@ -1184,20 +1348,32 @@ def run_relationship_agent_concurrent(
     def _draft_one(job: dict) -> None:
         sel, ctx, name = job["sel"], job["ctx"], job["name"]
         cid = sel["contact_id"]
+        brief = _context_brief(sel, ctx)
         prompt = (
             f"Follow up with {name} (contact_id {cid}).\n\n"
+            "<triage_signal>\n"
             f"Triage flagged them because: {sel.get('reason') or 'they need a touch'}\n"
-            f"Suggested angle: {sel.get('angle') or '(none given)'}\n\n"
-            "Their full context is below:\n"
-            + json.dumps(ctx, default=str)
-            + "\n\nRead prior_messages first. Decide whether a follow-up is "
-            "genuinely warranted based on the actual thread and provided "
-            "context.\n\n"
+            f"Suggested angle: {sel.get('angle') or '(none given)'}\n"
+            "This is a wide-net hint, NOT proof a message is needed.\n"
+            "</triage_signal>\n\n"
+            "<drafting_task>\n"
+            "Read prior_messages in <full_context_json> first. Decide whether a "
+            "follow-up is genuinely warranted based on the actual thread.\n"
             "If there is a natural next relationship action for the host to take "
-            "now, draft the message or propose the next step.\n\n"
+            "now, draft the message or propose the next step.\n"
             "If the thread shows the loop is closed, the ball is in their court, "
             "it is too soon, a follow-up was already handled, or there is no real "
-            "hook, call skip_contact."
+            "hook, call skip_contact.\n"
+            "</drafting_task>\n\n"
+            "<context_brief>\n"
+            "A deterministic pre-read of the signals. Use it to orient, but "
+            "prior_messages is authoritative: if anything here conflicts with the "
+            "actual thread, the thread wins.\n"
+            + json.dumps(brief, default=str)
+            + "\n</context_brief>\n\n"
+            "<full_context_json>\n"
+            + json.dumps(ctx, default=str)
+            + "\n</full_context_json>"
         )
         resp = cli.messages.create(
             model=_AGENT_MODEL,

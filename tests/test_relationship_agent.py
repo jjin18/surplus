@@ -424,6 +424,79 @@ def test_thread_signals_brandnew_obligation_not_yet_due():
     assert sig["followup_due"] is False
 
 
+# ── _context_brief : the deterministic Phase-2 pre-read ───────────────────────
+# Pure function of (sel, ctx). Adds NO LLM call; every field is derived from the
+# thread signals + rollup summary already in ctx. These pin that the brief never
+# fabricates and that its skip/caution flags fire on the right thread shapes.
+
+def _ctx(summary=None, events=None, thread=None):
+    return {"summary": summary or {}, "events": events or [],
+            "timeline": [], "prior_messages": thread or []}
+
+
+def test_brief_contact_question_drives_answer_action():
+    ctx = _ctx(
+        summary={"name": "Sarah Lin", "company": "Acme",
+                 "relationship_stage": "replied", "last_touch_at": None},
+        events=[{"name": "AI Dinner"}],
+        thread=[_msg("host", "Great meeting you!", days_ago=5),
+                _msg("them", "You too! Can you send the deck?", days_ago=2)])
+    b = ragent._context_brief({"reason": "replied", "angle": "they asked for the deck"}, ctx)
+    assert b["natural_action"] == "answer the question the contact asked"
+    assert "host owes a reply" in b["thread_status"]
+    assert b["continue_from"] == "You too! Can you send the deck?"
+    assert b["do_not_repeat"] == "Great meeting you!"      # host's last, not the contact's
+    assert "name: Sarah Lin" in b["safe_facts_to_use"]
+    assert "company: Acme" in b["safe_facts_to_use"]
+    assert "shared events: AI Dinner" in b["safe_facts_to_use"]
+    assert b["drafting_risks"] == []                       # contact owes the move, not host
+
+
+def test_brief_written_next_step_is_the_action_and_desired_step():
+    ctx = _ctx(
+        summary={"name": "Tom", "relationship_stage": "contacted",
+                 "next_step": "send intro to Mara", "last_touch_at": None},
+        thread=[_msg("them", "Would love an intro to Mara", days_ago=4),
+                _msg("host", "I'll intro you to Mara this week", days_ago=2)])
+    b = ragent._context_brief({"reason": "host promise", "angle": ""}, ctx)
+    assert b["natural_action"] == "act on the host's written next step: send intro to Mara"
+    assert b["desired_next_step"] == "send intro to Mara"
+    # host spoke last & recent -> the brief warns this is likely their-court/too-soon
+    assert any("next natural move" in r for r in b["drafting_risks"])
+    assert any("TOO SOON" in r for r in b["drafting_risks"])
+
+
+def test_brief_empty_thread_flags_no_history_and_no_fabrication():
+    b = ragent._context_brief(
+        {"reason": "stale", "angle": "reconnect"},
+        _ctx(summary={"name": "Pat", "relationship_stage": "stale", "last_touch_at": None}))
+    assert b["thread_status"] == "no prior messages on file"
+    assert b["continue_from"] is None and b["do_not_repeat"] is None
+    assert any("do not fabricate" in r for r in b["drafting_risks"])
+    # relationship_state must not double-print 'stale'
+    assert b["relationship_state"] == "stale"
+
+
+def test_brief_always_guards_against_invented_updates_and_flags_angle():
+    b = ragent._context_brief(
+        {"reason": "x", "angle": "they just raised a Series A"},
+        _ctx(summary={"name": "Mia", "last_touch_at": None},
+             thread=[_msg("them", "hi", days_ago=1)]))
+    avoid = " ".join(b["facts_to_avoid_or_treat_as_uncertain"])
+    assert "NOT visible in prior_messages" in avoid
+    assert "they just raised a Series A" in avoid     # the loose angle is flagged, not trusted
+
+
+def test_brief_host_promise_without_next_step_uses_promise_action():
+    ctx = _ctx(
+        summary={"name": "Lee", "last_touch_at": None},
+        thread=[_msg("them", "great chat", days_ago=6),
+                _msg("host", "I'll send you the deck next week", days_ago=4)])
+    b = ragent._context_brief({"reason": "promise", "angle": ""}, ctx)
+    assert b["natural_action"] == "deliver on the host's open promise (send_resource)"
+    assert any("keyword guess" in a for a in b["facts_to_avoid_or_treat_as_uncertain"])
+
+
 # ── "who to follow up" : the deterministic signals list_contacts exposes ──────
 # The agent never decides staleness itself — it reads is_stale / has_next_step /
 # days_since_last_touch off contact_summary. These tests pin those inputs so a
