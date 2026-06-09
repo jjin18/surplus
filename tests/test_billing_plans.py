@@ -30,6 +30,16 @@ def test_limits_per_plan():
     assert bp.limits_for(_user(plan="pro")) == {"drafts": 200, "contacts": 1000}
 
 
+def test_unlimited_plan_tier_has_no_caps():
+    # DB-controlled comp tier: plan='unlimited' bypasses caps with no env var.
+    u = _user(plan="unlimited", drafts_used_this_period=9999,
+              contacts_scanned_this_period=9999)
+    assert bp.limits_for(u) == {"drafts": None, "contacts": None}
+    assert bp.can_generate_draft(u) is True
+    assert bp.can_scan_contacts(u, 100000) is True
+    assert bp.remaining_drafts(u) is None
+
+
 def test_unknown_plan_falls_back_to_free():
     assert bp.plan_of(_user(plan="enterprise_megacorp")) == "free"
     assert bp.plan_of(_user(plan=None)) == "free"

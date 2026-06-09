@@ -24,9 +24,13 @@ from typing import Optional
 # Per-plan limits. `None` means unlimited. Kept as plain ints so the values are
 # obvious at a glance and easy to tune for a demo.
 PLAN_LIMITS: dict[str, dict[str, Optional[int]]] = {
-    "free":    {"drafts": 5,   "contacts": 25},
-    "starter": {"drafts": 30,  "contacts": 250},
-    "pro":     {"drafts": 200, "contacts": 1000},
+    "free":      {"drafts": 5,    "contacts": 25},
+    "starter":   {"drafts": 30,   "contacts": 250},
+    "pro":       {"drafts": 200,  "contacts": 1000},
+    # DB-controlled comp tier: `None` == no cap. Lets us grant a specific
+    # account true unlimited from SQL alone (UPDATE users SET plan='unlimited')
+    # without touching the SURPLUS_UNLIMITED_ACCOUNTS env allowlist.
+    "unlimited": {"drafts": None, "contacts": None},
 }
 
 # Map a Stripe price id -> plan, via env so the same code works in test/live
