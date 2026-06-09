@@ -52,6 +52,7 @@ def strip_em_dashes(text: Optional[str]) -> Optional[str]:
         return text
     out = _DASH_RE.sub(", ", text)
     out = re.sub(r",\s*,", ", ", out)        # collapse commas adjacent to a dash
+    out = re.sub(r",\s*([.!?,;:])", r"\1", out)  # 'coffee —.' -> 'coffee.', no dangling comma
     out = re.sub(r"\s+,", ",", out)          # tighten space before the new comma
     out = re.sub(r"[ \t]{2,}", " ", out)     # collapse the odd double space
     out = re.sub(r"^\s*,\s*", "", out)       # leading comma artifact

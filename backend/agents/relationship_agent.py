@@ -35,6 +35,7 @@ from typing import Any, Optional
 from . import relationships
 from . import voice
 from .agent_loop import DEFAULT_MODEL, _block_type, run_agent
+from ..providers.base import strip_em_dashes
 
 # How many contacts the agent may pull full history for in one run. A soft
 # guard on cost/latency : the survey tool returns everyone, but deep-diving
@@ -146,15 +147,16 @@ def _voice_block(examples: list[str]) -> str:
 
 
 def _strip_dashes(text: str) -> str:
-    """Belt-and-suspenders on the prompt's no-em-dash rule: rewrite any em/en
-    dash to a comma, collapsing the surrounding spaces, so a model slip can't
-    leak the AI 'tell' into a staged draft. Trailing/duplicate punctuation from
-    the swap is tidied up."""
-    import re
-    out = re.sub(r"\s*[—–]\s*", ", ", text or "")
-    out = re.sub(r",\s*([.!?,;:])", r"\1", out)   # ", ." -> "."
-    out = re.sub(r"\s{2,}", " ", out)
-    return out.strip()
+    """Belt-and-suspenders on the prompt's no-em-dash rule: rewrite any dash the
+    model slips into a staged draft to a comma, so the AI 'tell' never leaks.
+
+    Delegates to the canonical ``providers.base.strip_em_dashes`` so this surface
+    scrubs IDENTICALLY to the cold-DM composer. That scrubber is strictly more
+    thorough than the em/en-only regex this used to carry: it also catches the
+    figure dash (―), the unicode minus (−), and a spaced ASCII hyphen used as a
+    dash ('Vancouver - let's chat') — all of which previously leaked here. A
+    hyphen inside a word ('co-founder') is still left untouched."""
+    return strip_em_dashes(text or "") or ""
 
 
 _TOOLS = [
