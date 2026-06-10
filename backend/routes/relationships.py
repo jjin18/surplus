@@ -783,6 +783,7 @@ class FollowupScheduleIn(BaseModel):
     Gmail-style 'Schedule send' the chat cards drive."""
     message: str
     send_at: Optional[datetime] = None
+    channel: str = "linkedin"  # "linkedin" | "email"
 
 
 @router.post("/contacts/{contact_id}/schedule")
@@ -822,7 +823,20 @@ def schedule_contact_followup(
 
     # Send now: no future time chosen. Explicit host action, sends regardless of
     # the auto toggle (same as the followups send-now route).
+    want_email = (getattr(body, "channel", "") or "linkedin") == "email"
     if send_at is None or send_at <= now:
+        if want_email:
+            from ..agents.sender import send_followup_email
+            try:
+                res = send_followup_email(db, prospect, text)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc))
+            db.commit()
+            if res.error and res.state == "failed":
+                raise HTTPException(502, f"email send failed: {res.error}")
+            return {"status": "sent", "contact_id": contact_id,
+                    "prospect_id": prospect.id, "channel": "email",
+                    "dry_run": res.dry_run}
         from ..agents.sender import send_and_log
         from ..providers import get_provider
         try:
@@ -848,6 +862,7 @@ def schedule_contact_followup(
         row.body = text
         row.send_at = send_at
         row.updated_at = now
+    row.channel = "email" if want_email else "linkedin"
     db.commit()
     db.refresh(row)
     return {"status": "scheduled", "contact_id": contact_id,
