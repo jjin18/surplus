@@ -141,6 +141,15 @@ def health(deep: bool = False):
         platform = "fly"
     else:
         platform = "unknown"
+    # Build stamp baked into the image by the Dockerfile. Unlike git_sha (which
+    # is "unknown" unless a build-arg / RAILWAY_GIT_COMMIT_SHA is passed), this
+    # refreshes whenever the copied frontend/backend layers actually rebuild —
+    # so a stale deploy that silently serves an old bundle is visible at a glance
+    # (the value won't have moved since the last real rebuild).
+    try:
+        build_time = (Path(__file__).resolve().parent / ".build_time").read_text().strip()
+    except Exception:
+        build_time = "unknown"
     # DB-engine surface so we never again silently fall back to SQLite in
     # prod without noticing. Defensive : a broken ENGINE attribute access
     # must NOT 5xx this endpoint — Railway's healthcheck hits it, and a
@@ -205,6 +214,10 @@ def health(deep: bool = False):
         "version": "0.1.0",
         "platform": platform,
         "git_sha": git_sha,
+        # Baked at image build (Dockerfile). Moves on every real rebuild, so a
+        # value that hasn't changed after a deploy means the build was a full
+        # cache hit / stale source — i.e. your new code did NOT ship.
+        "build_time": build_time,
         # Fly stamps this per deploy even without a build-arg, so a changed
         # value confirms a fresh deploy landed even if GIT_SHA wasn't passed.
         "image_ref": os.environ.get("FLY_IMAGE_REF"),
