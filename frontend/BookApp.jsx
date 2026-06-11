@@ -412,7 +412,8 @@ function DraftPanel({ detail }) {
         <div className="bk-err">{err}</div>
       ) : (
         <>
-          <div className="bk-quote"><p>{body}</p></div>
+          <textarea className="bk-quote-edit" value={body}
+                    onChange={(e) => setBody(e.target.value)} rows={6} />
           <div className="bk-actions">
             <button className="bk-btn bk-btn--primary" onClick={send}>
               <Send size={13} style={{ marginRight: 5, verticalAlign: -1 }} />{sent ? "Copied" : "Send"}
@@ -1172,6 +1173,11 @@ const BOOK_CSS = `
 .bk-panel-label{font-size:12px; color:var(--faint); margin:0 0 9px;}
 .bk-quote{background:var(--bg); border:.5px solid var(--line); border-radius:var(--r-md); padding:11px 13px;}
 .bk-quote p{font-family:var(--font-display); font-size:14px; color:var(--ink); line-height:1.55; margin:0;}
+.bk-quote-edit{display:block; box-sizing:border-box; width:100%; background:var(--bg);
+  border:.5px solid var(--line); border-radius:var(--r-md); padding:11px 13px;
+  font-family:var(--font-display); font-size:14px; color:var(--ink); line-height:1.55;
+  resize:vertical; min-height:118px;}
+.bk-quote-edit:focus{outline:none; border-color:var(--accent);}
 .bk-actions{margin-top:10px; display:flex; gap:8px;}
 .bk-tl{margin:0 18px 16px; background:var(--surface); border:.5px solid var(--line);
   border-radius:var(--r-lg); overflow:hidden;}
