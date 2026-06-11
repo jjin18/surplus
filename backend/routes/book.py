@@ -139,22 +139,40 @@ def _demo_book() -> list[dict]:
 
 
 def _book_from_spine(db: Session, user: models.User) -> list[dict]:
-    """Map the real Contact spine (the cross-event 'who I've met' rollup) into
-    the book shape the agent prompts expect. Empty when the user has no
-    contacts yet — the caller falls back to the demo book so the surface still
-    renders end-to-end."""
+    """Map the real Contact spine into the book shape. Empty when the user has
+    no contacts — caller falls back to the demo book."""
     contacts = rel_agent.list_contacts(db, user.id)
     if not contacts:
         return []
     inter_index = rel_agent.prefetch_interactions_by_prospect(db, contacts)
     update_index = rel_agent.prefetch_activity_updates_by_contact(db, contacts)
+    return _book_from_spine_contacts(db, user, contacts, inter_index, update_index)
+
+
+def _find_contact_fast(db: Session, user: models.User,
+                       contact_id: str) -> Optional[dict]:
+    """Single-contact lookup by numeric DB id — skips rebuilding the full book.
+    Returns None when contact_id isn't a plain integer (demo book uses slugs)."""
+    try:
+        cid = int(contact_id)
+    except (TypeError, ValueError):
+        return None
+    contacts = rel_agent.list_contacts(db, user.id)
+    match = next((c for c in contacts if c.id == cid), None)
+    if not match:
+        return None
+    inter_index = rel_agent.prefetch_interactions_by_prospect(db, [match])
+    update_index = rel_agent.prefetch_activity_updates_by_contact(db, [match])
+    book = _book_from_spine_contacts(db, user, [match], inter_index, update_index)
+    return book[0] if book else None
+
+
+def _book_from_spine_contacts(db, user, contacts, inter_index, update_index):
+    """Inner loop of _book_from_spine, reusable for single-contact fast path."""
     now = datetime.now(timezone.utc)
-    book: list[dict] = []
+    book = []
     for c in contacts:
-        row = rel_agent.contact_summary(db, c, inter_index,
-                                        update_index.get(c.id))
-        # Days since the freshest touch; a never-touched capture counts as new
-        # (0 days) rather than dormant.
+        row = rel_agent.contact_summary(db, c, inter_index, update_index.get(c.id))
         days = 0
         last = row.get("last_touch_at")
         if last is not None:
@@ -165,8 +183,6 @@ def _book_from_spine(db: Session, user: models.User) -> list[dict]:
                 days = max(0, (now - dt).days)
             except Exception:
                 days = 0
-        # The freshest watch-poller change becomes the raw signal feeding the
-        # Updates feed (prompt 2 / its heuristic).
         upd = row.get("latest_update") or {}
         headline = upd.get("title") or upd.get("summary")
         signals = None
@@ -175,18 +191,12 @@ def _book_from_spine(db: Session, user: models.User) -> list[dict]:
             signals = {
                 "type": upd.get("type") or "company_news",
                 "headline": headline,
-                "detected_at": (occurred.isoformat()
-                                if isinstance(occurred, datetime)
+                "detected_at": (occurred.isoformat() if isinstance(occurred, datetime)
                                 else (occurred or _ago())),
                 "significance": "medium",
                 "outreach_trigger": True,
             }
         identity = row.get("identity") or {}
-
-        def _real(val):  # drop the "Unknown" schema placeholder
-            s = (val or "").strip()
-            return "" if s.lower() == "unknown" else s
-
         book.append({
             "id": str(row.get("contact_id")),
             "name": _real(row.get("name")) or "Unknown",
@@ -200,8 +210,6 @@ def _book_from_spine(db: Session, user: models.User) -> list[dict]:
             "met_at": row.get("met_at") or "",
             "value": "",
             "is_prospect": not row.get("is_connection"),
-            # Outreach pipeline stage (captured -> contacted -> replied ->
-            # converted / stale) — shown as the chip on the Book rows.
             "stage": row.get("relationship_stage"),
             "interaction_history": row.get("next_step") or "",
             "raw_signals": signals,
@@ -309,7 +317,10 @@ def relationship(contact_id: str, db: Session = Depends(get_db),
     """The relationship detail screen : health, the plain-language 'why', the
     relationship value, and a synthesized timeline. The drafted message is
     fetched separately via /draft so it can be refined independently."""
-    contact = _find_contact(_load_book(db, user), contact_id=contact_id, name=None)
+    # Try to look up the contact directly by DB id first (avoids rebuilding the
+    # entire book just to find one person).
+    contact = _find_contact_fast(db, user, contact_id) or \
+              _find_contact(_load_book(db, user), contact_id=contact_id, name=None)
     if contact is None:
         raise HTTPException(404, "contact not found")
     return book_agent.relationship_detail(contact)
