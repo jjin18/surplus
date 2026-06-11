@@ -159,6 +159,39 @@ async def unipile_webhook(request: Request, db: Session = Depends(get_db)) -> di
     return await _handle(request, db, provider)
 
 
+def _apply_account_status(db: Session, provider, info: dict) -> dict:
+    """Circuit breaker. Map a Unipile account-status push onto the host's
+    linkedin_status. OK -> 'active'; anything else halts the account -- the auth
+    gate AND the updates poller both require linkedin_status == 'active', so the
+    moment LinkedIn pushes back (creds / captcha / checkpoint / restriction) we
+    stop sending and polling for that host. Auto-resumes when OK arrives."""
+    from .. import models
+    acct, status = info["account_id"], info["status"]
+    if status in getattr(provider, "ACCOUNT_OK", set()):
+        new = "active"
+    elif status == "CREDENTIALS":
+        new = "credentials"
+    elif status in ("DISCONNECTED", "STOPPED", "ERROR"):
+        new = "disconnected"
+    else:                                   # captcha / checkpoint / permissions / blocked
+        new = "restricted"
+    user = db.query(models.User).filter(models.User.unipile_account_id == acct).first()
+    if user is None:
+        print(f"[unipile] account_status for unknown acct ...{acct[-4:]} "
+              f"status={status}", flush=True)
+        return {"ok": True, "applied": False, "account_status": status,
+                "reason": "unknown account"}
+    prev = user.linkedin_status
+    user.linkedin_status = new
+    db.commit()
+    halted = new != "active"
+    print(f"[unipile] {'>>> ACCOUNT HALT' if halted else 'account ok'} "
+          f"user={user.id} acct=...{acct[-4:]} status={status} "
+          f"linkedin_status {prev}->{new}", flush=True)
+    return {"ok": True, "applied": True, "account_status": status,
+            "halted": halted, "user_id": user.id}
+
+
 async def _handle(request: Request, db: Session, provider: LinkedInProvider) -> dict:
     raw_body = await request.body()
     if not provider.verify_webhook(dict(request.headers), raw_body):
@@ -168,6 +201,13 @@ async def _handle(request: Request, db: Session, provider: LinkedInProvider) -> 
         payload = json.loads(raw_body or b"{}")
     except json.JSONDecodeError:
         raise HTTPException(400, "malformed JSON body")
+
+    # Circuit breaker: an account-status push (credentials / restriction /
+    # checkpoint) means LinkedIn is pushing back on this account. Halt ALL
+    # activity for that host immediately, before it escalates to a ban.
+    acct_status = getattr(provider, "parse_account_status", lambda _: None)(payload)
+    if acct_status is not None:
+        return _apply_account_status(db, provider, acct_status)
 
     canonical = provider.normalize_webhook(payload)
     if canonical is None:

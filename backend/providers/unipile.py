@@ -828,6 +828,49 @@ class UnipileProvider(LinkedInProvider):
             raw=raw,
         )
 
+    # Account-status messages Unipile surfaces. OK = healthy; anything in HALT
+    # means LinkedIn is pushing back (creds, restriction, checkpoint) -> we stop
+    # ALL activity for that account before it escalates to a ban.
+    ACCOUNT_OK = {"OK", "CONNECTED", "SYNC_SUCCESS", "CREATION_SUCCESS",
+                  "RECONNECTED"}
+    ACCOUNT_HALT = {"ERROR", "STOPPED", "CREDENTIALS", "DISCONNECTED",
+                    "PERMISSIONS", "CAPTCHA", "IN_APP_VALIDATION",
+                    "ACCOUNT_RESTRICTED", "RESTRICTED", "CHECKPOINT", "BLOCKED"}
+
+    def parse_account_status(self, raw: dict) -> Optional[dict]:
+        """Pull an account-status event out of a webhook body, else None.
+
+        Unipile's `account_status` source pushes the live health of a connected
+        account (OK / CREDENTIALS / ERROR / CAPTCHA / restricted ...). We use it
+        as a circuit breaker: the moment LinkedIn shows friction, halt that host.
+        Tolerant of the envelope shapes (nested `AccountStatus`, or flat)."""
+        if not isinstance(raw, dict):
+            return None
+        blk = raw.get("AccountStatus") if isinstance(raw.get("AccountStatus"), dict) else None
+        src = (blk or raw)
+        account_id = src.get("account_id") or raw.get("account_id")
+
+        def _s(*vals):  # first non-empty STRING (messaging's `message` is a dict)
+            for v in vals:
+                if isinstance(v, str) and v.strip():
+                    return v.strip().upper()
+            return ""
+        status = _s(src.get("message"), src.get("status"),
+                    None if blk else raw.get("status"))
+        kind = (raw.get("event") or raw.get("event_type") or raw.get("type") or "").lower()
+        # It's an account-status event if there's an explicit AccountStatus block,
+        # the event name mentions account/status, or we have an account_id + a
+        # recognized status word and it's NOT a messaging/relation payload.
+        looks_status = (
+            blk is not None
+            or "account" in kind or "status" in kind
+            or (account_id and status in (self.ACCOUNT_OK | self.ACCOUNT_HALT)
+                and not raw.get("message") and not raw.get("sender"))
+        )
+        if not looks_status or not account_id or not status:
+            return None
+        return {"account_id": str(account_id), "status": status}
+
     def verify_webhook(self, headers: dict, body: bytes) -> bool:
         if not self.webhook_secret:
             return not self.require_signature
@@ -895,6 +938,52 @@ class UnipileProvider(LinkedInProvider):
         }
         if self.webhook_secret:
             # Static header echoed back on every delivery -> verify_webhook.
+            body["headers"] = [
+                {"key": "X-Webhook-Secret", "value": self.webhook_secret}
+            ]
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(f"{self.dsn}/api/v1/webhooks",
+                                   headers={**headers, "Content-Type": "application/json"},
+                                   json=body)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+        if resp.status_code >= 400:
+            return {"ok": False, "reason": f"unipile {resp.status_code}: {resp.text[:300]}"}
+        try:
+            created = resp.json() if resp.text else {}
+        except Exception:
+            created = {}
+        return {"ok": True, "created": True, "webhook": created}
+
+    def register_account_status_webhook(self, callback_url: str) -> dict:
+        """Ensure an "account_status" webhook POSTs account health changes to
+        ``callback_url`` -- the circuit breaker that halts a host the instant
+        LinkedIn pushes back. Idempotent on (url, source) so it coexists with the
+        messaging webhook pointed at the same URL."""
+        if not (self.api_key and self.dsn):
+            return {"ok": False, "reason": "UNIPILE_DSN + UNIPILE_API_KEY required"}
+        import httpx
+        headers = {"X-API-KEY": self.api_key, "accept": "application/json"}
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                listed = client.get(f"{self.dsn}/api/v1/webhooks", headers=headers)
+            existing = listed.json() if listed.text else {}
+        except Exception:
+            existing = {}
+        items = existing.get("items") if isinstance(existing, dict) else existing
+        for w in (items or []):
+            if (isinstance(w, dict)
+                    and (w.get("request_url") or w.get("url")) == callback_url
+                    and (w.get("source") or "").lower() == "account_status"):
+                return {"ok": True, "created": False, "webhook": w}
+        body: dict = {
+            "source": "account_status",
+            "request_url": callback_url,
+            "name": "surplus-account-status",
+            "enabled": True,
+        }
+        if self.webhook_secret:
             body["headers"] = [
                 {"key": "X-Webhook-Secret", "value": self.webhook_secret}
             ]

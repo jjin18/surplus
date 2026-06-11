@@ -261,7 +261,13 @@ def register_webhooks(
     provider = get_provider()
     callback_url = f"{base}/webhooks/unipile"
     result = provider.register_inbound_webhook(callback_url)
-    return {"provider": provider.name, "callback_url": callback_url, **result}
+    # Also register the account-status webhook: the circuit breaker that halts a
+    # host the instant LinkedIn pushes back (creds/captcha/checkpoint). Best
+    # effort -- if the provider lacks the method, skip it.
+    status_result = getattr(provider, "register_account_status_webhook",
+                            lambda _u: {"ok": False, "reason": "unsupported"})(callback_url)
+    return {"provider": provider.name, "callback_url": callback_url,
+            "messaging": result, "account_status": status_result}
 
 
 # ── Billing status : read-only paid-user audit ──────────────────────────
