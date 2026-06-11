@@ -182,22 +182,17 @@ def _book_from_spine(db: Session, user: models.User) -> list[dict]:
                 "outreach_trigger": True,
             }
         identity = row.get("identity") or {}
-
-        def _real(val):  # drop the "Unknown" schema placeholder
-            s = (val or "").strip()
-            return "" if s.lower() == "unknown" else s
-
         book.append({
             "id": str(row.get("contact_id")),
-            "name": _real(row.get("name")) or "Unknown",
+            "name": row.get("name") or "Unknown",
             "vip": False,
-            "title": _real(identity.get("headline")) or _real(identity.get("role")),
-            "firm": _real(row.get("company")) or _real(identity.get("company")),
+            "title": identity.get("headline") or "",
+            "firm": row.get("company") or identity.get("company") or "",
             "tier": "core",
             "days_since": days,
             "cadence_days": 30,
             "review_due": False,
-            "met_at": row.get("met_at") or "",
+            "met_at": "",
             "value": "",
             "is_prospect": not row.get("is_connection"),
             # Outreach pipeline stage (captured -> contacted -> replied ->
