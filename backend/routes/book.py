@@ -11,11 +11,14 @@ otherwise. Wiring the demo book to live Contacts is the next slice.
 """
 from __future__ import annotations
 
+import hmac
+import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -466,3 +469,33 @@ def relationship(contact_id: str, db: Session = Depends(get_db),
     _trace(f"GET /relationship/{contact_id} user={user.id} "
            f"({'fast' if fast else 'full-book'}) in {time.monotonic()-t0:.2f}s")
     return detail
+
+
+def _require_admin_token(x_admin_token: Optional[str] = Header(default=None)) -> None:
+    """Constant-time compare X-Admin-Token against ADMIN_TOKEN env (same gate as
+    /admin/run-followups). Lets the scheduled GitHub Action fire the updates run
+    without a user session."""
+    expected = (os.environ.get("ADMIN_TOKEN") or "").strip()
+    if not expected or not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
+@router.post("/run-updates", status_code=202)
+def run_updates_endpoint(user_id: Optional[int] = None,
+                         _: None = Depends(_require_admin_token)):
+    """Scheduled "what's new" sweep: Exa web search per contact -> activity_update
+    rows the Today feed reads. Account-safe (no LinkedIn, no Unipile). Runs in a
+    background thread with its own session so the cron request returns immediately
+    (the sweep is bounded but takes a few minutes over a full book)."""
+    def _worker():
+        from ..db import SessionLocal
+        from ..agents.updates_watch import run_updates
+        db = SessionLocal()
+        try:
+            run_updates(db, user_id=user_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[updates] run failed: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            db.close()
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"status": "started", "scope": user_id if user_id is not None else "all"}

@@ -1,0 +1,57 @@
+name: run-updates
+
+# Account-safe "what's new" sweep.
+#
+# Fires the Exa-backed updates watcher behind POST /api/book/run-updates
+# (admin-token gated). It searches the public web for each contact's recent
+# role changes / launches / press / posts and writes activity_update rows the
+# Today "Updates" feed reads -- WITHOUT touching LinkedIn or any host account
+# (so it can't get an account banned). The endpoint returns immediately and the
+# bounded sweep runs in the background.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   SURPLUS_BASE_URL  e.g. https://event.surpluslayer.com   (no trailing slash)
+#   ADMIN_TOKEN       must match the ADMIN_TOKEN env var on the service
+# Also requires EXA_API_KEY + ANTHROPIC_API_KEY set on the service.
+
+on:
+  schedule:
+    - cron: "0 13 * * *"   # once a day, 13:00 UTC
+  workflow_dispatch: {}     # manual run from the Actions tab
+
+concurrency:
+  group: run-updates
+  cancel-in-progress: false
+
+jobs:
+  run-updates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST /api/book/run-updates
+        env:
+          BASE_URL: ${{ secrets.SURPLUS_BASE_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_URL:-}" ] || [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::SURPLUS_BASE_URL and/or ADMIN_TOKEN secret is not set"
+            exit 1
+          fi
+          BASE_URL="${BASE_URL%/}"
+          echo "POST ${BASE_URL}/api/book/run-updates"
+
+          http_code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/book/run-updates" \
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --max-time 60)
+
+          echo "HTTP ${http_code}"
+          cat /tmp/resp.json || true
+          echo
+
+          if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+            echo "::error::run-updates returned HTTP ${http_code}"
+            exit 1
+          fi
