@@ -53,6 +53,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# One line per non-noise request (status + duration), `>>> SLOW` past 5s, and a
+# traceback for any unhandled 500 -- so a user-facing error always has a logged
+# cause (most "server errored" reports are slow-request client timeouts that
+# otherwise log only `200 OK`). Pure-ASGI, so it never buffers streaming.
+from .reqlog import RequestLogMiddleware  # noqa: E402
+app.add_middleware(RequestLogMiddleware)
+
 
 # Stamp no-store on every API response so Cloudflare (which sits in
 # front of Fly and aggressively caches 404s with max-age=14400 by
