@@ -224,10 +224,12 @@ def _book_from_spine_contacts(db, user, contacts, inter_index, update_index):
 
 
 def _load_book(db: Session, user: models.User) -> list[dict]:
-    """The caller's real book when the spine has people in it, else the demo
-    roster (so a brand-new account still sees a working surface)."""
+    """Real book from the spine; demo users fall back to the demo roster."""
     book = _book_from_spine(db, user)
-    return book if book else _demo_book()
+    if book:
+        return book
+    from ..auth import is_demo_user
+    return _demo_book() if is_demo_user(user) else []
 
 
 def _advisor_identity(user: models.User) -> tuple[str, str]:
