@@ -427,6 +427,13 @@ def ask(body: AskIn, db: Session = Depends(get_db),
                          "reason": p.get("reason") or "following up",
                          "channel": "email"})
             idxs.append(i)
+    # Progressive, not batch: draft only the TOP few inline (people are returned
+    # ranked) so a "draft everyone" ask can't fire a dozen Claude calls at once
+    # (the burst that throttles + stalls). Every card still carries contact_id,
+    # so the rest draft on-demand the instant the host taps Draft (1 call each,
+    # ~instant). Tunable via ASK_INLINE_DRAFTS.
+    inline = max(0, int(os.environ.get("ASK_INLINE_DRAFTS", "6")))
+    jobs, idxs = jobs[:inline], idxs[:inline]
     _t = time.monotonic()
     if jobs:
         from ..agents import drafting
