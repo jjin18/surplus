@@ -224,7 +224,11 @@ def _book_from_spine_contacts(db, user, contacts, inter_index, update_index):
     now = datetime.now(timezone.utc)
     book = []
     for c in contacts:
-        row = rel_agent.contact_summary(db, c, inter_index, update_index.get(c.id))
+        # `or []`, NOT `.get(c.id)`: a contact with no updates isn't in the index,
+        # so .get returns None -> contact_summary reads that as "not prefetched"
+        # and fires a per-contact fetch_activity_updates DB query (the N+1 that
+        # made summary_loop ~10s for 80 contacts). [] = "prefetched, none".
+        row = rel_agent.contact_summary(db, c, inter_index, update_index.get(c.id) or [])
         days = 0
         last = row.get("last_touch_at")
         if last is not None:
@@ -395,12 +399,17 @@ def ask(body: AskIn, db: Session = Depends(get_db),
         raise HTTPException(422, "query is required")
     t0 = time.monotonic()
     book = _load_book(db, user)
+    t_load = time.monotonic() - t0
+    _t = time.monotonic()
     res = book_agent.ask_agent(book, q)        # selection only: draft=null
+    t_select = time.monotonic() - _t
     people = res.get("people") or []
     # Backfill each selected person with a real voice + thread draft via the ONE
     # shared composer. Resolve Contact ORMs ONCE (list_contacts is expensive),
     # then fan the drafts out concurrently. Cards still show drafts inline.
+    _t = time.monotonic()
     orm_by_id = {str(c.id): c for c in rel_agent.list_contacts(db, user.id)}
+    t_orm = time.monotonic() - _t
     by_name = {(c.get("name") or "").strip().lower(): c for c in book}
     jobs, idxs = [], []
     for i, p in enumerate(people):
@@ -415,6 +424,7 @@ def ask(body: AskIn, db: Session = Depends(get_db),
                          "reason": p.get("reason") or "following up",
                          "channel": "email"})
             idxs.append(i)
+    _t = time.monotonic()
     if jobs:
         from ..agents import drafting
         drafts = drafting.compose_batch(db, user.id, jobs)
@@ -422,10 +432,18 @@ def ask(body: AskIn, db: Session = Depends(get_db),
             d = drafts[j]
             if d and (d.get("body") or "").strip():
                 people[i]["draft"] = d["body"]
+    t_draft = time.monotonic() - _t
     res["people"] = people
     drafted = sum(1 for p in people if (p.get("draft") or "").strip())
-    _trace(f"POST /ask user={user.id} q={q!r} -> {len(people)} people "
-           f"({drafted} drafted via shared composer) in {time.monotonic()-t0:.2f}s")
+    total = time.monotonic() - t0
+    # Phase breakdown = the "why is /ask slow" log. The browser cuts the request
+    # at ~100s, so if total approaches that the client sees "Couldn't reach the
+    # server" even though we return 200 -> flag it loudly with where the time went.
+    line = (f"POST /ask user={user.id} q={q!r} -> {len(people)} people "
+            f"({drafted} drafted) in {total:.1f}s "
+            f"[load={t_load:.1f} select={t_select:.1f} orm={t_orm:.1f} "
+            f"draft={t_draft:.1f}, {len(jobs)} drafted]")
+    _trace((">>> SLOW " if total > 60 else "") + line)
     return res
 
 
