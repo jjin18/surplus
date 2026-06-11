@@ -6,10 +6,12 @@ import ReactDOM from "react-dom/client";
 
 import BookApp from "./BookApp.jsx";
 import InPersonApp from "./InPersonApp.jsx";
-import { initAnalytics } from "./lib/analytics.js";
 import { ErrorBoundary, installPreloadRecovery } from "./lib/resilience.jsx";
 
-initAnalytics();
+// Analytics (PostHog, ~390KB) loads lazily after first paint : capture-on-
+// event-wifi should never wait on a telemetry bundle.
+const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+idle(() => import("./lib/analytics.js").then((m) => m.initAnalytics()).catch(() => {}));
 installPreloadRecovery();
 
 // The event hosts now serve the BookApp surface (Today · Add · Book) — the

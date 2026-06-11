@@ -251,9 +251,17 @@ def today(db: Session = Depends(get_db),
           user: models.User = Depends(current_user)):
     """The cached-shape Today feed : time-ordered Updates + priority-ranked
     Needs-outreach. Built by running detection + scoring across the book."""
-    feed = book_agent.build_today(_load_book(db, user))
-    name, _ = _advisor_identity(user)
+    book = _load_book(db, user)
+    feed = book_agent.build_today(book)
+    name, role = _advisor_identity(user)
     feed["advisor_name"] = name
+    # Warm drafts in the background for the people this feed is about to tell
+    # the user to contact, so the draft panel is usually instant on tap.
+    by_id = {c.get("id"): c for c in book}
+    pairs = [(by_id[r["contact_id"]], r.get("trigger") or "catching up")
+             for r in feed["needs_outreach"] + feed["updates"]
+             if r.get("contact_id") in by_id and (r.get("can_draft") is not False)]
+    book_agent.predraft(pairs, user_name=name, user_role=role)
     return feed
 
 
@@ -279,7 +287,7 @@ def draft(body: DraftIn, db: Session = Depends(get_db),
         contact = {"name": body.name or "there", "title": "", "firm": "",
                    "interaction_history": ""}
     name, role = _advisor_identity(user)
-    msg = book_agent.draft_message(
+    msg = book_agent.draft_message_cached(
         contact, body.trigger, channel=body.channel,
         user_name=name, user_role=role)
     return {"channel": body.channel, **msg}
