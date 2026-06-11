@@ -66,8 +66,15 @@ _BOOK_BG_SEM = threading.BoundedSemaphore(
 _BOOK_LLM_ASSESS = (os.environ.get("BOOK_LLM_ASSESS", "0") == "1")
 
 
-def _llm_json(system: str, user: str, *, max_tokens: int = 700) -> Optional[dict]:
+def _llm_json(system: str, user: str, *, max_tokens: int = 700,
+              cheap: bool = False) -> Optional[dict]:
     """Call Claude in JSON mode and parse the first JSON object out of the reply.
+
+    `cheap=True` routes the call to the small/fast model (Haiku) -- use it for
+    triage / classification (who to follow up with, health score, "is this an
+    update", "is a draft worth writing"). Leave it False (Sonnet) for the actual
+    outreach drafts + nuanced reasons. The system block is prompt-cached, so a
+    stable prefix (rubric / voice / context) shared across calls is paid once.
 
     Returns None on any failure (no key, SDK missing, rate-limit, unparseable) so
     every caller can fall back to its deterministic path. Never raises."""
@@ -78,11 +85,14 @@ def _llm_json(system: str, user: str, *, max_tokens: int = 700) -> Optional[dict
     label = " ".join(system.split()[:4])[:32]
     t0 = time.monotonic()
     try:
-        from . import llm  # reuse the configured client + model constant
+        from . import llm  # reuse the configured client + model constants
         resp = llm._client().messages.create(
-            model=llm.MODEL,
+            model=(llm.JUDGE_MODEL if cheap else llm.MODEL),
             max_tokens=max_tokens,
-            system=[{"type": "text", "text": system}],
+            # Cache the (stable) system prefix so repeated calls with the same
+            # rubric/voice/context read it from cache instead of reprocessing.
+            system=[{"type": "text", "text": system,
+                     "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
         )
         text = "".join(getattr(b, "text", "") for b in resp.content
@@ -126,7 +136,7 @@ def score_health(contact: dict) -> dict:
         f"{contact.get('next_review_date')}\n"
         f"- Recent interactions: {contact.get('interaction_history')}\n"
     )
-    out = _llm_json(_HEALTH_SYSTEM, user, max_tokens=300)
+    out = _llm_json(_HEALTH_SYSTEM, user, max_tokens=300, cheap=True)
     if out and "status" in out and "needs_outreach" in out:
         out.setdefault("reason", "")
         out.setdefault("priority", 50)
@@ -202,7 +212,7 @@ def detect_update(contact: dict) -> Optional[dict]:
         f"{contact.get('firm')}\n"
         f"Signals (with detected dates): {signals}\n"
     )
-    out = _llm_json(_UPDATE_SYSTEM, user, max_tokens=300)
+    out = _llm_json(_UPDATE_SYSTEM, user, max_tokens=300, cheap=True)
     if out is not None:
         if not out.get("has_update"):
             return None
@@ -481,7 +491,7 @@ def ask_agent(book: list[dict], query: str) -> dict:
         + "\nSELECT who to act on and why. Return draft:null for every person "
           "(messages are drafted separately) and keep each reason under 10 words."
     )
-    out = _llm_json(_ASK_SYSTEM, user, max_tokens=1200)
+    out = _llm_json(_ASK_SYSTEM, user, max_tokens=1200, cheap=True)
     if out and "answer" in out:
         out.setdefault("people", [])
         for p in out["people"]:
