@@ -506,3 +506,17 @@ def run_updates_endpoint(user_id: Optional[int] = None,
             db.close()
     threading.Thread(target=_worker, daemon=True).start()
     return {"status": "started", "scope": user_id if user_id is not None else "all"}
+
+
+@router.get("/_status")
+def book_status(_: None = Depends(_require_admin_token)):
+    """At-a-glance health WITHOUT log-diving: request counts, recent errors / slow
+    requests, Claude-call stats, and live rate-gate state (is the relationship
+    layer throttling right now). Token-gated; in-memory + per-replica, so hit it a
+    couple times for a fuller multi-replica picture.
+
+        curl -s -H "X-Admin-Token: $ADMIN_TOKEN" \\
+             https://event.surpluslayer.com/api/book/_status | jq
+    """
+    from .. import metrics
+    return metrics.snapshot()

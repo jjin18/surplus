@@ -58,6 +58,13 @@ class RequestLogMiddleware:
         if _skip(path):
             return
         code = status["code"]
+        # Feed the in-process metrics store (monitor via /api/book/_status without
+        # log-diving). Best-effort: never let metrics break a response.
+        try:
+            from . import metrics
+            metrics.record_request(method, path, code, dur)
+        except Exception:  # noqa: BLE001
+            pass
         # Quiet on the happy path; loud on anything that explains a user error.
         if code >= 400 or dur >= _SLOW_MS:
             tag = ">>> SLOW " if dur >= _SLOW_MS else ""

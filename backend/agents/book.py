@@ -46,6 +46,16 @@ def _btrace(msg: str) -> None:
     print(f"[book] {msg}", flush=True)
 
 
+def _record_llm(label: str, ms: float, ok: bool, detail: str = "") -> None:
+    """Feed the in-process metrics store (monitor via /api/book/_status). Never
+    let a metrics hiccup affect an LLM call."""
+    try:
+        from .. import metrics
+        metrics.record_llm(label, ms, ok, detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Caps how many BACKGROUND book LLM calls (assess + predraft) run at once. A
 # cold /today otherwise fires ~2N calls (N contacts x health+update) through one
 # Anthropic client simultaneously, saturating the HTTP connection pool: each
@@ -105,15 +115,19 @@ def _llm_json(system: str, user: str, *, max_tokens: int = 700,
             )
         text = "".join(getattr(b, "text", "") for b in resp.content
                        if getattr(b, "type", "") == "text").strip()
-        _btrace(f"llm ok  in {time.monotonic()-t0:.1f}s [{label}…]")
+        dt = time.monotonic() - t0
+        _btrace(f"llm ok  in {dt:.1f}s [{label}…]")
+        _record_llm(label, dt * 1000, True)
         # Be forgiving: the model occasionally wraps JSON in prose/fences.
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end == -1 or end < start:
             return None
         return json.loads(text[start:end + 1])
     except Exception as exc:  # noqa: BLE001 : LLM is best-effort, fall back silently
-        _btrace(f"llm ERR in {time.monotonic()-t0:.1f}s [{label}…]: "
+        dt = time.monotonic() - t0
+        _btrace(f"llm ERR in {dt:.1f}s [{label}…]: "
                 f"{type(exc).__name__}: {exc}")
+        _record_llm(label, dt * 1000, False, f"{type(exc).__name__}: {exc}")
         return None
 
 

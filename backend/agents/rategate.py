@@ -86,3 +86,17 @@ def gate(background: bool = False) -> _Gate:
     """Acquire a Claude-call slot. `background=True` uses the smaller sub-cap and
     yields to any queued foreground call."""
     return _Gate(background)
+
+
+def stats() -> dict:
+    """Live gate state for monitoring: how many Claude-call slots are in use and
+    how many foreground calls are queued waiting. `in_flight == total` with
+    `fg_waiting > 0` is the throttle signature."""
+    # BoundedSemaphore._value is the free-slot count (CPython); clamp defensively.
+    free = max(0, min(_TOTAL, getattr(_sem, "_value", _TOTAL)))
+    bg_free = max(0, min(_BG_CAP, getattr(_bg_sem, "_value", _BG_CAP)))
+    with _fg_lock:
+        fg_waiting = _fg_waiting
+    return {"total": _TOTAL, "in_flight": _TOTAL - free,
+            "bg_cap": _BG_CAP, "bg_in_flight": _BG_CAP - bg_free,
+            "fg_waiting": fg_waiting}
