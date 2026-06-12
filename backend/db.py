@@ -103,6 +103,7 @@ def init_db() -> None:
     logged loudly to Railway logs.
     """
     from . import models  # noqa: F401  (import registers the models)
+    from . import models_monitoring  # noqa: F401  (continuous-enrichment tables)
     try:
         Base.metadata.create_all(ENGINE)
     except Exception as exc:  # noqa: BLE001
