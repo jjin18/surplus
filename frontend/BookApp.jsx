@@ -412,8 +412,11 @@ function DraftPanel({ detail }) {
     if (!canSend || working) return;
     setWorking("send"); setErr(""); setDone("");
     try {
-      const r = await api.sendContactFollowup(detail.contact_id, body, "linkedin");
-      setDone(r.status === "drafted" ? "Saved as draft (auto-send is off)" : "Sent");
+      // An explicit Send click means SEND NOW, regardless of the auto-send
+      // toggle (that toggle only governs the unattended cron). The schedule
+      // path with send_at=null sends immediately (send_and_log) -> status "sent".
+      const r = await api.scheduleContactFollowup(detail.contact_id, body, null);
+      setDone(r.status === "sent" ? "Sent" : "Saved as draft");
     } catch (e) { setErr(e.message || "Couldn't send"); }
     finally { setWorking(""); }
   };
@@ -845,8 +848,10 @@ function DraftSheet({ draft, onClose }) {
     if (!canSend || working) return;
     setWorking("send"); setErr(""); setDone("");
     try {
-      const r = await api.sendContactFollowup(draft.contact_id, body, "linkedin");
-      setDone(r.status === "drafted" ? "Saved as draft (auto-send is off)" : "Sent");
+      // Explicit Send = send NOW, regardless of the auto-send toggle (which only
+      // governs the unattended cron). schedule(send_at=null) sends immediately.
+      const r = await api.scheduleContactFollowup(draft.contact_id, body, null);
+      setDone(r.status === "sent" ? "Sent" : "Saved as draft");
     } catch (e) { setErr(e.message || "Couldn't send"); }
     finally { setWorking(""); }
   };
