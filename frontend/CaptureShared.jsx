@@ -795,7 +795,16 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
         notifyDevice(`${p.name}: ${outreachStateLabel(res.state)}`);
       }
       onDone();
-    } catch (e) { setErr(e.message || "Send failed"); setBusy(""); }
+    } catch (e) {
+      const code = e?.body?.detail?.code || e?.body?.code;
+      if (e?.status === 402 || code === "linkedin_send_locked" || code === "payment_required") {
+        // Sending is gated for demo / not-signed-in visitors : take them to
+        // sign in for real (LinkedIn hosted auth) instead of a red error.
+        window.location.href = "/api/auth/linkedin/start-redirect";
+        return;
+      }
+      setErr(e.message || "Send failed"); setBusy("");
+    }
   };
 
   return (

@@ -860,7 +860,14 @@ function DraftSheet({ draft, onClose }) {
       // governs the unattended cron). schedule(send_at=null) sends immediately.
       const r = await api.scheduleContactFollowup(draft.contact_id, body, null);
       setDone(r.status === "sent" ? "Sent" : "Saved as draft");
-    } catch (e) { setErr(e.message || "Couldn't send"); }
+    } catch (e) {
+      const code = e?.body?.detail?.code || e?.body?.code;
+      if (e?.status === 402 || code === "linkedin_send_locked" || code === "payment_required") {
+        // Sending is gated for demo / not-signed-in users : take them to sign in.
+        window.location.href = "/api/auth/linkedin/start-redirect"; return;
+      }
+      setErr(e.message || "Couldn't send");
+    }
     finally { setWorking(""); }
   };
 
