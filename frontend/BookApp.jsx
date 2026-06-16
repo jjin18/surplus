@@ -115,23 +115,6 @@ export default function BookApp() {
     <div className="bk-root">
       <style>{BOOK_CSS}</style>
       <div className="bk-frame">
-        {user?.is_demo && (
-          <div style={{ position: "sticky", top: 0, zIndex: 50, display: "flex",
-            alignItems: "center", gap: 10, padding: "10px 14px", background: "#0a0a0a",
-            color: "#fff", font: "500 13px/1.3 Inter, system-ui, sans-serif" }}>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em",
-              background: "#2563eb", padding: "2px 7px", borderRadius: 6 }}>DEMO</span>
-            <span style={{ opacity: 0.85, flex: 1, minWidth: 0 }}>
-              You're exploring with sample data. Nothing is sent.
-            </span>
-            <button onClick={() => { window.location.href = "/api/auth/linkedin/start-redirect"; }}
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, border: 0,
-              borderRadius: 999, padding: "7px 13px", background: "#fff", color: "#0a0a0a",
-              fontWeight: 600, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
-              Sign in to use it for real
-            </button>
-          </div>
-        )}
         {screen}
         <nav className="bk-nav">
           <button className={"bk-nav-item" + (activeNav === "today" ? " on" : "")}
