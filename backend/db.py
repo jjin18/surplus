@@ -141,6 +141,7 @@ def init_db() -> None:
         _migrate_prospect_email,
         _migrate_contact_email_thread,
         _migrate_followup_channel,
+        _migrate_contact_vip,
     ]
     for migration in migrations:
         try:
@@ -612,6 +613,20 @@ def _migrate_user_voice_examples() -> None:
         return
     with ENGINE.begin() as conn:
         conn.execute(text("ALTER TABLE users ADD COLUMN voice_examples TEXT DEFAULT ''"))
+
+
+def _migrate_contact_vip() -> None:
+    """Add contacts.vip (bool, default false). Starred contacts are monitored
+    more often by agents/updates_engine. Old rows default to not-starred."""
+    from sqlalchemy import inspect, text
+    insp = inspect(ENGINE)
+    if "contacts" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("contacts")}
+    if "vip" in cols:
+        return
+    with ENGINE.begin() as conn:
+        conn.execute(text("ALTER TABLE contacts ADD COLUMN vip BOOLEAN DEFAULT FALSE"))
 
 
 def _migrate_user_voice_profile() -> None:
