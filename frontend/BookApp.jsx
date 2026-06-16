@@ -362,6 +362,7 @@ function RelationshipScreen({ row, onBack }) {
   const id = row?.contact_id;
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
+  const [starred, setStarred] = useState(!!row?.vip);
 
   useEffect(() => {
     if (!id) { setErr("This contact isn't in your book yet."); return; }
@@ -389,7 +390,21 @@ function RelationshipScreen({ row, onBack }) {
       <div className="bk-subhead">
         <p className="bk-display bk-display--lg">
           {row?.name || d?.name}
-          {(row?.vip || d?.vip) && <Star size={16} className="bk-star" fill="currentColor" style={{ marginLeft: 6 }} />}
+          {id && (
+            <button type="button" className="bk-starbtn"
+              aria-label={starred ? "Unstar — stop close monitoring" : "Star — monitor closely"}
+              title={starred ? "Starred — monitored closely for updates" : "Star to monitor closely for updates"}
+              onClick={() => {
+                const next = !starred;
+                setStarred(next);                              // optimistic
+                api.starContact(id, next).catch(() => setStarred(!next));
+              }}
+              style={{ marginLeft: 8, border: 0, background: "none", cursor: "pointer",
+                       verticalAlign: "middle", padding: 0 }}>
+              <Star size={18} className="bk-star" fill={starred ? "currentColor" : "none"}
+                    style={{ opacity: starred ? 1 : 0.45 }} />
+            </button>
+          )}
         </p>
         <p className="bk-role">{[d?.title || row?.title, d?.firm || row?.firm].filter(Boolean).join(" · ")}</p>
         {d && (

@@ -262,7 +262,7 @@ def _book_from_spine_contacts(db, user, contacts, inter_index, update_index):
         book.append({
             "id": str(row.get("contact_id")),
             "name": _real(row.get("name")) or "Unknown",
-            "vip": False,
+            "vip": bool(getattr(c, "vip", False)),
             "title": _real(identity.get("headline")) or _real(identity.get("role")),
             "firm": _real(row.get("company")) or _real(identity.get("company")),
             "tier": "core",

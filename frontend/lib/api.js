@@ -428,6 +428,12 @@ export const api = {
   // seat. Returns { url } — redirect the browser there; the hosted page does
   // the OAuth and bounces back with the Integrations tile flipped.
   startEmailAuth: () => request("/api/auth/email/start", { method: "POST" }),
+  // Star / unstar a contact — starred contacts are monitored more often by the
+  // updates engine. Pass vip true/false to set, or omit to toggle server-side.
+  starContact: (id, vip) =>
+    request(`/api/relationships/contacts/${id}/star`,
+            { method: "POST", body: JSON.stringify({ vip }) }),
+
   // Email channel on a contact (TEST surface; see EmailTestPanel)
   setContactEmail: (id, email) =>
     request(`/api/relationships/contacts/${id}/email`,

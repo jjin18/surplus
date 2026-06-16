@@ -378,6 +378,25 @@ def set_contact_email(
             "linked_thread_id": contact.email_thread_id}
 
 
+class StarIn(BaseModel):
+    vip: Optional[bool] = None  # null = toggle; true/false = set explicitly
+
+
+@router.post("/contacts/{contact_id}/star")
+def set_contact_star(
+    contact_id: int,
+    body: StarIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(current_user),
+):
+    """Star / unstar a contact. Starred (⭐ vip) contacts are monitored more
+    often by the updates engine. `vip` null → toggle; true/false → set."""
+    contact = _owned_contact(db, contact_id, user)
+    contact.vip = (not contact.vip) if body.vip is None else bool(body.vip)
+    db.commit()
+    return {"contact_id": contact_id, "vip": contact.vip}
+
+
 class ThreadLinkIn(BaseModel):
     thread_id: Optional[str] = None  # null unlinks
 

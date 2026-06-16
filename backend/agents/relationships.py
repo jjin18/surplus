@@ -501,9 +501,12 @@ def link_contact(db, prospect, owner_user_id: int):
                 linkedin_url=_clean(getattr(prospect, "linkedin_url", None)),
                 linkedin_public_id=_clean(getattr(prospect, "linkedin_provider_id", None)),
                 company=_clean(getattr(prospect, "company", None)),
+                vip=bool(getattr(prospect, "vip", False)),  # carry the ⭐ to the spine
             )
             db.add(contact)
             db.flush()  # assign contact.id without committing the caller's tx
+        elif getattr(prospect, "vip", False) and not contact.vip:
+            contact.vip = True  # a starred capture promotes an existing contact
 
         prospect.contact_id = contact.id
         db.commit()

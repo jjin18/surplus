@@ -60,12 +60,10 @@ def due_contacts(db, *, user_id: int | None = None, limit: int = 40) -> list:
     q = db.query(models.Contact).filter(models.Contact.name.isnot(None))
     if user_id is not None:
         q = q.filter(models.Contact.user_id == user_id)
-    # Oldest-checked first (never-checked NULLs are the most due). NOTE: the
-    # Contact spine has no `vip` column yet (the ⭐ is captured on the Prospect,
-    # not propagated to Contact), so star-tiering in _tier_days is a no-op until
-    # vip is added to Contact + propagated -- see the follow-up. For now every
-    # contact runs at the standard cadence, which is correct, just uniform.
-    q = q.order_by(models.Contact.watched_at.asc())
+    # ⭐ starred first, then oldest-checked first (never-checked NULLs are most
+    # due) — so when a run is capped by `limit` the people you care about are
+    # never starved. _tier_days() then checks vip contacts far more often.
+    q = q.order_by(models.Contact.vip.desc(), models.Contact.watched_at.asc())
     return [c for c in q.limit(limit * 3).all() if _is_due(c)][:limit]
 
 
