@@ -186,17 +186,29 @@ def normalize_profile(record: dict) -> dict:
     }
 
 
-def normalize_posts(record: dict) -> dict:
-    """Flatten a delivered posts record to {linkedin_url, posts:[{url,text}]}."""
+def normalize_post(record: dict) -> dict:
+    """Flatten ONE delivered post record (the posts dataset delivers a SEPARATE
+    record per post, not one record with a nested posts[] array).
+
+    Critically, the "discover by profile url" endpoint returns the queried
+    profile's recent ACTIVITY FEED -- a mix of their own posts AND other people's
+    posts they engaged with/reshared. So each record carries:
+      * discovery_input.url -> the profile WE QUERIED (= the contact)        [match key]
+      * use_url / user_id   -> the post's AUTHOR (often someone else)        [attribution]
+      * url, post_text      -> the post itself
+    The caller groups by `profile_url` and keeps only posts whose `author_url`
+    matches the contact, so we never attribute someone else's raise to them.
+    """
     if not isinstance(record, dict):
-        return {"linkedin_url": None, "posts": []}
-    raw = record.get("posts") or record.get("activity") or []
-    posts = []
-    for p in raw if isinstance(raw, list) else []:
-        if isinstance(p, dict):
-            posts.append({"url": p.get("url") or p.get("post_url") or p.get("id"),
-                          "text": p.get("text") or p.get("post_text") or p.get("title") or ""})
+        return {}
+    di = record.get("discovery_input")
+    profile_url = di.get("url") if isinstance(di, dict) else None
     return {
-        "linkedin_url": record.get("url") or record.get("input_url") or record.get("linkedin_url"),
-        "posts": posts,
+        "profile_url": profile_url,
+        "author_url": record.get("use_url") or "",
+        "author_id": record.get("user_id") or "",
+        "url": record.get("url") or record.get("id"),
+        "text": (record.get("post_text") or record.get("original_post_text")
+                 or record.get("title") or ""),
+        "date_posted": record.get("date_posted"),
     }

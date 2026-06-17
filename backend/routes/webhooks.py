@@ -417,27 +417,56 @@ async def brightdata_webhook(request: Request, db: Session = Depends(get_db),
 
     applied = matched = 0
     sample_raw_keys = sample_norm = None
-    for rec in records:
-        try:
-            is_posts = kind == "posts" or (isinstance(rec, dict) and rec.get("posts"))
-            if is_posts:
-                norm = brightdata.normalize_posts(rec)
-                hits = _contacts_by_url(db, norm.get("linkedin_url"))
-                matched += len(hits)
-                for c in hits:
-                    applied += len(updates_engine.apply_posts(db, c, norm.get("posts") or []))
-            else:
+
+    # Posts deliveries arrive as a BATCH of per-post records (each its own dict
+    # with post_text + discovery_input). Detect by kind, or by the post shape on
+    # the base path. Profile deliveries stay one-record-per-profile.
+    def _is_post_record(r) -> bool:
+        return isinstance(r, dict) and ("post_text" in r or "discovery_input" in r)
+
+    is_posts_delivery = kind == "posts" or (
+        not kind and records and _is_post_record(records[0]))
+
+    if is_posts_delivery:
+        # Group posts by the QUERIED profile (discovery_input.url), keeping only
+        # posts AUTHORED BY that profile -- the feed mixes in others' posts and we
+        # must never attribute someone else's milestone to this contact.
+        by_profile: dict = {}
+        for rec in records:
+            try:
+                p = brightdata.normalize_post(rec)
+                if sample_raw_keys is None and isinstance(rec, dict):
+                    sample_raw_keys = list(rec.keys())
+                    sample_norm = p
+                prof = p.get("profile_url")
+                if not prof:
+                    continue
+                # author must match the queried profile (own post, not a reshare)
+                if _norm_li(p.get("author_url")) and _norm_li(p.get("author_url")) != _norm_li(prof):
+                    continue
+                by_profile.setdefault(_norm_li(prof), {"url": prof, "posts": []})
+                if p.get("url"):
+                    by_profile[_norm_li(prof)]["posts"].append({"url": p["url"], "text": p.get("text") or ""})
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [brightdata] post record skipped: {type(exc).__name__}: {exc}", flush=True)
+        for grp in by_profile.values():
+            hits = _contacts_by_url(db, grp["url"])
+            matched += len(hits)
+            for c in hits:
+                applied += len(updates_engine.apply_posts(db, c, grp["posts"]))
+    else:
+        for rec in records:
+            try:
                 norm = brightdata.normalize_profile(rec)
                 hits = _contacts_by_url(db, norm.get("linkedin_url"))
                 matched += len(hits)
                 for c in hits:
                     applied += len(updates_engine.apply_profile(db, c, norm))
-            # capture the FIRST record's shape for the cutover diagnostic
-            if sample_raw_keys is None and isinstance(rec, dict):
-                sample_raw_keys = list(rec.keys())
-                sample_norm = norm
-        except Exception as exc:  # noqa: BLE001 : one bad record never sinks the delivery
-            print(f"  [brightdata] record skipped: {type(exc).__name__}: {exc}", flush=True)
+                if sample_raw_keys is None and isinstance(rec, dict):
+                    sample_raw_keys = list(rec.keys())
+                    sample_norm = norm
+            except Exception as exc:  # noqa: BLE001 : one bad record never sinks the delivery
+                print(f"  [brightdata] record skipped: {type(exc).__name__}: {exc}", flush=True)
     db.commit()
     # record for /api/book/_updates-status so we can validate field-mapping
     try:
