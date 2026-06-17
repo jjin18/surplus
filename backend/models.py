@@ -939,6 +939,12 @@ class Contact(Base):
     seen_post_ids: Mapped[str] = mapped_column(Text, default="[]")
     # Last successful poll (NULL = never polled -> first poll seeds silently).
     watched_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+    # First time we captured a profile snapshot (company/title) for this contact.
+    # NULL = not yet baselined: the first scrape adopts the current profile as the
+    # baseline SILENTLY (no false "job change") and only later moves emit. This is
+    # separate from watched_at so a capture/seed-populated company isn't mistaken
+    # for an already-baselined snapshot.
+    profile_baselined_at: Mapped[Optional[datetime]] = mapped_column(default=None)
     # Last poll error message (ops visibility; cleared on a clean poll).
     watch_error: Mapped[Optional[str]] = mapped_column(String(300), default=None)
     # ⭐ starred → monitored more often (higher update cadence in updates_engine).

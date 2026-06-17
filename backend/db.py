@@ -142,6 +142,7 @@ def init_db() -> None:
         _migrate_contact_email_thread,
         _migrate_followup_channel,
         _migrate_contact_vip,
+        _migrate_contact_profile_baselined,
     ]
     for migration in migrations:
         try:
@@ -627,6 +628,21 @@ def _migrate_contact_vip() -> None:
         return
     with ENGINE.begin() as conn:
         conn.execute(text("ALTER TABLE contacts ADD COLUMN vip BOOLEAN DEFAULT FALSE"))
+
+
+def _migrate_contact_profile_baselined() -> None:
+    """Add contacts.profile_baselined_at (datetime, default null). NULL means the
+    contact's profile snapshot hasn't been baselined yet, so the first scrape
+    adopts its current company/title silently instead of emitting a job change."""
+    from sqlalchemy import inspect, text
+    insp = inspect(ENGINE)
+    if "contacts" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("contacts")}
+    if "profile_baselined_at" in cols:
+        return
+    with ENGINE.begin() as conn:
+        conn.execute(text("ALTER TABLE contacts ADD COLUMN profile_baselined_at TIMESTAMP"))
 
 
 def _migrate_user_voice_profile() -> None:

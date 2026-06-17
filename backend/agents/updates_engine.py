@@ -112,6 +112,18 @@ def apply_profile(db, contact: models.Contact, profile: dict) -> list[dict]:
     new_title = (profile.get("title") or profile.get("position")
                  or profile.get("headline") or "").strip()
     changes: list[dict] = []
+    # Baseline-first: the first scrape adopts the current profile as the baseline
+    # SILENTLY -- everyone starts at their "base level", so the initial snapshot is
+    # never a "job change". Only moves AFTER baselining emit + auto-draft. (Meeting
+    # someone new still surfaces a draft via the capture/scan path, not this one.)
+    if getattr(contact, "profile_baselined_at", None) is None:
+        if new_company:
+            contact.company = new_company
+        if new_title:
+            contact.headline = new_title[:300]
+        contact.profile_baselined_at = _now()
+        contact.watched_at = _now()
+        return changes
     if _changed(getattr(contact, "company", None), new_company):
         prev = getattr(contact, "company", None)
         summary = (f"Joined {new_company}"
@@ -155,6 +167,11 @@ _POST_SYSTEM = (
 )
 
 
+# A placeholder id stored when a contact had zero posts at baseline, so the
+# "first scrape" gate (empty seen set) doesn't re-trigger on every later run.
+_POSTS_BASELINE_SENTINEL = "__baseline__"
+
+
 def apply_posts(db, contact: models.Contact, posts: list[dict]) -> list[dict]:
     """Run scraped posts through the cheap cascade (keyword pre-drop -> LLM
     confirm on survivors) and emit a milestone activity_update + auto-draft for
@@ -163,6 +180,21 @@ def apply_posts(db, contact: models.Contact, posts: list[dict]) -> list[dict]:
     from .book import _llm_json
     seen = updates_watch._seen_urls(contact)
     changes: list[dict] = []
+    # Baseline-first: the very first posts scrape (no post ids seen yet) marks all
+    # current posts as "already seen" SILENTLY and emits nothing -- we assume the
+    # contact starts at their base level, so pre-existing posts aren't fresh news.
+    # Only posts that appear on a LATER scrape are surfaced + drafted.
+    if not seen:
+        ids = [(p.get("url") or p.get("post_id") or p.get("id") or "").strip()
+               for p in (posts or [])]
+        ids = [i for i in ids if i]
+        # Always persist a non-empty set (sentinel when there were no posts) so a
+        # contact who posts NOTHING at baseline still counts as baselined -- their
+        # first real post later is news, not silently swallowed as a baseline.
+        baseline = sorted(set(ids))[:200] if ids else [_POSTS_BASELINE_SENTINEL]
+        contact.seen_post_ids = json.dumps(baseline)
+        contact.watched_at = _now()
+        return changes
     # Keyword pre-drop first (free); only survivors reach the model.
     candidates = []
     for p in posts or []:
