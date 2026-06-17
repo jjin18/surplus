@@ -371,7 +371,10 @@ def crm_refresh_sweep() -> list[dict]:
 # --------------------------------------------------------------------------- #
 @app.function(
     image=image,
-    secrets=[secret],
+    # surplus-jobs supplies DATABASE_URL/ANTHROPIC/etc; surplus-brightdata adds
+    # the BRIGHTDATA_* vars so this Modal container can run the Bright Data path
+    # (not just Exa). Kept as a SEPARATE secret so we never clobber surplus-jobs.
+    secrets=[secret, modal.Secret.from_name("surplus-brightdata")],
     timeout=60 * 15,
     schedule=modal.Period(hours=1),
 )

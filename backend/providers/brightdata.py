@@ -30,7 +30,6 @@ import os
 import httpx
 
 _TRIGGER_URL = "https://api.brightdata.com/datasets/v3/trigger"
-_POSTS_LOOKBACK_DAYS = max(1, int(os.environ.get("UPDATES_LOOKBACK_DAYS", "30")))
 
 
 def _key() -> str:
@@ -105,14 +104,15 @@ def _trigger(dataset_id: str, urls: list[str], *, kind: str) -> bool:
     body = [{"url": u} for u in valid]
     if kind == "posts":
         # The posts dataset DISCOVERS a profile's recent posts by profile url
-        # (vs. collecting one known post URL) -- needs these params + a recent
-        # date window so we only pull recent posts (cheaper + relevant).
-        from datetime import datetime, timedelta, timezone
+        # (vs. collecting one known post URL) -- needs these discover params.
         params["type"] = "discover_new"
         params["discover_by"] = "profile_url"
-        since = (datetime.now(timezone.utc)
-                 - timedelta(days=_POSTS_LOOKBACK_DAYS)).strftime("%Y-%m-%dT00:00:00.000Z")
-        body = [{"url": u, "start_date": since} for u in valid]
+        # Do NOT send start_date/end_date: many LinkedIn posts carry no
+        # machine-readable date, and Bright Data FILTERS OUT every undated post
+        # when a date window is set -> "Total posts: N, with dates: 0 ... dead_page"
+        # (their own guidance: leave the dates empty). We get recent posts back
+        # and dedup/recency-filter on our side via seen_post_ids in apply_posts.
+        body = [{"url": u} for u in valid]
     sec = webhook_secret()
     if sec:
         params["auth_header"] = f"Bearer {sec}"
