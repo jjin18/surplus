@@ -146,19 +146,31 @@ def trigger_updates(urls: list[str]) -> bool:
 # delivery once the dataset ids are set -- see updates_engine.apply_profile /
 # apply_posts for which fields are consumed.)
 def normalize_profile(record: dict) -> dict:
-    """Flatten a delivered profile record to the fields the engine diffs."""
+    """Flatten a delivered profile record to the fields the engine diffs.
+
+    Bright Data's people-profiles schema (validated against a real delivery):
+    company is `current_company_name`; the current TITLE lives inside the
+    `current_company` object (.title) or the first `experience` entry — there's
+    no top-level title/headline/position.
+    """
     if not isinstance(record, dict):
         return {}
-    exp = record.get("experience") or record.get("current_company") or {}
+    cc = record.get("current_company")
     company = (record.get("current_company_name")
-               or (exp.get("company") if isinstance(exp, dict) else None)
+               or (cc.get("name") if isinstance(cc, dict) else None)
                or record.get("company") or "")
+    title = (cc.get("title") if isinstance(cc, dict) else None) or ""
+    if not title:
+        exp = record.get("experience")
+        if isinstance(exp, list) and exp and isinstance(exp[0], dict):
+            title = exp[0].get("title") or exp[0].get("position") or ""
+    if not title:
+        title = record.get("position") or record.get("title") or ""
     return {
         "linkedin_url": record.get("url") or record.get("input_url") or record.get("linkedin_url"),
         "company": company,
-        "title": (record.get("position") or record.get("title")
-                  or record.get("headline") or ""),
-        "headline": record.get("headline") or "",
+        "title": title,
+        "headline": record.get("headline") or title or "",
     }
 
 
