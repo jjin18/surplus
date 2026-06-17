@@ -66,16 +66,73 @@ _FOLLOWUP_SYSTEM = (
 # compose_followup() chains both for the single-draft (/draft tap) caller.
 
 
-def build_context(db, user_id: int, contact, voice_block: Optional[str] = None) -> dict:
+def _email_thread_prior(db, user_id: int, contact) -> list[dict]:
+    """The contact's REAL email conversation (bodies), shaped like the timeline
+    thread ({when, who, channel, text}) so an email follow-up continues what was
+    actually written. Uses the linked thread (Contact.email_thread_id) if set,
+    else finds the newest thread with the contact's address. Best-effort: any
+    missing piece (no mailbox, no address, Unipile error) returns []."""
+    import os
+    from .. import models
+    from . import email_sync
+    try:
+        user = db.get(models.User, user_id)
+        account_id = getattr(user, "unipile_email_account_id", None)
+        own = (getattr(user, "email_account_address", None) or "").strip().lower()
+        addr = (getattr(contact, "email", None) or "").strip().lower()
+        dsn = (os.environ.get("UNIPILE_DSN") or "").strip()
+        api_key = (os.environ.get("UNIPILE_API_KEY") or "").strip()
+        if not (account_id and dsn and api_key):
+            return []
+        thread_id = getattr(contact, "email_thread_id", None)
+        if not thread_id and addr:
+            threads = email_sync.list_threads_for_address(
+                dsn=dsn, api_key=api_key, account_id=account_id,
+                address=addr, own_address=own)
+            thread_id = threads[0]["thread_id"] if threads else None
+        if not thread_id:
+            return []
+        msgs = email_sync.thread_messages(
+            dsn=dsn, api_key=api_key, account_id=account_id,
+            thread_id=str(thread_id), own_address=own, with_bodies=True)
+        prior = []
+        for m in msgs:
+            text = (m.get("body") or "").strip()
+            if not text:
+                continue
+            prior.append({
+                "when": m.get("date"),
+                "who": "host" if m.get("direction") == "out" else "them",
+                "channel": "email",
+                "text": text[:600],
+            })
+        return prior
+    except Exception:  # noqa: BLE001 : email grounding is best-effort
+        return []
+
+
+def build_context(db, user_id: int, contact, voice_block: Optional[str] = None,
+                  *, channel: str = "email") -> dict:
     """Gather everything the composer needs for `contact` via the DB (the host's
     voice + this person's real prior-message thread). Runs on the request thread;
     `voice_block` can be passed in pre-rendered to avoid re-loading it per person
-    in a batch (it's the same for every contact of one host)."""
+    in a batch (it's the same for every contact of one host).
+
+    For the EMAIL channel we also pull the real email-thread bodies so the draft
+    continues the actual email conversation, not just a 'N messages' rollup."""
     name = (getattr(contact, "name", None) or "there").strip() or "there"
     try:
         prior = _thread_from_timeline(relationships.contact_timeline(db, contact))
     except Exception:  # noqa: BLE001 : a timeline read failure must not break drafting
         prior = []
+    if channel == "email":
+        email_prior = _email_thread_prior(db, user_id, contact)
+        if email_prior:
+            # Merge cross-channel history, oldest-first; email bodies are the
+            # substance for an email follow-up. Dedup is unnecessary (the
+            # timeline only carries an email ROLLUP, not these message bodies).
+            prior = sorted(prior + email_prior,
+                           key=lambda m: str(m.get("when") or ""))
     if voice_block is None:
         voice_block = _voice_block(_host_voice_examples(db, user_id))
     return {"name": name, "prior": prior, "voice_block": voice_block}
@@ -145,8 +202,8 @@ def compose_followup(db, user_id: int, contact, *, reason: str,
     """One voice-matched, thread-aware follow-up to `contact` (a Contact ORM row).
     Returns {"subject", "body"} or None on failure (caller falls back). Loads the
     thread + voice, then composes -- the single-draft contract used by /draft."""
-    return compose_from_context(build_context(db, user_id, contact),
-                                reason, channel)
+    return compose_from_context(
+        build_context(db, user_id, contact, channel=channel), reason, channel)
 
 
 def compose_batch(db, user_id: int, jobs: list[dict],
@@ -160,7 +217,8 @@ def compose_batch(db, user_id: int, jobs: list[dict],
         return []
     # Voice is per-host, identical across contacts: load once, reuse.
     voice_block = _voice_block(_host_voice_examples(db, user_id))
-    ctxs = [build_context(db, user_id, j["contact"], voice_block) for j in jobs]
+    ctxs = [build_context(db, user_id, j["contact"], voice_block,
+                          channel=(j.get("channel") or "email")) for j in jobs]
     results: list[Optional[dict]] = [None] * len(jobs)
 
     def _one(i: int) -> None:

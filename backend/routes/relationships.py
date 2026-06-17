@@ -395,6 +395,28 @@ def import_conversations(
     return import_conversation_contacts(db, user, want=max(1, min(want, 30)))
 
 
+class ChannelIn(BaseModel):
+    channel: Optional[str] = None  # "email" | "linkedin" | null (auto)
+
+
+@router.post("/contacts/{contact_id}/channel")
+def set_contact_channel(
+    contact_id: int,
+    body: ChannelIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(current_user),
+):
+    """Set which channel to follow up with this contact on. Drafts + sends honor
+    it (email pulls the real email thread for context). null = auto-default."""
+    contact = _owned_contact(db, contact_id, user)
+    ch = (body.channel or "").strip().lower() or None
+    if ch not in (None, "email", "linkedin"):
+        raise HTTPException(400, "channel must be 'email', 'linkedin', or null")
+    contact.preferred_channel = ch
+    db.commit()
+    return {"contact_id": contact_id, "preferred_channel": ch}
+
+
 @router.post("/contacts/{contact_id}/star")
 def set_contact_star(
     contact_id: int,

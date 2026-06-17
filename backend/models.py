@@ -947,6 +947,10 @@ class Contact(Base):
     profile_baselined_at: Mapped[Optional[datetime]] = mapped_column(default=None)
     # Last poll error message (ops visibility; cleared on a clean poll).
     watch_error: Mapped[Optional[str]] = mapped_column(String(300), default=None)
+    # Which channel to follow up with this person on: "email" | "linkedin".
+    # NULL = auto (the drafter/sender falls back to a sensible default). The
+    # host sets this per-contact in the Book; drafts + sends honor it.
+    preferred_channel: Mapped[Optional[str]] = mapped_column(String(20), default=None)
     # ⭐ starred → monitored more often (higher update cadence in updates_engine).
     # Propagated from the Prospect's vip flag at link time; togglable per-contact.
     vip: Mapped[bool] = mapped_column(default=False)

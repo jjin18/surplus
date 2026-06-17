@@ -110,8 +110,9 @@ def autodraft(db, contact: models.Contact, change: dict) -> None:
             return  # already drafted -> don't spend another LLM call
 
         reason = change.get("summary") or change.get("title") or "following up"
+        channel = getattr(contact, "preferred_channel", None) or "email"
         msg = drafting.compose_followup(
-            db, contact.user_id, contact, reason=reason, channel="email")
+            db, contact.user_id, contact, reason=reason, channel=channel)
         body = (msg or {}).get("body") or ""
         if not body:
             return

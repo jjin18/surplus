@@ -143,6 +143,7 @@ def init_db() -> None:
         _migrate_followup_channel,
         _migrate_contact_vip,
         _migrate_contact_profile_baselined,
+        _migrate_contact_preferred_channel,
     ]
     for migration in migrations:
         try:
@@ -628,6 +629,20 @@ def _migrate_contact_vip() -> None:
         return
     with ENGINE.begin() as conn:
         conn.execute(text("ALTER TABLE contacts ADD COLUMN vip BOOLEAN DEFAULT FALSE"))
+
+
+def _migrate_contact_preferred_channel() -> None:
+    """Add contacts.preferred_channel (varchar, null). Which channel the host
+    follows up with this contact on (email|linkedin); NULL = auto-default."""
+    from sqlalchemy import inspect, text
+    insp = inspect(ENGINE)
+    if "contacts" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("contacts")}
+    if "preferred_channel" in cols:
+        return
+    with ENGINE.begin() as conn:
+        conn.execute(text("ALTER TABLE contacts ADD COLUMN preferred_channel VARCHAR(20)"))
 
 
 def _migrate_contact_profile_baselined() -> None:
