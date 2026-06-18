@@ -127,7 +127,7 @@ export default function BookApp() {
   let screen;
   if (route?.name === "detail") {
     screen = <RelationshipScreen row={route.row} onBack={() => goTab("book")}
-                                 onDraftDone={() => {}} isDemo={!!user?.is_demo} />;
+                                 onDraftDone={() => {}} />;
   } else if (route?.name === "account") {
     screen = <AccountScreen user={user} onBack={() => goTab("today")}
                             onConnections={() => setRoute({ name: "connections" })} />;
@@ -171,8 +171,7 @@ export default function BookApp() {
         </nav>
       </div>
 
-      {draftFor && <DraftSheet draft={draftFor} onClose={() => setDraftFor(null)}
-                               isDemo={!!user?.is_demo} />}
+      {draftFor && <DraftSheet draft={draftFor} onClose={() => setDraftFor(null)} />}
 
       {onbOn && <BookOnboarding step={onbStep} onGo={onbGo} onClose={onbClose} />}
     </div>
@@ -389,7 +388,7 @@ function BookView({ feed, err, user, onReload, onAccount, onOpen, onDraft }) {
 
 // ── Relationship detail ───────────────────────────────────────────────────────
 
-function RelationshipScreen({ row, onBack, isDemo = false }) {
+function RelationshipScreen({ row, onBack }) {
   const id = row?.contact_id;
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
@@ -456,7 +455,7 @@ function RelationshipScreen({ row, onBack, isDemo = false }) {
             <p className="bk-panel-p">{d.why}</p>
           </div>
 
-          <DraftPanel detail={d} isDemo={isDemo} />
+          <DraftPanel detail={d} />
 
           <p className="bk-sec-label bk-sec-label--tl">Timeline</p>
           <div className="bk-tl">
@@ -477,7 +476,7 @@ function RelationshipScreen({ row, onBack, isDemo = false }) {
   );
 }
 
-function DraftPanel({ detail, isDemo = false }) {
+function DraftPanel({ detail }) {
   const [busy, setBusy] = useState(true);
   const [body, setBody] = useState("");
   const [err, setErr] = useState("");
@@ -502,13 +501,6 @@ function DraftPanel({ detail, isDemo = false }) {
   const copy = async () => {
     try { await navigator.clipboard.writeText(body); setDone("Copied");
           setTimeout(() => setDone(""), 1600); } catch {}
-  };
-  // Demo: seeded contacts can't truly receive a message, so simulate a send for
-  // filming (Send -> Sending… -> Sent ✓) without a network call.
-  const sendDemo = () => {
-    if (working) return;
-    setWorking("send"); setErr(""); setDone("");
-    setTimeout(() => { setDone("Sent"); setWorking(""); }, 850);
   };
   const sendNow = async () => {
     if (!canSend || working) return;
@@ -557,11 +549,10 @@ function DraftPanel({ detail, isDemo = false }) {
             </div>
           )}
           <div className="bk-actions">
-            {(canSend || isDemo) ? (
-              <button className="bk-btn bk-btn--primary" disabled={!!working}
-                      onClick={isDemo ? sendDemo : sendNow}>
+            {canSend ? (
+              <button className="bk-btn bk-btn--primary" disabled={!!working} onClick={sendNow}>
                 <Send size={13} style={{ marginRight: 5, verticalAlign: -1 }} />
-                {working === "send" ? "Sending…" : "Send message"}
+                {working === "send" ? "Sending…" : "Send"}
               </button>
             ) : (
               <button className="bk-btn bk-btn--primary" onClick={copy}>
@@ -735,7 +726,6 @@ function AddScreen({ user, onAccount, onAdded }) {
                       onDone={() => { setResult(null); onAdded && onAdded(); }}
                       onCancel={() => setResult(null)}
                       canSend={!!user?.unipile_account_id}
-                      isDemo={!!user?.is_demo}
                       savedLink={(user && user.saved_send_link) || ""} />
         ) : (
           <>
@@ -896,7 +886,7 @@ function AskBar({ variant, onOpen, onDraft }) {
 
 // ── Draft sheet (Draft → tap) ──────────────────────────────────────────────────
 
-function DraftSheet({ draft, onClose, isDemo = false }) {
+function DraftSheet({ draft, onClose }) {
   const hasInline = !!(draft.body && draft.body.trim());
   const [busy, setBusy] = useState(!hasInline);   // reuse the card's draft if present
   const [subject, setSubject] = useState(draft.subject || "");
@@ -947,15 +937,6 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
     const text = subject ? `Subject: ${subject}\n\n${body}` : body;
     try { await navigator.clipboard.writeText(text); setCopied(true);
           setTimeout(() => setCopied(false), 1600); } catch {}
-  };
-
-  // Demo mode: the seeded contacts aren't real recipients, so a real send would
-  // error. Simulate a successful send so the demo shows the true UX (Send ->
-  // Sending… -> Sent ✓) for filming, without hitting the network.
-  const sendDemo = () => {
-    if (working) return;
-    setWorking("send"); setErr(""); setDone("");
-    setTimeout(() => { setDone("Sent"); setWorking(""); }, 850);
   };
 
   const sendNow = async () => {
@@ -1045,11 +1026,11 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
             )}
 
             <div className="bk-sheet-actions">
-              {(canSend || isDemo) ? (
+              {canSend ? (
                 <button className="bk-btn bk-btn--primary bk-btn--block"
-                        disabled={!!working} onClick={isDemo ? sendDemo : sendNow}>
+                        disabled={!!working} onClick={sendNow}>
                   <Send size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
-                  {working === "send" ? "Sending…" : "Send message"}
+                  {working === "send" ? "Sending…" : "Send now"}
                 </button>
               ) : (
                 <button className="bk-btn bk-btn--block" onClick={copy}>

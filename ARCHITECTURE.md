@@ -12,12 +12,7 @@ Two product surfaces share the codebase:
   prospecting → outreach → matching → ROI. (`App.jsx`)
 - **Phone-first relationship CRM** (`event.surpluslayer.com`) — "your book":
   capture people you meet, auto-detect their updates, draft follow-ups in your
-  voice. (`BookApp.jsx`) `/demo` drops into a seeded version of this — the demo
-  roster + its pre-written drafts live in `routes/book.py::_demo_book()`, and
-  `/api/book/draft` serves those verbatim for demo users (deterministic for
-  filming); demo "Send message" (draft) and "Connect on LinkedIn" (capture) are
-  both simulated successes (`isDemo` gate in `BookApp.jsx` / `CaptureShared.jsx`),
-  and all hardcoded demo copy is em-dash-free.
+  voice. (`BookApp.jsx`) `/demo` drops into a seeded version of this.
 
 Host header picks the shell: `event.*` → `inperson.html` → `main-inperson.jsx` →
 **BookApp**; apex → `index.html` → `main.jsx` → **App**.
