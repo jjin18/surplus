@@ -71,7 +71,13 @@ def _demo_book() -> list[dict]:
             "raw_signals": {"type": "liquidity_event",
                             "headline": "Liquidity event flagged",
                             "detected_at": _ago(hours=2),
-                            "significance": "high", "outreach_trigger": True},
+                            "significance": "high", "outreach_trigger": True,
+                            "draft": "Hey James, saw the news about the liquidity "
+                            "event, congratulations, that's a huge milestone. Given "
+                            "how we set things up after the logistics sale, I'd love "
+                            "to reconnect and make sure the proceeds are positioned "
+                            "for what's next. Also, how's your daughter settling in "
+                            "since graduation? Free for a coffee this week?"},
         },
         {
             "id": "priya-nadel", "name": "Priya Nadel", "vip": False,
@@ -83,7 +89,12 @@ def _demo_book() -> list[dict]:
             "raw_signals": {"type": "promotion",
                             "headline": "Promoted to MD, Lumen Growth",
                             "detected_at": _ago(days=1),
-                            "significance": "medium", "outreach_trigger": True},
+                            "significance": "medium", "outreach_trigger": True,
+                            "draft": "Hey Priya, saw that you were promoted to MD at "
+                            "Lumen Growth, congratulations, so well deserved. Would "
+                            "love to reconnect and celebrate, and it's probably a good "
+                            "moment to revisit the family trust as things scale up for "
+                            "you. Are you free for a quick catch-up soon?"},
         },
         {
             "id": "david-osei", "name": "David Osei", "vip": True,
@@ -95,7 +106,13 @@ def _demo_book() -> list[dict]:
             "raw_signals": {"type": "fundraise",
                             "headline": "Raised a new fund",
                             "detected_at": _ago(days=3),
-                            "significance": "high", "outreach_trigger": True},
+                            "significance": "high", "outreach_trigger": True,
+                            "draft": "Hey David, saw that you raised a new fund, "
+                            "that's fantastic, huge congrats. Would love to reconnect "
+                            "and hear how it came together, and with the new carry in "
+                            "the mix it might be a good time to look at the kids' "
+                            "college planning again. Free to grab time in the next "
+                            "week or two?"},
         },
         # ── people overdue for a touch (the "Needs outreach" list) ──
         {"id": "thomas-reyes", "name": "Thomas Reyes", "vip": False,
@@ -349,6 +366,14 @@ def today(db: Session = Depends(get_db),
     feed = book_agent.build_today(book)
     name, role = _advisor_identity(user)
     feed["advisor_name"] = name
+    # Demo: don't show the draft pre-made on the update cards -- the video taps
+    # "Draft" and watches the agent write it live (the draft still streams in via
+    # /draft/stream). Real users keep their ready-to-send inline drafts.
+    from ..auth import is_demo_user
+    if is_demo_user(user):
+        for u in feed.get("updates", []):
+            u.pop("draft", None)
+            u["has_draft"] = False
     # Warm drafts in the background for the people this feed is about to tell
     # the user to contact, so the draft panel is usually instant on tap.
     by_id = {c.get("id"): c for c in book}
@@ -386,6 +411,12 @@ def draft(body: DraftIn, db: Session = Depends(get_db),
                    "interaction_history": ""}
     name, role = _advisor_identity(user)
     t0 = time.monotonic()
+    # Demo: serve the contact's pre-written draft verbatim (deterministic, on-
+    # message for filming) instead of an LLM draft that varies run to run.
+    from ..auth import is_demo_user
+    demo_draft = (contact.get("raw_signals") or {}).get("draft")
+    if demo_draft and is_demo_user(user):
+        return {"channel": body.channel, "subject": None, "body": demo_draft}
     # Consolidated path: when this maps to a real Contact, draft through the ONE
     # shared composer (voice + real prior-message thread + no em dashes). Falls
     # back to the book heuristic drafter for demo-book slugs or on any miss.
@@ -438,15 +469,24 @@ def draft_stream(body: DraftIn, db: Session = Depends(get_db),
                     streamed = True
                     yield f"event: token\ndata: {json.dumps({'t': chunk})}\n\n"
             if not streamed:
-                # No real contact (demo slug) or no key: emit the heuristic body
-                # as a single chunk so the UI still gets a draft.
+                from ..auth import is_demo_user
                 book = _load_book(wdb, wuser)
                 contact = _find_contact(book, contact_id=cid, name=nm) or \
                     {"name": nm or "there", "title": "", "firm": "",
                      "interaction_history": ""}
-                msg = book_agent.draft_message_cached(
-                    contact, trigger, channel=channel, user_name=name, user_role=role)
-                yield f"event: token\ndata: {json.dumps({'t': msg.get('body') or ''})}\n\n"
+                demo_draft = (contact.get("raw_signals") or {}).get("draft")
+                if demo_draft and is_demo_user(wuser):
+                    # Demo: stream the pre-written draft word-by-word so it 'types'
+                    # out live (the agent-drafting moment for the video).
+                    import time as _t
+                    for i, w in enumerate(demo_draft.split(" ")):
+                        yield f"event: token\ndata: {json.dumps({'t': (w if i == 0 else ' ' + w)})}\n\n"
+                        _t.sleep(0.045)
+                else:
+                    # No real contact / no key: emit the heuristic body as one chunk.
+                    msg = book_agent.draft_message_cached(
+                        contact, trigger, channel=channel, user_name=name, user_role=role)
+                    yield f"event: token\ndata: {json.dumps({'t': msg.get('body') or ''})}\n\n"
             yield f"event: done\ndata: {json.dumps({'total_s': round(time.monotonic()-t0, 1)})}\n\n"
             _trace(f"POST /draft/stream user={user_id} to={nm!r} "
                    f"in {time.monotonic()-t0:.1f}s (streamed={streamed})")

@@ -16,6 +16,12 @@ Two product surfaces share the codebase:
   visit mints a throwaway `User` with `is_demo=True` (on the real auth/book stack,
   but flagged so it's kept out of real queries/counts); the hourly scheduler
   purges stale demo users (`routes/demo._cleanup_stale_demo_users`, full cascade).
+  **Demo-filming mode (temporary, for recording):** the demo roster + its
+  pre-written drafts live in `routes/book.py::_demo_book()`, and
+  `/api/book/draft` serves those verbatim for demo users (deterministic for
+  filming); demo "Send message" (draft) and "Connect on LinkedIn" (capture) are
+  both simulated successes (`isDemo` gate in `BookApp.jsx` / `CaptureShared.jsx`),
+  and all hardcoded demo copy is em-dash-free. Revert this block after filming.
 
 Host header picks the shell: `event.*` → `inperson.html` → `main-inperson.jsx` →
 **BookApp**; apex → `index.html` → `main.jsx` → **App**.

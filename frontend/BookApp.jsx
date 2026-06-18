@@ -509,6 +509,13 @@ function DraftPanel({ detail, isDemo = false }) {
     try { await navigator.clipboard.writeText(body); setDone("Copied");
           setTimeout(() => setDone(""), 1600); } catch {}
   };
+  // Demo: seeded contacts can't truly receive a message, so simulate a send for
+  // filming (Send -> Sending… -> Sent ✓) without a network call.
+  const sendDemo = () => {
+    if (working) return;
+    setWorking("send"); setErr(""); setDone("");
+    setTimeout(() => { setDone("Sent"); setWorking(""); }, 850);
+  };
   const sendNow = async () => {
     if (!canSend || working) return;
     setWorking("send"); setErr(""); setDone("");
@@ -556,10 +563,11 @@ function DraftPanel({ detail, isDemo = false }) {
             </div>
           )}
           <div className="bk-actions">
-            {canSend ? (
-              <button className="bk-btn bk-btn--primary" disabled={!!working} onClick={sendNow}>
+            {(canSend || isDemo) ? (
+              <button className="bk-btn bk-btn--primary" disabled={!!working}
+                      onClick={isDemo ? sendDemo : sendNow}>
                 <Send size={13} style={{ marginRight: 5, verticalAlign: -1 }} />
-                {working === "send" ? "Sending…" : "Send"}
+                {working === "send" ? "Sending…" : "Send message"}
               </button>
             ) : isDemo ? (
               <button className="bk-btn bk-btn--primary" onClick={signInWithLinkedIn}>
@@ -738,6 +746,7 @@ function AddScreen({ user, onAccount, onAdded }) {
                       onDone={() => { setResult(null); onAdded && onAdded(); }}
                       onCancel={() => setResult(null)}
                       canSend={!!user?.unipile_account_id}
+                      isDemo={!!user?.is_demo}
                       savedLink={(user && user.saved_send_link) || ""} />
         ) : (
           <>
@@ -951,6 +960,15 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
           setTimeout(() => setCopied(false), 1600); } catch {}
   };
 
+  // Demo mode: the seeded contacts aren't real recipients, so a real send would
+  // error. Simulate a successful send so the demo shows the true UX (Send ->
+  // Sending… -> Sent ✓) for filming, without hitting the network.
+  const sendDemo = () => {
+    if (working) return;
+    setWorking("send"); setErr(""); setDone("");
+    setTimeout(() => { setDone("Sent"); setWorking(""); }, 850);
+  };
+
   const sendNow = async () => {
     if (!canSend || working) return;
     setWorking("send"); setErr(""); setDone("");
@@ -1038,11 +1056,11 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
             )}
 
             <div className="bk-sheet-actions">
-              {canSend ? (
+              {(canSend || isDemo) ? (
                 <button className="bk-btn bk-btn--primary bk-btn--block"
-                        disabled={!!working} onClick={sendNow}>
+                        disabled={!!working} onClick={isDemo ? sendDemo : sendNow}>
                   <Send size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
-                  {working === "send" ? "Sending…" : "Send now"}
+                  {working === "send" ? "Sending…" : "Send message"}
                 </button>
               ) : isDemo ? (
                 <button className="bk-btn bk-btn--primary bk-btn--block" onClick={signInWithLinkedIn}>
