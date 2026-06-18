@@ -841,12 +841,12 @@ function AskBar({ variant, onOpen, onDraft }) {
          data-onb={variant === "bar" ? "ask" : undefined}>
       {variant === "card" ? (
         <>
-          <div className="bk-assistant-head"><SurplusMark size={16} /><span>Relationship assistant</span></div>
+          <div className="bk-assistant-head"><SurplusMark size={20} /><span>Relationship assistant</span></div>
           <div className="bk-field">{input}{go}</div>
         </>
       ) : (
         <div className="bk-ask">
-          <SurplusMark size={18} className="bk-ask-spark" />
+          <SurplusMark size={22} className="bk-ask-spark" />
           {input}
           {go}
         </div>
@@ -1337,7 +1337,8 @@ const BOOK_CSS = `
 .bk-ask{display:flex; align-items:center; gap:10px; background:var(--surface);
   border:.5px solid var(--line); border-radius:999px; padding:9px 11px 9px 15px;}
 .bk-ask-spark{color:var(--accent); flex:none;}
-.bk-mark{flex:none; object-fit:contain; display:block;}
+.bk-mark{flex:none; object-fit:contain; display:block; border-radius:50%;
+  background:#fff; border:.5px solid var(--line);}
 .bk-ask-input{flex:1; border:0; background:none; outline:none; font-size:13px;
   color:var(--ink); font-family:var(--font-ui); min-width:0;}
 .bk-ask-input::placeholder{color:var(--faint);}
