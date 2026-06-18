@@ -1169,7 +1169,7 @@ const BK_ONB_STEPS = [
   {
     key: "add", tab: "today", anchor: "add", place: "top",
     title: "Add contacts",
-    body: "Tap Add to scan a LinkedIn QR or paste a profile.",
+    body: "Tap + to scan a LinkedIn QR or paste a profile.",
   },
   {
     key: "find", tab: "book", anchor: "search", place: "bottom",
@@ -1189,7 +1189,7 @@ const BK_ONB_STEPS = [
   {
     key: "send2", tab: "today", anchor: "draft", place: "bottom",
     title: "Send it",
-    body: "Hit Send — no copy-paste.",
+    body: "Hit Send, no copy-paste.",
   },
   {
     key: "list", tab: "book", anchor: "book", place: "top",
@@ -1279,7 +1279,7 @@ function BookOnboarding({ step, onGo, onClose }) {
               corner ✕ remains a plain dismiss for anyone who just wants to keep
               poking around the demo. */}
           <button className="bk-onb-skip" onClick={signInWithLinkedIn}>
-            Skip &amp; sign in
+            Skip tour &amp; sign in
           </button>
           <div className="bk-onb-nav">
             {idx > 0 && <button className="bk-onb-back" onClick={back}>Back</button>}
@@ -1605,8 +1605,9 @@ const BOOK_CSS = `
 .bk-onb-body{font-size:13px; line-height:1.5; color:var(--muted);}
 .bk-onb-actions{display:flex; align-items:center; justify-content:space-between;
   margin-top:13px; gap:10px;}
-.bk-onb-skip{background:none; border:0; color:var(--faint); font-size:12px;
-  cursor:pointer; padding:6px 2px; font-family:var(--font-ui);}
+.bk-onb-skip{background:none; border:0; color:var(--accent); font-size:13px;
+  font-weight:500; cursor:pointer; padding:6px 2px; font-family:var(--font-ui);
+  text-decoration:underline; text-underline-offset:2px;}
 .bk-onb-nav{display:flex; align-items:center; gap:8px;}
 .bk-onb-back{background:none; border:0; color:var(--ink); font-size:13px;
   font-weight:500; cursor:pointer; padding:8px 6px; font-family:var(--font-ui);}
