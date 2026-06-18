@@ -22,11 +22,17 @@ Two product surfaces share the codebase:
   filming); demo "Send message" (draft) and "Connect on LinkedIn" (capture) are
   both simulated successes (`isDemo` gate in `BookApp.jsx` / `CaptureShared.jsx`),
   and all hardcoded demo copy is em-dash-free. **Scan/capture is also simulated**:
-  `routes/inperson.scan_capture` short-circuits for demo users to
-  `_demo_capture` (rotating polished personas, instant, no resolve/enrich/LLM,
-  still creates Prospect+Contact so it adds to the book), and the QR scanner
-  (`CaptureShared.QrScanner`) accepts any QR + auto-fires so the on-camera scan
-  always lands. Revert this block after filming.
+  `CaptureShared.DemoScanStage` replaces the live camera with a light viewfinder
+  where the host's real LinkedIn QR card (`/public/demo-linkedin-qr.webp`) slides
+  up + zooms in and "locks", then `routes/inperson.scan_capture` short-circuits to
+  `_demo_capture` -> the captured person is the host (Daniel Wang, matches the QR)
+  while the post-scan **updates are about other people** (`_demo_emit_update`
+  seeds Maya Chen "raised a round" + Sofia Reyes "birthday" as fresh
+  activity_updates with ready drafts). On returning to Today those updates "arrive"
+  after a ~1.8s detection delay (`BookApp.onAdded`), pop in (`bk-upd--pop`, gated
+  on `_is_fresh`), and a toast fires. `vite.config.js` has a dev-only `/demo` ->
+  `inperson.html` rewrite so local `/demo` mirrors prod host-routing. Revert this
+  whole block after filming.
 
 Host header picks the shell: `event.*` → `inperson.html` → `main-inperson.jsx` →
 **BookApp**; apex → `index.html` → `main.jsx` → **App**.

@@ -5,6 +5,20 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // Dev-only: in prod, FastAPI serves inperson.html for /demo via Host routing.
+  // Locally there's no Host routing, so rewrite /demo -> the in-person shell.
+  // The browser URL stays /demo, so main-inperson.jsx's wantsDemo() still fires
+  // (mints the demo session + seeds the event). No effect on the prod build.
+  plugins: [{
+    name: "local-demo-route",
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const path = (req.url || "").split("?")[0];
+        if (path === "/demo" || path.startsWith("/demo/")) req.url = "/inperson.html";
+        next();
+      });
+    },
+  }],
   // dev server: proxy API calls to the local FastAPI on :8000 so the React
   // app can use relative paths in BOTH dev and prod. In production, FastAPI
   // serves the built frontend at the same origin so the proxy isn't needed.

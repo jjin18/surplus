@@ -15,7 +15,8 @@ only way a typed name becomes a Prospect is the operator CONFIRMING a candidate
 from /resolve and POSTing its linkedin_url to /scan. /resolve is resolve-only.
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -166,74 +167,133 @@ def _capture_row(p: models.Prospect) -> dict:
 
 # ── demo capture simulation (for filming) ───────────────────────────────────
 # A real scan does a network resolve + LLM enrich + LLM draft -- slow and
-# failure-prone on camera, and it needs a real person's QR. For demo users we
-# skip all of that and return a polished, deterministic capture instantly, still
-# creating the Prospect + Contact so the captured person ADDS to the seeded book
-# (the kept "scan adds to book" behavior). Rotates through personas so scanning
-# several people in one take yields different, clean cards. Em-dash-free.
+# failure-prone on camera. For the demo:
+#   * the CAMERA SCAN (Add) is the HOST'S OWN LinkedIn QR (Daniel Wang), so the
+#     captured person is them and "Connect" matches the QR card on screen.
+#   * the UPDATE that lands on Today afterward is about SOMEONE ELSE (Maya Chen),
+#     a congratulate-worthy "just raised" moment with a ready draft -- updates +
+#     agent drafting are never about the host.
+# We skip all the network/LLM work and create real rows so both add to the book.
+# Em-dash-free.
+#
+# TODO(demo): confirm the real LinkedIn slug in _DEMO_CAPTURE["linkedin_url"].
 
-_DEMO_CAPTURE_PERSONAS = [
-    {"slug": "alana-rivera", "name": "Alana Rivera",
-     "role": "Founder & CEO", "company": "Northwind Bio",
-     "note": "Just closed her Series A; we talked about scaling her ops team.",
-     "draft": "Hey Alana, great meeting you just now, loved hearing about the "
-              "Series A and where you're taking Northwind Bio. Would love to keep "
-              "in touch and help however I can as you scale the team. Coffee soon?"},
-    {"slug": "marcus-lindqvist", "name": "Marcus Lindqvist",
-     "role": "Managing Partner", "company": "Cedar Lane Ventures",
-     "note": "Invests in early climate startups; mentioned he's looking at "
-             "carbon-capture deals this quarter.",
-     "draft": "Hey Marcus, really enjoyed our chat just now, especially your take "
-              "on the carbon-capture space. Would love to stay connected and trade "
-              "notes as you look at deals this quarter. Let's grab time soon."},
-    {"slug": "priya-raman", "name": "Priya Raman",
-     "role": "VP Product", "company": "Lumafold",
-     "note": "Leads product at Lumafold; we geeked out about onboarding flows.",
-     "draft": "Hey Priya, so good meeting you just now, that conversation about "
-              "onboarding flows was the highlight of my day. Would love to keep "
-              "comparing notes, let's find time for a proper coffee soon."},
-    {"slug": "daniel-osei", "name": "Daniel Osei",
-     "role": "Head of Growth", "company": "Bright Harbor",
-     "note": "Scaling growth at Bright Harbor; swapping playbooks on referral "
-             "loops.",
-     "draft": "Hey Daniel, great connecting just now, your referral-loop playbook "
-              "is sharp. Would love to stay in touch and keep trading growth "
-              "ideas. Free to grab a coffee in the next week or two?"},
+_DEMO_CAPTURE = {
+    "slug": "daniel-wang",
+    "linkedin_url": "https://www.linkedin.com/in/daniel-wang",
+    "name": "Daniel Wang",
+    "role": "Founding Ops",
+    "company": "Abundant (YC F24)",
+    "note": "Met at the event; building surplus, talked about automating "
+            "relationship follow-ups.",
+    "draft": "Hey Daniel, great meeting you just now, really enjoyed the "
+             "conversation. Would love to stay connected and keep it going, "
+             "open to connecting here?",
+}
+
+# The post-scan UPDATES are about other people entirely (not the host): a "just
+# raised" congrats and a birthday. Both land fresh on Today with ready drafts.
+_DEMO_UPDATE_PEOPLE = [
+    {
+        "slug": "maya-chen-aria",
+        "linkedin_url": "https://www.linkedin.com/in/maya-chen-aria",
+        "name": "Maya Chen", "title": "Co-founder & CEO", "company": "Aria Labs",
+        "update_kind": "new_post",
+        "update_title": "Raised a new round",
+        "update_summary": "Maya Chen announced Aria Labs raised a $6M seed round.",
+        "update_draft": "Hey Maya, just saw that Aria Labs closed your seed round, "
+                        "huge congrats, so well deserved. Would love to catch up "
+                        "and hear how it's all going. Free for a coffee in the "
+                        "next week or two?",
+    },
+    {
+        "slug": "sofia-reyes-figma",
+        "linkedin_url": "https://www.linkedin.com/in/sofia-reyes-figma",
+        "name": "Sofia Reyes", "title": "Head of Design", "company": "Figma",
+        "update_kind": "birthday",
+        "update_title": "Birthday today",
+        "update_summary": "Today is Sofia Reyes's birthday.",
+        "update_draft": "Happy birthday Sofia! Hope you're having a great one. "
+                        "It has been too long, would love to catch up soon, "
+                        "coffee on me to celebrate?",
+    },
 ]
 
 
+def _demo_emit_update(db: Session, user: models.User) -> None:
+    """Surface fresh activity_updates for OTHER people (a raise + a birthday) with
+    ready drafts, so tapping back to Today after a scan shows new update cards
+    whose follow-ups are already written. Creates each Contact if needed.
+    Idempotent: skips an update that already exists for this user."""
+    from ..triage.enrichment_cache import identity_keys
+    now = datetime.now(timezone.utc)
+    for i, u in enumerate(_DEMO_UPDATE_PEOPLE):
+        keys = identity_keys(email="", linkedin_url=u["linkedin_url"])
+        if not keys:
+            continue
+        primary = keys[0]
+        contact = (db.query(models.Contact)
+                     .filter_by(user_id=user.id, primary_identity_key=primary)
+                     .first())
+        if contact is None:
+            contact = models.Contact(
+                user_id=user.id, primary_identity_key=primary, name=u["name"],
+                linkedin_url=u["linkedin_url"], company=u["company"],
+                title=u["title"])
+            db.add(contact)
+            db.flush()
+        existing = (db.query(models.RelationshipInteraction)
+                      .filter_by(contact_id=contact.id,
+                                 source_type="activity_update").first())
+        if existing is None:
+            db.add(models.RelationshipInteraction(
+                actor_user_id=user.id,
+                contact_id=contact.id,
+                source_type="activity_update",
+                interaction_type=u["update_kind"],
+                direction="none",
+                # stagger so the list order is stable (first = newest = top)
+                occurred_at=now - timedelta(seconds=i),
+                title=u["update_title"],
+                summary=u["update_summary"],
+                meta_json=json.dumps({"draft": u["update_draft"]}),
+                visibility="private",
+            ))
+    db.commit()
+
+
 def _demo_capture(db: Session, ev, user: models.User, body: "ScanIn") -> dict:
-    """Instant, deterministic capture for demo users (filming). Creates a real
-    Prospect + Contact from a rotating persona so it ADDS to the book, and
-    returns a pre-written draft. No network, no LLM, no 'Unknown'."""
-    n = (db.query(models.Prospect)
-           .filter_by(event_id=ev.id, sources="inperson").count())
-    persona = _DEMO_CAPTURE_PERSONAS[n % len(_DEMO_CAPTURE_PERSONAS)]
-    canonical = f"https://www.linkedin.com/in/{persona['slug']}"
+    """Instant, deterministic capture for demo users (filming). The scanned QR is
+    the host's own LinkedIn (Daniel Wang): create the Prospect + Contact so it
+    adds to the book, surface a fresh update about SOMEONE ELSE for the Today
+    feed, and return the capture draft. No network, no LLM, no 'Unknown'."""
+    s = _DEMO_CAPTURE
+    canonical = s["linkedin_url"]
     p = (db.query(models.Prospect)
            .filter_by(event_id=ev.id, linkedin_url=canonical).first())
     if p is None:
-        p = models.Prospect(event_id=ev.id, identity=persona["slug"],
+        p = models.Prospect(event_id=ev.id, identity=s["slug"],
                              linkedin_url=canonical, sources="inperson")
         db.add(p)
-    p.name = persona["name"]
-    p.role = persona["role"]
-    p.company = persona["company"]
+    p.name = s["name"]
+    p.role = s["role"]
+    p.company = s["company"]
     p.status = "pending"
     p.source = (body.source or "scan").strip() or "scan"
     p.captured_at = datetime.now(timezone.utc)
-    p.note = persona["note"]
+    p.note = s["note"]
     if body.vip is not None:
         p.vip = bool(body.vip)
     db.commit()
     db.refresh(p)
-    contact = relationships.link_contact(db, p, user.id)
-    capture_enrich.refresh_contact(db, contact, p)
+    relationships.link_contact(db, p, user.id)
+    # The post-scan update is about someone else, not the just-captured host.
+    _demo_emit_update(db, user)
     return {
         "prospect": _capture_row(p),
         "resolve_failed": False,
         "draft_note": "Met at the event, exchanged details.",
-        "draft_message": persona["draft"],
+        "draft_message": s["draft"],
     }
 
 

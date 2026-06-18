@@ -510,7 +510,9 @@ export function CaptureScreen({ event, onResult, isDemo = false }) {
 
       {err && <div className="ip-err"><AlertCircle size={14} /> {err}</div>}
 
-      {mode === "scan" && <QrScanner busy={busy} isDemo={isDemo} onUrl={(u) => doScan(u, "scan")} />}
+      {mode === "scan" && (isDemo
+        ? <DemoScanStage busy={busy} onUrl={(u) => doScan(u, "scan")} />
+        : <QrScanner busy={busy} onUrl={(u) => doScan(u, "scan")} />)}
       {mode === "paste" && <PasteLink busy={busy} onSubmit={(u) => doScan(u, "link")} />}
       {mode === "type" && (
         <TypeSearch busy={busy}
@@ -522,35 +524,55 @@ export function CaptureScreen({ event, onResult, isDemo = false }) {
   );
 }
 
+// Simulated scan stage for the demo video. Starts with a faux "Allow camera"
+// permission prompt (you tap Allow on camera), then the camera "opens": a phone
+// slides up holding a LinkedIn QR, a scan line sweeps and locks on, then it
+// "captures" -- no real camera (so no shaky hands / real permission dialog).
+// Fires onUrl with a placeholder; the backend returns a polished demo persona.
+function DemoScanStage({ onUrl, busy }) {
+  const [phase, setPhase] = useState("scan");  // scan -> locked
+  const firedRef = useRef(false);
+  useEffect(() => {
+    const t1 = setTimeout(() => setPhase("locked"), 1850);
+    const t2 = setTimeout(() => {
+      if (!firedRef.current) { firedRef.current = true; onUrl("https://www.linkedin.com/in/demo"); }
+    }, 2400);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [onUrl]);
+  const locked = phase === "locked";
+  return (
+    <div className="ip-cam ip-democam">
+      <div className="ip-demoshot-wrap">
+        <img className="ip-demoshot" src="/demo-linkedin-qr.webp" alt=""
+             onError={(e) => { e.currentTarget.style.display = "none"; }} />
+      </div>
+      <div className={"ip-reticle ip-demoreticle" + (locked ? " ip-demoreticle--lock" : "")} />
+      {!locked && <div className="ip-scanline" />}
+      <div className="ip-camstatus">
+        {busy || locked
+          ? <><Check size={14} /> Got it, saving…</>
+          : <><Loader2 className="spin" size={14} /> Scanning QR…</>}
+      </div>
+    </div>
+  );
+}
+
+
 // QR mode : getUserMedia + jsQR. Decodes any QR; we only accept LinkedIn
 // profile URLs (the backend's normalize_linkedin_url is the source of truth,
 // so we hand it the raw decoded string and let it strip tracking params).
-function QrScanner({ onUrl, busy, isDemo = false }) {
+function QrScanner({ onUrl, busy }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const rafRef = useRef(0);
   const streamRef = useRef(null);
   const firedRef = useRef(false);
-  const demoTimerRef = useRef(0);
   const [status, setStatus] = useState("starting");  // starting|scanning|denied|nocam|unsupported
   const [hint, setHint] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     if (!navigator.mediaDevices?.getUserMedia) { setStatus("unsupported"); return; }
-
-    // Demo / filming: don't depend on a real, valid LinkedIn QR being in frame.
-    // Once the camera is up, auto-"capture" after a short beat so the on-camera
-    // scan always succeeds smoothly. The backend returns a polished demo persona
-    // for the placeholder url, so any QR (or none) yields a clean capture.
-    function armDemoAutoFire() {
-      if (!isDemo || firedRef.current) return;
-      demoTimerRef.current = setTimeout(() => {
-        if (cancelled || firedRef.current) return;
-        firedRef.current = true;
-        onUrl("https://www.linkedin.com/in/demo");
-      }, 2200);
-    }
 
     (async () => {
       try {
@@ -588,11 +610,8 @@ function QrScanner({ onUrl, busy, isDemo = false }) {
       const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
       if (!code || !code.data) return;
       const text = code.data.trim();
-      // Demo: accept ANY QR (the operator may scan their own / a random code on
-      // camera) -> the backend returns a polished demo persona regardless.
-      if (isDemo || /linkedin\.com\/in\//i.test(text)) {
+      if (/linkedin\.com\/in\//i.test(text)) {
         firedRef.current = true;
-        clearTimeout(demoTimerRef.current);
         onUrl(text);
       } else {
         setHint("That QR isn’t a LinkedIn profile. Try again or paste the link.");
@@ -602,10 +621,9 @@ function QrScanner({ onUrl, busy, isDemo = false }) {
     return () => {
       cancelled = true;
       cancelAnimationFrame(rafRef.current);
-      clearTimeout(demoTimerRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
     };
-  }, [onUrl, isDemo]);
+  }, [onUrl]);
 
   if (status === "denied" || status === "nocam" || status === "unsupported") {
     return (
@@ -1687,6 +1705,29 @@ button.ip-microw-hint { cursor:pointer; }
   display:flex; flex-direction:column; gap:8px; align-items:center; margin-top:14px;
   border:1px dashed var(--ip-line-2); border-radius:14px; }
 .ip-camfallback p { margin:0; }
+
+/* demo simulated scan (filming): same camera viewfinder as the real scanner, but
+   their LinkedIn QR card screenshot slides up + zooms in like a natural scan. */
+.ip-democam { background:linear-gradient(180deg,#ffffff,#eaeef4); }
+.ip-demoshot-wrap { position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; overflow:hidden; }
+.ip-demoshot { height:108%; width:auto; max-width:none; display:block;
+  border-radius:14px; box-shadow:0 8px 30px rgba(0,0,0,.4);
+  transform-origin:center 42%;  /* zoom toward the QR, which sits ~mid-card */
+  animation:ipshotscan 2s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes ipshotscan {
+  0%   { transform:translateY(118%) scale(.96); }
+  45%  { transform:translateY(0)    scale(1); }      /* slid up into frame */
+  100% { transform:translateY(-3%)  scale(1.18); }   /* zoom in on the QR */
+}
+.ip-scanline { position:absolute; left:20%; right:20%; height:2px; border-radius:2px;
+  background:linear-gradient(90deg,transparent,#2fd27a,transparent);
+  box-shadow:0 0 14px rgba(47,210,122,.85); animation:ipscanmove 1.4s ease-in-out .5s both; }
+@keyframes ipscanmove { 0%{ top:30%; opacity:0;} 15%{ opacity:1;} 85%{ opacity:1;} 100%{ top:70%; opacity:0;} }
+/* light viewfinder: darker reticle border so it reads on white, no dark vignette */
+.ip-demoreticle { border-color:rgba(40,55,80,.32); box-shadow:none;
+  transition:border-color .3s ease, box-shadow .3s ease; }
+.ip-demoreticle--lock { border-color:#2fd27a; box-shadow:0 0 22px rgba(47,210,122,.55); }
 
 /* candidates */
 .ip-cands { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
