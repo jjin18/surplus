@@ -71,7 +71,11 @@ def _demo_book() -> list[dict]:
             "raw_signals": {"type": "liquidity_event",
                             "headline": "Liquidity event flagged",
                             "detected_at": _ago(hours=2),
-                            "significance": "high", "outreach_trigger": True},
+                            "significance": "high", "outreach_trigger": True,
+                            "draft": "Hey James, saw the news about the liquidity "
+                            "event, congratulations, that's a huge milestone. Would "
+                            "genuinely love to reconnect and make sure everything's "
+                            "positioned the way you want. Free for a coffee this week?"},
         },
         {
             "id": "priya-nadel", "name": "Priya Nadel", "vip": False,
@@ -83,7 +87,11 @@ def _demo_book() -> list[dict]:
             "raw_signals": {"type": "promotion",
                             "headline": "Promoted to MD, Lumen Growth",
                             "detected_at": _ago(days=1),
-                            "significance": "medium", "outreach_trigger": True},
+                            "significance": "medium", "outreach_trigger": True,
+                            "draft": "Hey Priya, saw that you were promoted to MD at "
+                            "Lumen Growth, congratulations, so well deserved. Would "
+                            "love to reconnect and celebrate properly. Are you around "
+                            "for a quick catch-up sometime soon?"},
         },
         {
             "id": "david-osei", "name": "David Osei", "vip": True,
@@ -95,7 +103,11 @@ def _demo_book() -> list[dict]:
             "raw_signals": {"type": "fundraise",
                             "headline": "Raised a new fund",
                             "detected_at": _ago(days=3),
-                            "significance": "high", "outreach_trigger": True},
+                            "significance": "high", "outreach_trigger": True,
+                            "draft": "Hey David, saw that you raised a new fund, "
+                            "that's fantastic, huge congrats. Would love to reconnect "
+                            "and hear how it all came together. Free to grab time in "
+                            "the next week or two?"},
         },
         # ── people overdue for a touch (the "Needs outreach" list) ──
         {"id": "thomas-reyes", "name": "Thomas Reyes", "vip": False,
@@ -380,6 +392,12 @@ def draft(body: DraftIn, db: Session = Depends(get_db),
                    "interaction_history": ""}
     name, role = _advisor_identity(user)
     t0 = time.monotonic()
+    # Demo: serve the contact's pre-written draft verbatim (deterministic, on-
+    # message for filming) instead of an LLM draft that varies run to run.
+    from ..auth import is_demo_user
+    demo_draft = (contact.get("raw_signals") or {}).get("draft")
+    if demo_draft and is_demo_user(user):
+        return {"channel": body.channel, "subject": None, "body": demo_draft}
     # Consolidated path: when this maps to a real Contact, draft through the ONE
     # shared composer (voice + real prior-message thread + no em dashes). Falls
     # back to the book heuristic drafter for demo-book slugs or on any miss.
