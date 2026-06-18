@@ -20,7 +20,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Sparkles, ArrowUp, ArrowRight, Star, LayoutDashboard, Plus, BookText, Loader2, X,
   ChevronLeft, ChevronRight, ChevronDown, MapPin, QrCode, Link2, Search, Send,
-  Mail, Calendar, Plug, CreditCard, LogOut, CheckCircle2,
+  Mail, Calendar, Plug, CreditCard, LogOut, CheckCircle2, Mic,
 } from "lucide-react";
 import { api } from "./lib/api.js";
 import {
@@ -179,15 +179,6 @@ export default function BookApp() {
 }
 
 // ── Today ────────────────────────────────────────────────────────────────────
-
-// The surplus "S" mark — the agent's face in the ask bar / assistant card.
-// Renders the brand logo so the agent reads as Surplus, not a generic spark.
-function SurplusMark({ size = 17, className }) {
-  return (
-    <img src="/surplus-logo.png" alt="" width={size} height={size}
-         className={"bk-mark" + (className ? " " + className : "")} />
-  );
-}
 
 // The JL/DW avatar — the entry to Account, present in every screen's topbar.
 function Avatar({ user, feed, onAccount }) {
@@ -841,12 +832,12 @@ function AskBar({ variant, onOpen, onDraft }) {
          data-onb={variant === "bar" ? "ask" : undefined}>
       {variant === "card" ? (
         <>
-          <div className="bk-assistant-head"><SurplusMark size={20} /><span>Relationship assistant</span></div>
+          <div className="bk-assistant-head"><Mic size={16} /><span>Relationship assistant</span></div>
           <div className="bk-field">{input}{go}</div>
         </>
       ) : (
         <div className="bk-ask">
-          <SurplusMark size={22} className="bk-ask-spark" />
+          <Mic size={17} className="bk-ask-spark" />
           {input}
           {go}
         </div>
@@ -1337,8 +1328,6 @@ const BOOK_CSS = `
 .bk-ask{display:flex; align-items:center; gap:10px; background:var(--surface);
   border:.5px solid var(--line); border-radius:999px; padding:9px 11px 9px 15px;}
 .bk-ask-spark{color:var(--accent); flex:none;}
-.bk-mark{flex:none; object-fit:contain; display:block; border-radius:50%;
-  background:#fff; border:.5px solid var(--line);}
 .bk-ask-input{flex:1; border:0; background:none; outline:none; font-size:13px;
   color:var(--ink); font-family:var(--font-ui); min-width:0;}
 .bk-ask-input::placeholder{color:var(--faint);}
