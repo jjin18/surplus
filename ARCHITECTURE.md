@@ -21,7 +21,12 @@ Two product surfaces share the codebase:
   `/api/book/draft` serves those verbatim for demo users (deterministic for
   filming); demo "Send message" (draft) and "Connect on LinkedIn" (capture) are
   both simulated successes (`isDemo` gate in `BookApp.jsx` / `CaptureShared.jsx`),
-  and all hardcoded demo copy is em-dash-free. Revert this block after filming.
+  and all hardcoded demo copy is em-dash-free. **Scan/capture is also simulated**:
+  `routes/inperson.scan_capture` short-circuits for demo users to
+  `_demo_capture` (rotating polished personas, instant, no resolve/enrich/LLM,
+  still creates Prospect+Contact so it adds to the book), and the QR scanner
+  (`CaptureShared.QrScanner`) accepts any QR + auto-fires so the on-camera scan
+  always lands. Revert this block after filming.
 
 Host header picks the shell: `event.*` → `inperson.html` → `main-inperson.jsx` →
 **BookApp**; apex → `index.html` → `main.jsx` → **App**.

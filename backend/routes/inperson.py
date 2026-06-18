@@ -29,6 +29,7 @@ from ..agents.send_flow import route_and_send
 from ..auth import (
     current_user,
     get_owned_event,
+    is_demo_user,
     require_can_send_linkedin,
     require_outreach_enabled,
     user_has_linkedin_connected,
@@ -163,6 +164,79 @@ def _capture_row(p: models.Prospect) -> dict:
     }
 
 
+# ── demo capture simulation (for filming) ───────────────────────────────────
+# A real scan does a network resolve + LLM enrich + LLM draft -- slow and
+# failure-prone on camera, and it needs a real person's QR. For demo users we
+# skip all of that and return a polished, deterministic capture instantly, still
+# creating the Prospect + Contact so the captured person ADDS to the seeded book
+# (the kept "scan adds to book" behavior). Rotates through personas so scanning
+# several people in one take yields different, clean cards. Em-dash-free.
+
+_DEMO_CAPTURE_PERSONAS = [
+    {"slug": "alana-rivera", "name": "Alana Rivera",
+     "role": "Founder & CEO", "company": "Northwind Bio",
+     "note": "Just closed her Series A; we talked about scaling her ops team.",
+     "draft": "Hey Alana, great meeting you just now, loved hearing about the "
+              "Series A and where you're taking Northwind Bio. Would love to keep "
+              "in touch and help however I can as you scale the team. Coffee soon?"},
+    {"slug": "marcus-lindqvist", "name": "Marcus Lindqvist",
+     "role": "Managing Partner", "company": "Cedar Lane Ventures",
+     "note": "Invests in early climate startups; mentioned he's looking at "
+             "carbon-capture deals this quarter.",
+     "draft": "Hey Marcus, really enjoyed our chat just now, especially your take "
+              "on the carbon-capture space. Would love to stay connected and trade "
+              "notes as you look at deals this quarter. Let's grab time soon."},
+    {"slug": "priya-raman", "name": "Priya Raman",
+     "role": "VP Product", "company": "Lumafold",
+     "note": "Leads product at Lumafold; we geeked out about onboarding flows.",
+     "draft": "Hey Priya, so good meeting you just now, that conversation about "
+              "onboarding flows was the highlight of my day. Would love to keep "
+              "comparing notes, let's find time for a proper coffee soon."},
+    {"slug": "daniel-osei", "name": "Daniel Osei",
+     "role": "Head of Growth", "company": "Bright Harbor",
+     "note": "Scaling growth at Bright Harbor; swapping playbooks on referral "
+             "loops.",
+     "draft": "Hey Daniel, great connecting just now, your referral-loop playbook "
+              "is sharp. Would love to stay in touch and keep trading growth "
+              "ideas. Free to grab a coffee in the next week or two?"},
+]
+
+
+def _demo_capture(db: Session, ev, user: models.User, body: "ScanIn") -> dict:
+    """Instant, deterministic capture for demo users (filming). Creates a real
+    Prospect + Contact from a rotating persona so it ADDS to the book, and
+    returns a pre-written draft. No network, no LLM, no 'Unknown'."""
+    n = (db.query(models.Prospect)
+           .filter_by(event_id=ev.id, sources="inperson").count())
+    persona = _DEMO_CAPTURE_PERSONAS[n % len(_DEMO_CAPTURE_PERSONAS)]
+    canonical = f"https://www.linkedin.com/in/{persona['slug']}"
+    p = (db.query(models.Prospect)
+           .filter_by(event_id=ev.id, linkedin_url=canonical).first())
+    if p is None:
+        p = models.Prospect(event_id=ev.id, identity=persona["slug"],
+                             linkedin_url=canonical, sources="inperson")
+        db.add(p)
+    p.name = persona["name"]
+    p.role = persona["role"]
+    p.company = persona["company"]
+    p.status = "pending"
+    p.source = (body.source or "scan").strip() or "scan"
+    p.captured_at = datetime.now(timezone.utc)
+    p.note = persona["note"]
+    if body.vip is not None:
+        p.vip = bool(body.vip)
+    db.commit()
+    db.refresh(p)
+    contact = relationships.link_contact(db, p, user.id)
+    capture_enrich.refresh_contact(db, contact, p)
+    return {
+        "prospect": _capture_row(p),
+        "resolve_failed": False,
+        "draft_note": "Met at the event, exchanged details.",
+        "draft_message": persona["draft"],
+    }
+
+
 # ── routes ─────────────────────────────────────────────────────────────────
 
 @router.post("/events")
@@ -241,6 +315,12 @@ def scan_capture(
     operator doesn't lose it) and flag resolve_failed so it can be retried.
     """
     ev = get_owned_event(body.event_id, user, db)
+
+    # Demo / filming: short-circuit to a polished, instant, deterministic capture
+    # (no real resolve/enrich/draft). Still creates the Prospect + Contact so the
+    # person adds to the book exactly like a real capture.
+    if is_demo_user(user):
+        return _demo_capture(db, ev, user, body)
 
     canonical = resolver.normalize_linkedin_url(body.linkedin_url) or (
         body.linkedin_url or "").strip()

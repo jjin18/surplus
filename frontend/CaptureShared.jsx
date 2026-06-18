@@ -267,6 +267,7 @@ function InPersonAppInner() {
           event={event}
           result={result}
           canSend={!notConnected}
+          isDemo={!!user?.is_demo}
           savedLink={(user && user.saved_send_link) || ""}
           onbStepKey={onb.status === "active" ? (ONB_STEPS[onb.step]?.key || null) : null}
           onDone={() => { setResult(null); setTab("people"); }}
@@ -280,7 +281,7 @@ function InPersonAppInner() {
           onBack={() => setOpenCapture(null)}
         />
       ) : tab === "capture" ? (
-        <CaptureScreen event={event} onResult={(r) => setResult(r)} />
+        <CaptureScreen event={event} onResult={(r) => setResult(r)} isDemo={!!user?.is_demo} />
       ) : (
         <CapturesScreen event={event} onOpen={(c) => setOpenCapture(c)} />
       )}
@@ -476,7 +477,7 @@ function EventBar({ event, onPick, user, onSignOut, crmActive, onToggleCrm, onRe
 
 // ── capture screen (3 modes) ────────────────────────────────────────────────
 
-export function CaptureScreen({ event, onResult }) {
+export function CaptureScreen({ event, onResult, isDemo = false }) {
   const [mode, setMode] = useState("scan");   // "scan" | "paste" | "type"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -509,7 +510,7 @@ export function CaptureScreen({ event, onResult }) {
 
       {err && <div className="ip-err"><AlertCircle size={14} /> {err}</div>}
 
-      {mode === "scan" && <QrScanner busy={busy} onUrl={(u) => doScan(u, "scan")} />}
+      {mode === "scan" && <QrScanner busy={busy} isDemo={isDemo} onUrl={(u) => doScan(u, "scan")} />}
       {mode === "paste" && <PasteLink busy={busy} onSubmit={(u) => doScan(u, "link")} />}
       {mode === "type" && (
         <TypeSearch busy={busy}
@@ -524,18 +525,32 @@ export function CaptureScreen({ event, onResult }) {
 // QR mode : getUserMedia + jsQR. Decodes any QR; we only accept LinkedIn
 // profile URLs (the backend's normalize_linkedin_url is the source of truth,
 // so we hand it the raw decoded string and let it strip tracking params).
-function QrScanner({ onUrl, busy }) {
+function QrScanner({ onUrl, busy, isDemo = false }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const rafRef = useRef(0);
   const streamRef = useRef(null);
   const firedRef = useRef(false);
+  const demoTimerRef = useRef(0);
   const [status, setStatus] = useState("starting");  // starting|scanning|denied|nocam|unsupported
   const [hint, setHint] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     if (!navigator.mediaDevices?.getUserMedia) { setStatus("unsupported"); return; }
+
+    // Demo / filming: don't depend on a real, valid LinkedIn QR being in frame.
+    // Once the camera is up, auto-"capture" after a short beat so the on-camera
+    // scan always succeeds smoothly. The backend returns a polished demo persona
+    // for the placeholder url, so any QR (or none) yields a clean capture.
+    function armDemoAutoFire() {
+      if (!isDemo || firedRef.current) return;
+      demoTimerRef.current = setTimeout(() => {
+        if (cancelled || firedRef.current) return;
+        firedRef.current = true;
+        onUrl("https://www.linkedin.com/in/demo");
+      }, 2200);
+    }
 
     (async () => {
       try {
@@ -551,6 +566,7 @@ function QrScanner({ onUrl, busy }) {
           await v.play().catch(() => {});
         }
         setStatus("scanning");
+        armDemoAutoFire();
         tick();
       } catch (e) {
         setStatus(e?.name === "NotAllowedError" ? "denied"
@@ -572,8 +588,11 @@ function QrScanner({ onUrl, busy }) {
       const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
       if (!code || !code.data) return;
       const text = code.data.trim();
-      if (/linkedin\.com\/in\//i.test(text)) {
+      // Demo: accept ANY QR (the operator may scan their own / a random code on
+      // camera) -> the backend returns a polished demo persona regardless.
+      if (isDemo || /linkedin\.com\/in\//i.test(text)) {
         firedRef.current = true;
+        clearTimeout(demoTimerRef.current);
         onUrl(text);
       } else {
         setHint("That QR isn’t a LinkedIn profile. Try again or paste the link.");
@@ -583,9 +602,10 @@ function QrScanner({ onUrl, busy }) {
     return () => {
       cancelled = true;
       cancelAnimationFrame(rafRef.current);
+      clearTimeout(demoTimerRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
     };
-  }, [onUrl]);
+  }, [onUrl, isDemo]);
 
   if (status === "denied" || status === "nocam" || status === "unsupported") {
     return (
