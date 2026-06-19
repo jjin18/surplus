@@ -51,12 +51,6 @@ export default function BookApp() {
   const [tab, setTab] = useState("today");       // "today" | "add" | "book"
   const [route, setRoute] = useState(null);      // {name:"detail",row} | {name:"account"} | {name:"connections"} | null
   const [draftFor, setDraftFor] = useState(null);// {name, contact_id, trigger}
-  const [toast, setToast] = useState("");        // transient "update is ready" notification
-
-  const showToast = useCallback((msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 6500);
-  }, []);
 
   // Fonts: load Inter + Newsreader only for this surface (the desktop App ships
   // its own type), injected once so the design tokens resolve.
@@ -124,9 +118,7 @@ export default function BookApp() {
 
   const openDetail = (row) => setRoute({ name: "detail", row });
   const openDraft = (d) => setDraftFor(d);
-  // Always refresh the Today feed when landing on it, so a just-scanned update
-  // shows up no matter how the user navigated back (nav tap or Done button).
-  const goTab = (t) => { setRoute(null); setTab(t); if (t === "today") load(); };
+  const goTab = (t) => { setRoute(null); setTab(t); };
 
   // Which bottom-nav item reads as active.
   const activeNav = route?.name === "detail" ? "book"
@@ -149,19 +141,7 @@ export default function BookApp() {
   } else if (tab === "add") {
     screen = <AddScreen user={user}
                         onAccount={() => setRoute({ name: "account" })}
-                        onAdded={() => {
-                          // Demo: land on Today first, then let the new updates
-                          // "arrive" a beat later so it feels like live detection.
-                          if (user?.is_demo) {
-                            setRoute(null); setTab("today");
-                            setTimeout(() => {
-                              load();
-                              showToast("2 new updates · drafts ready");
-                            }, 1800);
-                          } else {
-                            goTab("today");
-                          }
-                        }} />;
+                        onAdded={() => { load(); goTab("book"); }} />;
   } else {
     screen = <TodayView feed={feed} err={err} user={user} onReload={load}
                         onAccount={() => setRoute({ name: "account" })}
@@ -172,20 +152,13 @@ export default function BookApp() {
     <div className="bk-root">
       <style>{BOOK_CSS}</style>
       <div className="bk-frame">
-        {/* Demo banner hidden during filming -- restore `user?.is_demo &&` to revert. */}
-        {false && user?.is_demo && (
+        {user?.is_demo && (
           <div className="bk-demobar">
             <span><b>Demo</b> · sample data. Sign in to use it for real, or skip the tour.</span>
             <button className="bk-demobar-cta" onClick={signInWithLinkedIn}>Sign in</button>
           </div>
         )}
         {screen}
-        {toast && (
-          <div className="bk-toast" role="status">
-            <span className="bk-toast-dot" />
-            <span className="bk-toast-msg">{toast}</span>
-          </div>
-        )}
         <nav className="bk-nav">
           <button className={"bk-nav-item" + (activeNav === "today" ? " on" : "")}
                   onClick={() => goTab("today")}>
@@ -248,8 +221,7 @@ function TodayView({ feed, err, user, onReload, onAccount, onOpen, onDraft }) {
           <SectionHead label="Updates" count={updates.length} />
           <div className="bk-group">
             {updates.map((u, i) => (
-              <div key={u.contact_id || u.name || `u${i}`}
-                   className={"bk-upd" + (_is_fresh(u.detected_at) ? " bk-upd--pop" : "")}>
+              <div key={`u${i}`} className="bk-upd">
                 <Row onOpen={u.contact_id ? () => onOpen(u) : null}>
                   <div className="bk-main">
                     <p className="bk-name">{u.name}{u.vip && <Star size={13} className="bk-star" fill="currentColor" />}
@@ -537,13 +509,6 @@ function DraftPanel({ detail, isDemo = false }) {
     try { await navigator.clipboard.writeText(body); setDone("Copied");
           setTimeout(() => setDone(""), 1600); } catch {}
   };
-  // Demo: seeded contacts can't truly receive a message, so simulate a send for
-  // filming (Send -> Sending… -> Sent ✓) without a network call.
-  const sendDemo = () => {
-    if (working) return;
-    setWorking("send"); setErr(""); setDone("");
-    setTimeout(() => { setDone("Sent"); setWorking(""); }, 850);
-  };
   const sendNow = async () => {
     if (!canSend || working) return;
     setWorking("send"); setErr(""); setDone("");
@@ -591,11 +556,10 @@ function DraftPanel({ detail, isDemo = false }) {
             </div>
           )}
           <div className="bk-actions">
-            {(canSend || isDemo) ? (
-              <button className="bk-btn bk-btn--primary" disabled={!!working}
-                      onClick={isDemo ? sendDemo : sendNow}>
+            {canSend ? (
+              <button className="bk-btn bk-btn--primary" disabled={!!working} onClick={sendNow}>
                 <Send size={13} style={{ marginRight: 5, verticalAlign: -1 }} />
-                {working === "send" ? "Sending…" : "Send message"}
+                {working === "send" ? "Sending…" : "Send"}
               </button>
             ) : isDemo ? (
               <button className="bk-btn bk-btn--primary" onClick={signInWithLinkedIn}>
@@ -774,7 +738,6 @@ function AddScreen({ user, onAccount, onAdded }) {
                       onDone={() => { setResult(null); onAdded && onAdded(); }}
                       onCancel={() => setResult(null)}
                       canSend={!!user?.unipile_account_id}
-                      isDemo={!!user?.is_demo}
                       savedLink={(user && user.saved_send_link) || ""} />
         ) : (
           <>
@@ -807,7 +770,7 @@ function AddScreen({ user, onAccount, onAdded }) {
             </div>
 
             {event ? (
-              <CaptureScreen event={event} onResult={setResult} isDemo={!!user?.is_demo} />
+              <CaptureScreen event={event} onResult={setResult} />
             ) : (
               <div className="bk-scan">
                 <div className="bk-target"><QrCode size={42} /></div>
@@ -988,15 +951,6 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
           setTimeout(() => setCopied(false), 1600); } catch {}
   };
 
-  // Demo mode: the seeded contacts aren't real recipients, so a real send would
-  // error. Simulate a successful send so the demo shows the true UX (Send ->
-  // Sending… -> Sent ✓) for filming, without hitting the network.
-  const sendDemo = () => {
-    if (working) return;
-    setWorking("send"); setErr(""); setDone("");
-    setTimeout(() => { setDone("Sent"); setWorking(""); }, 850);
-  };
-
   const sendNow = async () => {
     if (!canSend || working) return;
     setWorking("send"); setErr(""); setDone("");
@@ -1084,11 +1038,11 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
             )}
 
             <div className="bk-sheet-actions">
-              {(canSend || isDemo) ? (
+              {canSend ? (
                 <button className="bk-btn bk-btn--primary bk-btn--block"
-                        disabled={!!working} onClick={isDemo ? sendDemo : sendNow}>
+                        disabled={!!working} onClick={sendNow}>
                   <Send size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
-                  {working === "send" ? "Sending…" : "Send message"}
+                  {working === "send" ? "Sending…" : "Send now"}
                 </button>
               ) : isDemo ? (
                 <button className="bk-btn bk-btn--primary bk-btn--block" onClick={signInWithLinkedIn}>
@@ -1192,15 +1146,6 @@ function _today_long() {
     return new Date().toLocaleDateString(undefined,
       { weekday: "long", month: "long", day: "numeric" });
   } catch { return ""; }
-}
-
-// Was this update just emitted (e.g. the demo's post-scan raise/birthday)? Used
-// to "pop" the new update cards in when switching from Add back to Today.
-function _is_fresh(iso, withinMs = 180000) {
-  if (!iso) return false;
-  const d = new Date(iso);
-  if (isNaN(d)) return false;
-  return (Date.now() - d.getTime()) < withinMs;
 }
 
 function _rel_time(iso) {
@@ -1378,25 +1323,6 @@ const BOOK_CSS = `
 .bk-root *{box-sizing:border-box;}
 .bk-frame{width:100%; max-width:430px; min-height:100dvh; background:var(--bg);
   display:flex; flex-direction:column; position:relative;}
-.bk-toast{position:fixed; left:50%; bottom:84px; transform:translateX(-50%);
-  z-index:120; display:flex; align-items:center; gap:9px; max-width:88%;
-  padding:11px 16px; border-radius:13px; background:rgba(17,21,28,.96); color:#fff;
-  font-size:13.5px; font-weight:600; box-shadow:0 10px 34px rgba(0,0,0,.28);
-  animation:bktoast .35s cubic-bezier(.2,.8,.2,1) both;}
-.bk-toast-dot{flex:none; width:9px; height:9px; border-radius:50%; background:#2fd27a;
-  box-shadow:0 0 0 4px rgba(47,210,122,.25);}
-.bk-toast-msg{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-@keyframes bktoast{from{opacity:0; transform:translate(-50%,14px);} to{opacity:1; transform:translate(-50%,0);}}
-/* fresh update card "pops" in when you switch from Add back to Today (demo):
-   slides up with a green highlight flash that fades, so the new update draws
-   the eye without disturbing the rest of the list. */
-.bk-upd--pop{animation:bkpop 1.1s cubic-bezier(.2,.85,.25,1) both; border-radius:12px;}
-@keyframes bkpop{
-  0%{opacity:0; transform:translateY(12px) scale(.985); background:rgba(47,210,122,.22);}
-  35%{opacity:1; transform:translateY(0) scale(1.012); background:rgba(47,210,122,.16);}
-  70%{transform:translateY(0) scale(1); background:rgba(47,210,122,.10);}
-  100%{opacity:1; transform:none; background:transparent;}
-}
 .bk-demobar{display:flex; align-items:center; justify-content:space-between; gap:10px;
   padding:8px 14px; background:var(--accent,#2563eb); color:#fff;
   font-size:12.5px; line-height:1.3; position:sticky; top:0; z-index:50;}

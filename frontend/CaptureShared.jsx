@@ -267,7 +267,6 @@ function InPersonAppInner() {
           event={event}
           result={result}
           canSend={!notConnected}
-          isDemo={!!user?.is_demo}
           savedLink={(user && user.saved_send_link) || ""}
           onbStepKey={onb.status === "active" ? (ONB_STEPS[onb.step]?.key || null) : null}
           onDone={() => { setResult(null); setTab("people"); }}
@@ -281,7 +280,7 @@ function InPersonAppInner() {
           onBack={() => setOpenCapture(null)}
         />
       ) : tab === "capture" ? (
-        <CaptureScreen event={event} onResult={(r) => setResult(r)} isDemo={!!user?.is_demo} />
+        <CaptureScreen event={event} onResult={(r) => setResult(r)} />
       ) : (
         <CapturesScreen event={event} onOpen={(c) => setOpenCapture(c)} />
       )}
@@ -477,7 +476,7 @@ function EventBar({ event, onPick, user, onSignOut, crmActive, onToggleCrm, onRe
 
 // ── capture screen (3 modes) ────────────────────────────────────────────────
 
-export function CaptureScreen({ event, onResult, isDemo = false }) {
+export function CaptureScreen({ event, onResult }) {
   const [mode, setMode] = useState("scan");   // "scan" | "paste" | "type"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -510,9 +509,7 @@ export function CaptureScreen({ event, onResult, isDemo = false }) {
 
       {err && <div className="ip-err"><AlertCircle size={14} /> {err}</div>}
 
-      {mode === "scan" && (isDemo
-        ? <DemoScanStage busy={busy} onUrl={(u) => doScan(u, "scan")} />
-        : <QrScanner busy={busy} onUrl={(u) => doScan(u, "scan")} />)}
+      {mode === "scan" && <QrScanner busy={busy} onUrl={(u) => doScan(u, "scan")} />}
       {mode === "paste" && <PasteLink busy={busy} onSubmit={(u) => doScan(u, "link")} />}
       {mode === "type" && (
         <TypeSearch busy={busy}
@@ -523,69 +520,6 @@ export function CaptureScreen({ event, onResult, isDemo = false }) {
     </div>
   );
 }
-
-// Simulated scan stage for the demo video. Starts with a faux "Allow camera"
-// permission prompt (you tap Allow on camera), then the camera "opens": a phone
-// slides up holding a LinkedIn QR, a scan line sweeps and locks on, then it
-// "captures" -- no real camera (so no shaky hands / real permission dialog).
-// Fires onUrl with a placeholder; the backend returns a polished demo persona.
-function DemoScanStage({ onUrl, busy }) {
-  const [phase, setPhase] = useState("permission");  // permission -> aim -> scan -> locked
-  const firedRef = useRef(false);
-  const timersRef = useRef([]);
-  useEffect(() => () => timersRef.current.forEach(clearTimeout), []);
-
-  const allow = () => {
-    if (phase !== "permission") return;
-    setPhase("aim");
-    // Hold on an empty viewfinder first (you're "aiming"), THEN the QR slides up.
-    const AIM = 1400;
-    const t0 = setTimeout(() => setPhase("scan"), AIM);
-    const t1 = setTimeout(() => setPhase("locked"), AIM + 1850);
-    const t2 = setTimeout(() => {
-      if (!firedRef.current) { firedRef.current = true; onUrl("https://www.linkedin.com/in/demo"); }
-    }, AIM + 2400);
-    timersRef.current = [t0, t1, t2];
-  };
-
-  const perm = phase === "permission";
-  const aim = phase === "aim";
-  const locked = phase === "locked";
-  return (
-    <div className="ip-cam ip-democam">
-      {!perm && !aim && (
-        <div className="ip-demoshot-wrap">
-          <img className="ip-demoshot" src="/demo-linkedin-qr.webp" alt=""
-               onError={(e) => { e.currentTarget.style.display = "none"; }} />
-        </div>
-      )}
-      {!perm && (
-        <div className={"ip-reticle ip-demoreticle" + (locked ? " ip-demoreticle--lock" : "")} />
-      )}
-      {phase === "scan" && <div className="ip-scanline" />}
-      {perm && (
-        <div className="ip-permwrap">
-          <div className="ip-permcard">
-            <div className="ip-permicon"><Camera size={22} /></div>
-            <div className="ip-permtitle">“surplus” Would Like to Access the Camera</div>
-            <div className="ip-permmsg">To scan a LinkedIn QR and add people you meet.</div>
-            <div className="ip-permbtns">
-              <button className="ip-permbtn" onClick={allow}>Don’t Allow</button>
-              <button className="ip-permbtn ip-permbtn--go" onClick={allow}>Allow</button>
-            </div>
-          </div>
-        </div>
-      )}
-      <div className="ip-camstatus">
-        {perm ? "Tap Allow to scan their QR"
-          : busy || locked ? <><Check size={14} /> Got it, saving…</>
-            : aim ? "Point at their LinkedIn QR"
-              : <><Loader2 className="spin" size={14} /> Scanning QR…</>}
-      </div>
-    </div>
-  );
-}
-
 
 // QR mode : getUserMedia + jsQR. Decodes any QR; we only accept LinkedIn
 // profile URLs (the backend's normalize_linkedin_url is the source of truth,
@@ -617,7 +551,6 @@ function QrScanner({ onUrl, busy }) {
           await v.play().catch(() => {});
         }
         setStatus("scanning");
-        armDemoAutoFire();
         tick();
       } catch (e) {
         setStatus(e?.name === "NotAllowedError" ? "denied"
@@ -755,7 +688,7 @@ function TypeSearch({ onConfirm, busy }) {
 
 // ── scan result : draft + send / save ────────────────────────────────────────
 
-export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink = "", onbStepKey = null, isDemo = false }) {
+export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink = "", onbStepKey = null }) {
   const p = result.prospect || {};
   const [draftNote, setDraftNote] = useState(result.draft_note || "");
   const [draftMsg, setDraftMsg] = useState(result.draft_message || "");
@@ -769,7 +702,6 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
   const [busy, setBusy] = useState("");      // "" | "send" | "save" | "personalize" | "nonote"
   const [err, setErr] = useState("");
   const [signinPrompt, setSigninPrompt] = useState(false);  // demo: gate Send -> sign in
-  const [demoSent, setDemoSent] = useState(false);          // demo: simulated connect success
   // The draft on screen was composed BEFORE the fun fact was typed. Track
   // whether the saved fun fact still matches what produced the current draft.
   const [draftFromNote, setDraftFromNote] = useState(p.note || "");
@@ -779,9 +711,7 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
   const [draftEdited, setDraftEdited] = useState(false);
   // Capture stays minimal for mobile : the optional extras (note, private memo,
   // first message, contact type, next step) all hide behind a disclosure.
-  // Demo: expand by default so the personalized First message is visible and
-  // visibly updates as the host types "what you talked about" (for filming).
-  const [showMore, setShowMore] = useState(isDemo);
+  const [showMore, setShowMore] = useState(false);
   // The classify / attach-link onboarding coachmarks anchor to controls that
   // live behind the "Add more" disclosure, so auto-expand it while the tour is
   // pointing at them (otherwise the popover would have nothing to anchor to).
@@ -876,15 +806,6 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
       }
       setErr(e.message || "Send failed"); setBusy("");
     }
-  };
-
-  // Demo: the captured person isn't a real LinkedIn recipient, so simulate a
-  // genuine connection-request send for filming (Connecting… -> Sent ✓) without
-  // hitting the network or bouncing to sign-in.
-  const sendDemo = () => {
-    if (busy) return;
-    setErr(""); setBusy("send");
-    setTimeout(() => { setBusy(""); setDemoSent(true); }, 1000);
   };
 
   return (
@@ -1004,22 +925,11 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
 
       {/* Connect is the one obvious action. "Save for later" and the bare-invite
           variant are secondary. The first message is drafted later in People. */}
-      {demoSent ? (
-        <div className="ip-actions">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center",
-                        gap: 8, padding: "12px 14px", marginBottom: 10, borderRadius: 12,
-                        background: "rgba(34,197,94,.10)", color: "#15803d",
-                        font: "600 14px Inter, system-ui, sans-serif" }}>
-            <Check size={18} /> Connection request sent to {p.name || "them"}
-          </div>
-          <button className="ip-btn primary lg" onClick={onDone}>Done</button>
-        </div>
-      ) : (
-        <div className="ip-actions">
+      <div className="ip-actions">
         <button data-onb="send" className="ip-btn primary lg"
-                onClick={() => (canSend ? send(false) : (isDemo ? sendDemo() : setSigninPrompt(true)))}
+                onClick={() => (canSend ? send(false) : setSigninPrompt(true))}
                 disabled={!!busy}
-                title={canSend || isDemo ? "" : "Sign in to send"}>
+                title={canSend ? "" : "Sign in to send"}>
           {busy === "send" ? <Loader2 className="spin" size={18} />
             : <><Send size={18} /> Connect on LinkedIn</>}
         </button>
@@ -1029,7 +939,7 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
               : <><Bookmark size={15} /> Save for later</>}
           </button>
           <button className="ip-btn ghost sm"
-                  onClick={() => (canSend ? send(true) : (isDemo ? sendDemo() : setSigninPrompt(true)))}
+                  onClick={() => (canSend ? send(true) : setSigninPrompt(true))}
                   disabled={!!busy}
                   title={canSend ? "Send a bare invite; the message goes out once accepted"
                                 : "Sign in to send"}>
@@ -1037,9 +947,8 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
               : "Connect, no note"}
           </button>
         </div>
-        </div>
-      )}
-      {!canSend && !isDemo && <div className="ip-dim ip-center">Connect LinkedIn to send now.</div>}
+      </div>
+      {!canSend && <div className="ip-dim ip-center">Connect LinkedIn to send now.</div>}
       <div className="ip-dim ip-center ip-laterhint">
         You can also edit any of this later from <b>Relationship</b>.
       </div>
@@ -1736,47 +1645,6 @@ button.ip-microw-hint { cursor:pointer; }
   display:flex; flex-direction:column; gap:8px; align-items:center; margin-top:14px;
   border:1px dashed var(--ip-line-2); border-radius:14px; }
 .ip-camfallback p { margin:0; }
-
-/* demo simulated scan (filming): same camera viewfinder as the real scanner, but
-   their LinkedIn QR card screenshot slides up + zooms in like a natural scan. */
-.ip-democam { background:linear-gradient(180deg,#ffffff,#eaeef4); }
-.ip-demoshot-wrap { position:absolute; inset:0; display:flex; align-items:center;
-  justify-content:center; overflow:hidden; }
-.ip-demoshot { height:108%; width:auto; max-width:none; display:block;
-  border-radius:14px; box-shadow:0 8px 30px rgba(0,0,0,.4);
-  transform-origin:center 42%;  /* zoom toward the QR, which sits ~mid-card */
-  animation:ipshotscan 2s cubic-bezier(.2,.8,.2,1) both; }
-@keyframes ipshotscan {
-  0%   { transform:translateY(118%) scale(.96); }
-  45%  { transform:translateY(0)    scale(1); }      /* slid up into frame */
-  100% { transform:translateY(-3%)  scale(1.18); }   /* zoom in on the QR */
-}
-.ip-scanline { position:absolute; left:20%; right:20%; height:2px; border-radius:2px;
-  background:linear-gradient(90deg,transparent,#2fd27a,transparent);
-  box-shadow:0 0 14px rgba(47,210,122,.85); animation:ipscanmove 1.4s ease-in-out .5s both; }
-@keyframes ipscanmove { 0%{ top:30%; opacity:0;} 15%{ opacity:1;} 85%{ opacity:1;} 100%{ top:70%; opacity:0;} }
-/* light viewfinder: darker reticle border so it reads on white, no dark vignette */
-.ip-demoreticle { border-color:rgba(40,55,80,.32); box-shadow:none;
-  transition:border-color .3s ease, box-shadow .3s ease; }
-.ip-demoreticle--lock { border-color:#2fd27a; box-shadow:0 0 22px rgba(47,210,122,.55); }
-/* faux iOS camera-permission alert (the "enable camera" pop-up for the demo) */
-.ip-permwrap { position:absolute; inset:0; display:flex; align-items:center;
-  justify-content:center; background:rgba(0,0,0,.45); backdrop-filter:blur(2px); }
-.ip-permcard { width:74%; max-width:280px; background:rgba(248,248,248,.98);
-  border-radius:16px; padding:18px 16px 0; text-align:center; overflow:hidden;
-  box-shadow:0 18px 50px rgba(0,0,0,.4); animation:ippermin .25s ease both; }
-@keyframes ippermin { from{ opacity:0; transform:scale(.92);} to{ opacity:1; transform:scale(1);} }
-.ip-permicon { width:46px; height:46px; margin:2px auto 10px; border-radius:50%;
-  display:flex; align-items:center; justify-content:center; color:#fff;
-  background:linear-gradient(160deg,#3b82f6,#2f6df6); }
-.ip-permtitle { font-size:15px; font-weight:700; color:#111; line-height:1.3; }
-.ip-permmsg { font-size:12.5px; color:#555; margin:6px 0 14px; line-height:1.35; }
-.ip-permbtns { display:flex; margin:0 -16px; border-top:.5px solid rgba(0,0,0,.14); }
-.ip-permbtn { flex:1; padding:13px 6px; font-size:15px; color:#2f6df6;
-  background:none; border:none; font-family:var(--ip-font-ui); cursor:pointer; }
-.ip-permbtn:first-child { border-right:.5px solid rgba(0,0,0,.14); }
-.ip-permbtn--go { font-weight:700; }
-.ip-permbtn:active { background:rgba(0,0,0,.05); }
 
 /* candidates */
 .ip-cands { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
