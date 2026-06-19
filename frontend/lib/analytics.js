@@ -38,6 +38,10 @@ export function initAnalytics() {
     disable_session_recording: false,
     persistence: "localStorage+cookie",
   });
+  // Publish a synchronous tracking hook so surfaces that don't statically import
+  // this module (e.g. BookApp, to keep PostHog off their critical bundle) can
+  // fire events at click time via window.__surplusTrack without an async import.
+  try { window.__surplusTrack = capture; } catch { /* no-op */ }
 }
 
 // Link events to the signed-in user so you can segment demo vs real traffic.

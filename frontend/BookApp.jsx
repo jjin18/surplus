@@ -32,7 +32,20 @@ import { StageChip } from "./components/ContactsPage.jsx";
 // Demo → real conversion: send the visitor into the connect-first LinkedIn
 // flow (same entry the send-gate uses). The callback returns them to the real
 // event.surpluslayer.com app with onboarding armed.
-function signInWithLinkedIn() {
+// Best-effort analytics. `lib/analytics.js` (lazy-loaded on idle by
+// main-inperson.jsx) publishes its `capture` fn on window.__surplusTrack after
+// init, so we call it synchronously here WITHOUT statically importing analytics
+// (keeps PostHog off BookApp's critical bundle). No-ops before init / never
+// throws, so it can't break or block anything.
+function track(event, props) {
+  try { window.__surplusTrack && window.__surplusTrack(event, props); } catch { /* no-op */ }
+}
+
+function signInWithLinkedIn(source) {
+  // `source` labels which conversion CTA was tapped (banner / tour_final /
+  // tour_skip / draft_send / ...). When called as a bare onClick handler the
+  // arg is a DOM event, so only strings count.
+  track("demo_signin_click", { source: typeof source === "string" ? source : "unknown" });
   window.location.href = "/api/auth/linkedin/start-redirect";
 }
 
@@ -112,6 +125,14 @@ export default function BookApp() {
   };
   const onbClose = () => setOnbOn(false);
 
+  // Conversion funnel denominator: fire once when a demo visitor lands, so the
+  // `demo_signin_click` events (by source) can be measured against it.
+  useEffect(() => {
+    if (user && typeof user === "object" && user.is_demo) {
+      track("demo_signin_shown", { surface: "book" });
+    }
+  }, [user && typeof user === "object" ? user.is_demo : false]);
+
   // Signed out → the same LinkedIn sign-in bounce as the event surface (this
   // is the shell event hosts serve, so it must gate, not error).
   if (user === undefined) return <SignInBounce />;
@@ -155,7 +176,7 @@ export default function BookApp() {
         {user?.is_demo && (
           <div className="bk-demobar">
             <span><b>Demo</b> · sample data. Sign in to use it for real, or skip the tour.</span>
-            <button className="bk-demobar-cta" data-onb="signin" onClick={signInWithLinkedIn}>Sign in</button>
+            <button className="bk-demobar-cta" data-onb="signin" onClick={() => signInWithLinkedIn("banner")}>Sign in</button>
           </div>
         )}
         {screen}
@@ -564,7 +585,7 @@ function DraftPanel({ detail, isDemo = false }) {
                 {working === "send" ? "Sending…" : "Send"}
               </button>
             ) : isDemo ? (
-              <button className="bk-btn bk-btn--primary" onClick={signInWithLinkedIn}>
+              <button className="bk-btn bk-btn--primary" onClick={() => signInWithLinkedIn("draft_send")}>
                 <Send size={13} style={{ marginRight: 5, verticalAlign: -1 }} />
                 Sign in to send
               </button>
@@ -1048,7 +1069,7 @@ function DraftSheet({ draft, onClose, isDemo = false }) {
                   {working === "send" ? "Sending…" : "Send now"}
                 </button>
               ) : isDemo ? (
-                <button className="bk-btn bk-btn--primary bk-btn--block" onClick={signInWithLinkedIn}>
+                <button className="bk-btn bk-btn--primary bk-btn--block" onClick={() => signInWithLinkedIn("draft_send")}>
                   <Send size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
                   Sign in to send
                 </button>
@@ -1270,7 +1291,7 @@ function BookOnboarding({ step, onGo, onClose }) {
   }, [selector]);
 
   const next = () => {
-    if (def.convert) { signInWithLinkedIn(); return; }  // final step = convert
+    if (def.convert) { signInWithLinkedIn("tour_final"); return; }  // final step = convert
     if (def.final) onClose(); else onGo(idx + 1);
   };
   const back = () => { if (idx > 0) onGo(idx - 1); };
@@ -1298,7 +1319,7 @@ function BookOnboarding({ step, onGo, onClose }) {
               visitor straight into LinkedIn sign-in to use it for real. The
               corner ✕ remains a plain dismiss for anyone who just wants to keep
               poking around the demo. */}
-          <button className="bk-onb-skip" onClick={signInWithLinkedIn}>
+          <button className="bk-onb-skip" onClick={() => signInWithLinkedIn("tour_skip")}>
             Skip tour &amp; sign in
           </button>
           <div className="bk-onb-nav">

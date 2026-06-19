@@ -968,7 +968,10 @@ export function ScanResult({ event, result, onDone, onCancel, canSend, savedLink
               Your draft for {p.name || "this contact"} is saved. Connect your LinkedIn
               account to send it for real.
             </p>
-            <button onClick={() => { window.location.href = "/api/auth/linkedin/start-redirect"; }}
+            <button onClick={() => {
+                try { window.__surplusTrack && window.__surplusTrack("demo_signin_click", { source: "capture_connect" }); } catch { /* no-op */ }
+                window.location.href = "/api/auth/linkedin/start-redirect";
+              }}
               style={{ display: "inline-flex", alignItems: "center", justifyContent: "center",
                 gap: 8, width: "100%", border: 0, borderRadius: 999, padding: "12px 18px",
                 background: "#0a66c2", color: "#fff", font: "600 15px Inter, system-ui, sans-serif",
