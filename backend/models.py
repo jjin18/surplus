@@ -940,6 +940,9 @@ class Contact(Base):
     # as the last-seen company (so a company change updates it in place).
     headline: Mapped[Optional[str]] = mapped_column(String(300), default=None)
     title: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    # Their LinkedIn About / summary, captured from the same profile scrape that
+    # detects job changes. Gives drafts a real "what they do" to reference.
+    about: Mapped[Optional[str]] = mapped_column(Text, default=None)
     # JSON list of post ids already surfaced, so we alert on each new post once.
     seen_post_ids: Mapped[str] = mapped_column(Text, default="[]")
     # Last successful poll (NULL = never polled -> first poll seeds silently).

@@ -134,6 +134,11 @@ def apply_profile(db, contact: models.Contact, profile: dict) -> list[dict]:
                    or "").strip()
     new_title = (profile.get("title") or profile.get("position")
                  or profile.get("headline") or "").strip()
+    # Persist their About on every scrape (baseline + ongoing) so drafts can
+    # reference what they actually do. Not a "change" event, just kept current.
+    new_about = (profile.get("about") or "").strip()
+    if new_about:
+        contact.about = new_about[:2000]
     changes: list[dict] = []
     # Baseline-first: the first scrape adopts the current profile as the baseline
     # SILENTLY -- everyone starts at their "base level", so the initial snapshot is
