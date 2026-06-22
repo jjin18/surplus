@@ -245,7 +245,7 @@ function TodayView({ feed, err, user, onReload, onAccount, onOpen, onDraft }) {
               <div key={`u${i}`} className="bk-upd">
                 <Row onOpen={u.contact_id ? () => onOpen(u) : null}>
                   <div className="bk-main">
-                    <p className="bk-name">{u.name}{u.vip && <Star size={13} className="bk-star" fill="currentColor" />}
+                    <p className="bk-name">{u.name}<StarToggle contactId={u.contact_id} vip={u.vip} />
                       {u.has_draft && <span className="bk-readytag">Draft ready</span>}</p>
                     <p className="bk-sub">{u.headline}</p>
                   </div>
@@ -270,7 +270,7 @@ function TodayView({ feed, err, user, onReload, onAccount, onOpen, onDraft }) {
             {needs.map((n, i) => (
               <Row key={`n${i}`} onOpen={n.contact_id ? () => onOpen(n) : null}>
                 <div className="bk-main">
-                  <p className="bk-name">{n.name}{n.vip && <Star size={13} className="bk-star" fill="currentColor" />}</p>
+                  <p className="bk-name">{n.name}<StarToggle contactId={n.contact_id} vip={n.vip} /></p>
                   <p className="bk-sub">{n.reason}</p>
                 </div>
                 <DraftLink onClick={() => onDraft({ name: n.name, contact_id: n.contact_id, trigger: n.trigger || n.reason })} />
@@ -382,7 +382,7 @@ function BookView({ feed, err, user, onReload, onAccount, onOpen, onDraft }) {
             {visible.map((r, i) => (
               <Row key={i} onOpen={() => onOpen(r)}>
                 <div className="bk-main">
-                  <p className="bk-name">{r.name}{r.vip && <Star size={13} className="bk-star" fill="currentColor" />}</p>
+                  <p className="bk-name">{r.name}<StarToggle contactId={r.contact_id} vip={r.vip} /></p>
                   <p className="bk-sub">{[r.title, r.firm].filter(Boolean).join(" · ")}</p>
                   <p className="bk-meta">{_book_meta(r)}</p>
                 </div>
@@ -1097,6 +1097,30 @@ function Row({ children, onOpen }) {
   );
 }
 
+// Inline star toggle for list rows. ⭐ = "monitor closely" -> the updates engine
+// checks starred contacts DAILY (others weekly). stopPropagation so tapping the
+// star doesn't open the row. Optimistic; reverts on API failure (a demo-book
+// slug isn't a real contact, so its star just won't persist -- that's fine).
+function StarToggle({ contactId, vip }) {
+  const [on, setOn] = useState(!!vip);
+  const numeric = /^\d+$/.test(String(contactId || ""));
+  const toggle = (e) => {
+    e.stopPropagation();
+    const next = !on;
+    setOn(next);
+    if (numeric) api.starContact(contactId, next).catch(() => setOn(!next));
+  };
+  return (
+    <button type="button" className="bk-startoggle" onClick={toggle}
+            aria-label={on ? "Unstar" : "Star to monitor closely"}
+            title={on ? "Starred — checked daily for updates"
+                      : "Star to monitor closely (checked daily)"}>
+      <Star size={13} className="bk-star" fill={on ? "currentColor" : "none"}
+            style={{ opacity: on ? 1 : 0.4 }} />
+    </button>
+  );
+}
+
 function SectionHead({ label, count }) {
   return (
     <div className="bk-sec">
@@ -1442,6 +1466,9 @@ const BOOK_CSS = `
 .bk-aside{text-align:right; white-space:nowrap; display:flex; flex-direction:column; align-items:flex-end; gap:3px; flex:none;}
 .bk-time{font-size:11px; color:var(--faint); margin:0;}
 .bk-star{color:var(--gold); flex:none;}
+.bk-startoggle{border:0; background:none; cursor:pointer; padding:0 0 0 6px;
+  vertical-align:middle; line-height:0; flex:none;}
+.bk-startoggle:hover .bk-star{opacity:1 !important;}
 .bk-draft{font-size:12px; color:var(--accent); cursor:pointer; white-space:nowrap; border:0;
   background:none; font-family:var(--font-ui); padding:0;}
 .bk-empty{padding:18px 14px; text-align:center; color:var(--faint); font-size:13px;}

@@ -429,6 +429,27 @@ def set_contact_star(
     contact = _owned_contact(db, contact_id, user)
     contact.vip = (not contact.vip) if body.vip is None else bool(body.vip)
     db.commit()
+    # On star (not unstar), kick a one-off update check in the background so
+    # close-monitoring starts now instead of waiting for the next sweep. Best
+    # effort, its own session; never blocks or fails the toggle.
+    if contact.vip and (contact.linkedin_url or "").strip():
+        import threading
+
+        def _kick(cid: int):
+            from ..db import SessionLocal
+            from ..agents.updates_engine import scrape_contact
+            sdb = SessionLocal()
+            try:
+                c = sdb.get(models.Contact, cid)
+                if c is not None:
+                    print(f"[star] kicked scrape for contact={cid}: "
+                          f"{scrape_contact(sdb, c)}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[star] kick failed contact={cid}: {exc}", flush=True)
+            finally:
+                sdb.close()
+
+        threading.Thread(target=_kick, args=(contact_id,), daemon=True).start()
     return {"contact_id": contact_id, "vip": contact.vip}
 
 

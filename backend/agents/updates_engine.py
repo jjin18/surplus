@@ -258,6 +258,30 @@ def _brightdata_enabled() -> bool:
         return False
 
 
+def scrape_contact(db, contact) -> dict:
+    """Kick ONE contact's update check now (e.g. right after the host stars them),
+    so close-monitoring/baseline starts immediately instead of at the next sweep.
+    Bright Data primary, Exa fallback; bounded to this one contact; fail-soft."""
+    url = (getattr(contact, "linkedin_url", "") or "").strip()
+    if _brightdata_enabled() and url:
+        from ..providers import brightdata
+        try:
+            if brightdata.trigger_updates([url]):
+                contact.watched_at = _now()
+                db.commit()
+                return {"mode": "brightdata", "contact_id": contact.id}
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        for _ in updates_watch.find_updates(db, contact):
+            pass
+        contact.watched_at = _now()
+        db.commit()
+        return {"mode": "exa", "contact_id": contact.id}
+    except Exception as exc:  # noqa: BLE001
+        return {"mode": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+
 def run_sweep(db, *, user_id: int | None = None, limit: int = 40) -> dict:
     """One scheduled pass. Bright Data primary (async -> trigger now, results
     arrive via webhook), Exa fallback (sync) when Bright Data isn't available.
