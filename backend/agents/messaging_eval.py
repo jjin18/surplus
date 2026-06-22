@@ -54,7 +54,9 @@ _FORMAL_VOICE = [
 def _vb(samples: list[str]) -> str:
     if not samples:
         return ""
-    return (voice.render_voice_profile_block(voice.build_host_voice_profile(samples))
+    # V1: the richer TwinVoice profile (surface + LLM-distilled tone/structure/
+    # lexical traits + guardrails) followed by the ground-truth examples.
+    return (voice.render_voice_profile_block(voice.build_voice_profile(samples))
             + voice.build_style_examples_block(samples))
 
 

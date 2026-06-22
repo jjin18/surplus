@@ -292,6 +292,96 @@ def _most_common(items: list[str]) -> Optional[str]:
     return max(dict.fromkeys(items), key=items.count)
 
 
+# ── TwinVoice V1: rich voice profile (mindset + linguistic) ──────────────────
+# The deterministic profile above captures SURFACE style (greeting, length,
+# emoji). TwinVoice's insight is that good voice is more than surface: it also
+# preserves intent + factual grounding (mindset coherence) and the user's actual
+# tone / phrasing / structure (linguistic expression). This layer adds:
+#   - static GUARDRAILS (avoid_rules + context_rules) — the mindset-coherence
+#     reminders, no model needed; and
+#   - an OPTIONAL LLM-derived trait set (style_summary / tone_rules /
+#     structure_rules / lexical_patterns) distilled once from the examples.
+# Everything is best-effort and cached; with no key or no examples it degrades to
+# the deterministic profile, so existing syncs/admin/env examples keep working.
+
+# Mindset-coherence + anti-generic guardrails (static; apply to every host).
+VOICE_AVOID_RULES = [
+    "em dashes or en dashes (use a comma, a period, or restructure)",
+    "generic corporate or salesy phrasing",
+    "fake familiarity or invented shared history",
+    "long throat-clearing intros ('I hope this finds you well', 'I wanted to reach out')",
+    "overstating interest, traction, familiarity, or how firm a next step is",
+]
+VOICE_CONTEXT_RULES = [
+    "preserve the user's actual intent and the goal of the message",
+    "use only the facts and relationship context provided; invent nothing",
+    "keep the ask proportional to the real relationship stage",
+]
+
+_TRAITS_SYSTEM = (
+    "You profile a person's writing voice from real messages they sent, so another "
+    "system can write NEW messages that sound like them. Capture how they actually "
+    "write, not how a generic professional writes. Return ONLY JSON: "
+    "{\"style_summary\":\"<=25 words on their overall voice\","
+    "\"tone_rules\":[\"...\"],\"structure_rules\":[\"how they organize a message: "
+    "length, openers, sign-offs, paragraphing\"],"
+    "\"lexical_patterns\":[\"recurring words/phrases/punctuation they actually use\"]}"
+    " Keep each list to 2-4 short, concrete, imitable rules. No invented traits."
+)
+
+
+def _llm_voice_traits(examples: list[str]) -> Optional[dict]:
+    """Distil tone/structure/lexical traits from real sent messages via one LLM
+    call. Best-effort: returns None on no key / bad output / any error, so the
+    caller falls back to the deterministic profile. Lazy import avoids a cycle."""
+    examples = [e.strip() for e in (examples or []) if e and e.strip()]
+    if not examples:
+        return None
+    try:
+        from .book import _llm_json
+        user = ("Messages this person actually sent:\n"
+                + "\n".join(f"- {e}" for e in examples[:8]))
+        out = _llm_json(_TRAITS_SYSTEM, user, max_tokens=320)
+    except Exception:  # noqa: BLE001 - voice profiling must never break a draft
+        return None
+    if not isinstance(out, dict):
+        return None
+
+    # Scrub any dash the model slips into the PROFILE text, so the rendered block
+    # can't seed an em dash into the message (the host's standing no-dash rule).
+    def _nd(s: str) -> str:
+        return re.sub(r"\s*[—–‒―−]\s*", ", ", str(s)).strip()
+
+    def _lst(v):
+        return [_nd(x) for x in v if str(x).strip()][:4] if isinstance(v, list) else []
+    summ = _nd(out.get("style_summary") or "")
+    traits = {"style_summary": summ,
+              "tone_rules": _lst(out.get("tone_rules")),
+              "structure_rules": _lst(out.get("structure_rules")),
+              "lexical_patterns": _lst(out.get("lexical_patterns"))}
+    # Only return if the model gave us something usable.
+    return traits if (summ or any(traits[k] for k in
+                      ("tone_rules", "structure_rules", "lexical_patterns"))) else None
+
+
+def build_voice_profile(examples: list[str], *, use_llm: bool = True) -> Optional[dict]:
+    """The TwinVoice V1 profile: the deterministic surface profile merged with the
+    static guardrails and (best-effort) the LLM-distilled tone/structure/lexical
+    traits. Returns None only when there are no examples. Drop-in superset of
+    `build_host_voice_profile` -- callers can keep using either."""
+    examples = [e.strip() for e in (examples or []) if e and e.strip()]
+    if not examples:
+        return None
+    prof = build_host_voice_profile(examples) or {}
+    prof["avoid_rules"] = list(VOICE_AVOID_RULES)
+    prof["context_rules"] = list(VOICE_CONTEXT_RULES)
+    if use_llm:
+        traits = _llm_voice_traits(examples)
+        if traits:
+            prof.update(traits)
+    return prof
+
+
 # ── Contact register detection ────────────────────────────────────────────────
 # The host profile fixes the host's IDENTITY (greeting habit, emoji, sign-off).
 # Register is a separate, orthogonal axis: how formal THIS reply should be, which
@@ -400,8 +490,18 @@ def render_voice_profile_block(profile: Optional[dict]) -> str:
              "these as defaults; the style_examples below are the ground truth "
              "if they ever disagree."]
 
-    lines.append(f"- Typical length: ~{profile['avg_words']} words "
-                 f"({profile['length_band']}). Stay close to this.")
+    # TwinVoice rich traits (present only on a build_voice_profile result) —
+    # the linguistic-expression layer: how they actually sound / phrase / shape.
+    if profile.get("style_summary"):
+        lines.append(f"- Voice in one line: {profile['style_summary']}")
+    for label, key in (("Tone", "tone_rules"), ("Structure", "structure_rules"),
+                       ("Phrasing", "lexical_patterns")):
+        vals = profile.get(key) or []
+        if vals:
+            lines.append(f"- {label}: " + "; ".join(vals))
+
+    lines.append(f"- Typical length: ~{profile.get('avg_words', 0)} words "
+                 f"({profile.get('length_band', 'short')}). Stay close to this.")
 
     if profile.get("greeting"):
         lines.append(f"- Greeting: usually opens with \"{profile['greeting'].title()}\" "
@@ -425,7 +525,10 @@ def render_voice_profile_block(profile: Optional[dict]) -> str:
     elif excl == "rare":
         lines.append("- Punctuation: measured, sparing with exclamation points.")
 
-    lines.append(f"- Overall tone: {profile['formality']}.")
+    lines.append(f"- Overall tone: {profile.get('formality', 'neutral')}.")
+    avoid = profile.get("avoid_rules") or []
+    if avoid:
+        lines.append("- Avoid: " + "; ".join(avoid) + ".")
     lines.append("</host_voice_profile>")
     return "\n".join(lines)
 

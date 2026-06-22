@@ -93,12 +93,14 @@ def sync_host_voice(user, provider) -> None:
 
 def _cache_voice_profile(user) -> None:
     """Distil + cache the host's voice_profile from their current voice_examples
-    so the hot draft path skips the (cheap, deterministic) recompute. Stored as
-    {fingerprint, profile} keyed on the examples, so it self-invalidates when the
-    examples change (resolve_voice_profile_for_user checks the fingerprint)."""
+    so the hot draft path skips the recompute. Sync time is where we pay for the
+    richer TwinVoice profile (build_voice_profile = deterministic surface + static
+    guardrails + LLM-distilled tone/structure/lexical traits), so a draft never
+    pays an LLM voice call inline -- it reads this cache. Stored as {fingerprint,
+    profile} keyed on the examples, so it self-invalidates when they change."""
     from . import voice
     examples = voice.resolve_voice_examples_for_user(user)
-    profile = voice.build_host_voice_profile(examples)
+    profile = voice.build_voice_profile(examples)
     if profile:
         user.voice_profile = json.dumps(
             {"fingerprint": voice.fingerprint_examples(examples),
