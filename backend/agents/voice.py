@@ -368,9 +368,12 @@ def detect_register(texts: list[str]) -> Optional[str]:
 # Drafting guidance per detected contact register. Keyed so the brief can carry
 # both the label and a one-line instruction the model can act on directly.
 _REGISTER_GUIDANCE = {
-    "formal": ("the contact writes formally — keep the host's identity but meet "
-               "their register: no emoji, no slang, use a fuller greeting "
-               "(e.g. 'Hi {name},' not 'Hey'), and complete sentences."),
+    "formal": ("the contact writes formally, so MEET their register even if the "
+               "host's own style is casual: this overrides the casual voice cues. "
+               "No emoji, no slang, no exclamation points; open with a fuller "
+               "greeting ('Hi {name},' or 'Dear {name},', never 'Hey'/'yo'); "
+               "complete, measured sentences and a professional close. Keep the "
+               "host's warmth, but match the contact's level of formality."),
     "casual": ("the contact writes casually — the host's natural casual voice "
                "fits; no need to stiffen up."),
     "neutral": ("the contact writes in a neutral register — match it; let the "
