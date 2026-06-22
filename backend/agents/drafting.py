@@ -296,11 +296,12 @@ def _natural_action(ctx: dict) -> str:
                 f"it forward with a concrete next step")
     if facts.get("stage") in ("stale", "dormant", "cooling"):
         hook = facts.get("met_at")
-        anchor = (f"lead with the specific shared moment (you met at {hook})" if hook
-                  else "lead with a specific shared detail")
-        return (anchor + "; acknowledge the gap lightly and make ONE concrete "
-                "low-pressure offer. Name the real detail, never a generic 'lets "
-                "reconnect soon'")
+        anchor = (f"lead with the real shared moment (you met at {hook})" if hook
+                  else "lead with a specific shared detail you actually have")
+        return (anchor + "; acknowledge the gap lightly and make ONE simple "
+                "low-pressure offer (a coffee/catch-up). Do NOT invent or assume "
+                "what they're working on now or any update you weren't given; "
+                "never a generic 'lets reconnect soon'")
     return ""
 
 
@@ -372,13 +373,33 @@ def _user_prompt(ctx: dict, reason: str, channel: str, directive: str = "") -> s
     return "\n".join(lines) + "\n"
 
 
+# When the CONTACT writes formally, a casual host voice profile bleeds into the
+# draft and reads wrong (the pairwise eval showed formal contacts regressing).
+# For formal contacts, replace the casual style block with a professional-
+# adaptation instruction: keep the host's warmth, drop the casual tics.
+_FORMAL_VOICE_OVERRIDE = (
+    "\n(The host's usual style may be casual, but THIS contact writes formally, so "
+    "do NOT use casual tics here: no slang, no emoji, no double exclamations. "
+    "Write a warm but professional note, a fuller greeting ('Hi <name>,' or 'Dear "
+    "<name>,'), complete measured sentences. Keep the warmth, match the formality.)")
+
+
+def _voice_for_register(ctx: dict) -> str:
+    """The voice block to inject, adapted to the CONTACT's register. Formal
+    contacts get the professional-adaptation override instead of the (often
+    casual) host profile, so the draft doesn't get pulled out of register."""
+    if ctx.get("register") == "formal":
+        return _FORMAL_VOICE_OVERRIDE
+    return ctx.get("voice_block") or ""
+
+
 def compose_from_context(ctx: dict, reason: str, channel: str = "email",
                          directive: str = "") -> Optional[dict]:
     """The pure-LLM half: compose from a context dict (no DB), so it's safe to
     fan out across threads. Returns {"subject", "body"} or None on failure.
     `directive` is the host's free-form ask-bar instruction (shared across the
     batch); per-person facts keep each draft differentiated."""
-    system = _FOLLOWUP_SYSTEM + (ctx.get("voice_block") or "")
+    system = _FOLLOWUP_SYSTEM + _voice_for_register(ctx)
     user = _user_prompt(ctx, reason, channel, directive)
     out = _llm_json(system, user, max_tokens=500)
     if not out or not (out.get("body") or "").strip():
@@ -409,7 +430,7 @@ def stream_from_context(ctx: dict, reason: str, channel: str = "email",
     context dict (no DB), so the agent can build all contexts serially then fan
     out token streams across threads. Mirrors compose_from_context, streamed.
     `directive` is the host's free-form ask-bar instruction (shared)."""
-    system = _FOLLOWUP_STREAM_SYSTEM + (ctx.get("voice_block") or "")
+    system = _FOLLOWUP_STREAM_SYSTEM + _voice_for_register(ctx)
     user = _user_prompt(ctx, reason, channel, directive)
     yield from stream_text(system, user, max_tokens=500)
 

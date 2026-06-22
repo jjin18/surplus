@@ -51,13 +51,21 @@ _FORMAL_VOICE = [
 ]
 
 
+_VB_CACHE: dict = {}
+
+
 def _vb(samples: list[str]) -> str:
     if not samples:
         return ""
     # V1: the richer TwinVoice profile (surface + LLM-distilled tone/structure/
-    # lexical traits + guardrails) followed by the ground-truth examples.
-    return (voice.render_voice_profile_block(voice.build_voice_profile(samples))
-            + voice.build_style_examples_block(samples))
+    # lexical traits + guardrails) followed by the ground-truth examples. The
+    # profile build is an LLM call; cache per sample-set so a multi-run eval
+    # doesn't re-distill it every run (mirrors the prod sync-time cache).
+    key = tuple(samples)
+    if key not in _VB_CACHE:
+        _VB_CACHE[key] = (voice.render_voice_profile_block(voice.build_voice_profile(samples))
+                          + voice.build_style_examples_block(samples))
+    return _VB_CACHE[key]
 
 
 _CASES = [
