@@ -185,14 +185,11 @@ def normalize_profile(record: dict) -> dict:
             title = exp[0].get("title") or exp[0].get("position") or ""
     if not title:
         title = record.get("position") or record.get("title") or ""
-    about = (record.get("about") or record.get("summary")
-             or record.get("description") or "")
     return {
         "linkedin_url": record.get("url") or record.get("input_url") or record.get("linkedin_url"),
         "company": company,
         "title": title,
         "headline": record.get("headline") or title or "",
-        "about": (about or "").strip()[:2000],
     }
 
 

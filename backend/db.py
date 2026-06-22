@@ -145,7 +145,6 @@ def init_db() -> None:
         _migrate_contact_profile_baselined,
         _migrate_contact_preferred_channel,
         _migrate_user_is_demo,
-        _migrate_contact_about,
     ]
     for migration in migrations:
         try:
@@ -665,20 +664,6 @@ def _migrate_contact_preferred_channel() -> None:
         return
     with ENGINE.begin() as conn:
         conn.execute(text("ALTER TABLE contacts ADD COLUMN preferred_channel VARCHAR(20)"))
-
-
-def _migrate_contact_about() -> None:
-    """Add contacts.about (text, null). The contact's LinkedIn About/summary,
-    captured from the profile scrape, so drafts can reference what they do."""
-    from sqlalchemy import inspect, text
-    insp = inspect(ENGINE)
-    if "contacts" not in insp.get_table_names():
-        return
-    cols = {c["name"] for c in insp.get_columns("contacts")}
-    if "about" in cols:
-        return
-    with ENGINE.begin() as conn:
-        conn.execute(text("ALTER TABLE contacts ADD COLUMN about TEXT"))
 
 
 def _migrate_contact_profile_baselined() -> None:

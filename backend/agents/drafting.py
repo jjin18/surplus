@@ -214,11 +214,7 @@ def _relationship_facts(db, contact) -> dict:
         x = _clean(v)
         # "general" / "general networking" are enrichment placeholders, not signal.
         return "" if x.lower() in ("general", "general networking", "networking") else x
-    # Prefer the contact's real LinkedIn About (captured from the profile scrape),
-    # then the enriched works_on/bio.
-    about = (_real_about(getattr(contact, "about", None))
-             or _real_about(ident.get("works_on"))
-             or _real_about(ident.get("bio")))
+    about = _real_about(ident.get("works_on")) or _real_about(ident.get("bio"))
     return {
         "met_at": _clean(s.get("met_at")),               # event where they met
         "first_met_at": s.get("first_met_at"),           # datetime (oldest touch)
