@@ -116,37 +116,6 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _host_voice_examples(db, user_id: int) -> list[str]:
-    """Resolve the host's voice-matching examples, same source + order the
-    initial-message composer uses (agents/outreach._get_voice_examples), so a
-    follow-up sounds like the SAME person who sent the first DM:
-
-      1. User.voice_examples (JSON list, auto-synced from real LinkedIn sent
-         messages via live_enrich.sync_host_voice, or set via the admin endpoint)
-      2. OPERATOR_VOICE_EXAMPLES env var (JSON list) — legacy fallback
-      3. [] — no style guide, drafts fall back to generic-but-warm
-
-    Bad JSON anywhere is treated as empty so a typo can't break a run. Capped
-    at 8 to keep input tokens bounded (matches the composer's cap).
-
-    Thin wrapper over the shared voice layer (agents/voice.py) so the cold-DM
-    composer and this follow-up agent resolve voice identically."""
-    from .. import models
-    try:
-        user = db.get(models.User, user_id)
-    except Exception:  # noqa: BLE001 - keep the run alive on any lookup failure
-        user = None
-    return voice.resolve_voice_examples_for_user(user)
-
-
-def _voice_block(examples: list[str]) -> str:
-    """Format the host's past messages as a style primer, mirroring the
-    composer's <style_examples> block ('match their voice, not the content')
-    so the two surfaces speak in one consistent voice. Delegates to the shared
-    voice layer (agents/voice.py)."""
-    return voice.build_style_examples_block(examples)
-
-
 def _voice_context_block(db, user_id: int) -> str:
     """Full model-ready voice context for this host via the shared voice layer:
     the distilled <host_voice_profile> rules followed by the ground-truth
