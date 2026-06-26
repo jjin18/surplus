@@ -439,11 +439,11 @@ def test_inperson_copy_differs_from_cold_copy(db, user, monkeypatch):
     assert "vector DBs" not in cold.note
 
 
-def test_webhook_auto_dm_disabled_by_kill_switch(db, user, monkeypatch):
-    """KILL SWITCH: auto_dm_after_accept is hard-off, so _trigger_auto_dm is a
-    no-op : it returns None and logs nothing, so no unattended DM leaves the
-    host's LinkedIn on invite_accepted. When the kill switch is lifted, restore
-    the warm-copy assertions."""
+def test_webhook_auto_dm_fires_on_accept(db, user, monkeypatch):
+    """Post-accept auto-DM RESTORED: auto_dm_after_accept is on, so
+    _trigger_auto_dm fires the post-accept DM on invite_accepted. Under a
+    dry-run provider it queues (no real send) : returns dry_run=True /
+    dry_run_queued, so no live message leaves the host's LinkedIn in the test."""
     monkeypatch.setenv("OUTREACH_COMPOSE_DISABLE", "1")
     from backend.providers.unipile import UnipileProvider
     from backend.routes.webhooks import _trigger_auto_dm
@@ -457,8 +457,9 @@ def test_webhook_auto_dm_disabled_by_kill_switch(db, user, monkeypatch):
     db.add(p); db.commit()
 
     provider = UnipileProvider(dry_run=True, account_id="operator_acct")
-    assert _trigger_auto_dm(db, provider, p) is None
-    assert [o for o in p.outreach if o.state == "message_sent"] == []
+    res = _trigger_auto_dm(db, provider, p)
+    assert res is not None and res["dry_run"] is True
+    assert res["state"] in ("dry_run_queued", "message_sent")
 
 
 def test_route_and_send_warm_path_uses_send_message(db, user, monkeypatch):
@@ -600,11 +601,11 @@ def test_new_relation_matches_scan_prospect_fires_inperson_auto_dm(db, user, mon
     assert applied is True and prospect.id == p.id
     assert prospect.connection_status == "connected"
 
-    # KILL SWITCH: the accept still applies (status flips to connected) but the
-    # auto-DM no longer fires : no unattended message leaves the host's LinkedIn.
-    # When the kill switch is lifted, restore the message_sent + warm-copy checks.
-    assert _trigger_auto_dm(db, provider, prospect) is None
-    assert [o for o in prospect.outreach if o.state == "message_sent"] == []
+    # Post-accept auto-DM RESTORED: the accept applies (status -> connected) AND
+    # the auto-DM fires. Under a dry-run provider it queues (no real send).
+    res = _trigger_auto_dm(db, provider, prospect)
+    assert res is not None and res["dry_run"] is True
+    assert res["state"] in ("dry_run_queued", "message_sent")
 
 
 def test_unmatched_new_relation_fires_nothing(db, user):

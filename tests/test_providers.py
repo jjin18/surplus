@@ -254,11 +254,10 @@ def test_get_provider_defaults_to_dry_run(monkeypatch):
     p = get_provider()
     assert p.name == "unipile"
     assert p.dry_run is True
-    # KILL SWITCH (unipile.py:auto_dm_after_accept): post-accept auto-DM is
-    # deliberately hard-off — it used to fire an unattended DM from the
-    # host's LinkedIn on every invite_accepted. Pin the off state so a
-    # refactor can't silently re-enable it.
-    assert p.auto_dm_after_accept is False
+    # Post-accept auto-DM RESTORED (2026-06-24, host's request): fires an
+    # unattended DM from the host's LinkedIn on every invite_accepted. Pin the
+    # on state so a refactor can't silently re-disable it.
+    assert p.auto_dm_after_accept is True
 
 
 def test_dry_run_must_be_explicitly_disabled(monkeypatch):
