@@ -969,6 +969,52 @@ class Contact(Base):
     )
 
 
+class ContactFact(Base):
+    """One typed piece of context about a contact : the per-contact MEMORY that
+    any source (LinkedIn, WhatsApp, calendar, email, manual, enrichment) writes
+    into and the drafter reads from.
+
+    Generalizes the narrow last-seen-profile snapshot on Contact into arbitrary
+    `key`/`value` facts, each tagged with WHERE it came from (`source`) and how
+    much we trust it (`confidence`), plus an optional `due_date` so time-based
+    moments (a birthday, an upcoming trip) can fire a trigger when they come due.
+    Upsert-keyed on (contact_id, key, dedup_key) so a re-scrape updates a fact in
+    place instead of stacking duplicates. Owner-scoped via user_id like Contact.
+    """
+    __tablename__ = "contact_facts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
+    # Fact type, e.g. "birthday" | "based_in" | "interest" | "works_on" |
+    # "mutual" | "upcoming_travel". Free-form but conventional.
+    key: Mapped[str] = mapped_column(String(60), index=True)
+    # The value : plain text for simple facts, JSON-encoded for structured ones.
+    value: Mapped[str] = mapped_column(Text, default="")
+    # Provenance : "linkedin" | "whatsapp" | "calendar" | "granola" | "email" |
+    # "manual" | "enrichment". Lets the reader weigh + attribute it.
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    # Trust : "high" = the draft may assert it, "low" = optional color only
+    # (mirrors the drafting SELECT stage's confidence gate; never fabricate).
+    confidence: Mapped[str] = mapped_column(String(10), default="high")
+    observed_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    # Time-trigger hook : NULL = a static fact; set = the trigger engine watches
+    # this date and fires when it comes due. `recurring` = re-fires annually
+    # (a birthday) vs one-off (a specific-day flight).
+    due_date: Mapped[Optional[datetime]] = mapped_column(default=None, index=True)
+    recurring: Mapped[bool] = mapped_column(default=False)
+    # Last time a due-dated fact fired, so it fires once per occurrence not per poll.
+    last_fired_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+    # Upsert discriminator : lets a contact hold several facts of the same key
+    # (interest:climbing, interest:jazz). Empty = one row per (contact, key).
+    dedup_key: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("contact_id", "key", "dedup_key", name="uq_contact_fact"),
+    )
+
+
 class RelationshipInteraction(Base):
     """One stored touch in the relationship graph : a manual note, an email, a
     calendar meeting, an intro. Append-only. Derived touches (capture,
