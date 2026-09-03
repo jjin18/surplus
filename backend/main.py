@@ -39,6 +39,8 @@ from .routes import (
     # shared: data-subject rights (export / delete)
     privacy,
     accounts, teams, team_conflicts,
+    # standalone: Civic policy search (no DB, no auth) - map page + /api/civic
+    civic as civic_routes,
     # infra: token-gated Unipile pass-through for :443-only egress sandboxes
     internal_relay,
 )
@@ -326,6 +328,8 @@ app.include_router(team_conflicts.router)   # conflict import (walls-first, audi
 
 # ── EVENTS side: the desktop event-ROI pipeline (www.surpluslayer.com) ───────
 app.include_router(internal_relay.router)  # token-gated Unipile relay (sandbox egress)
+app.include_router(civic_routes.router)     # /api/civic: policy search (evidence ladder)
+app.include_router(civic_routes.pages_router)  # /civic + /civic/r/{id}: the map page
 
 
 # NB: previously had a verbose 500 exception handler here that leaked

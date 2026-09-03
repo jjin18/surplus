@@ -159,6 +159,7 @@ threads (updates/gathering sweeps + the punctual follow-up dispatcher, §6c).
   (`jobs.run_detached`) and the UI polls `GET /scan/{id}/draft` until
   `ready`/`failed`.
 - `followups.py` — scheduled follow-up queue (Gmail-style). `billing.py` — Stripe. `admin.py` — token-gated ops. `webhooks.py` — Unipile / Bright Data / Stripe ingestion.
+- `civic.py` — Civic policy search (§5b). `/api/civic/ask` + `/api/civic/answer/{id}`, and the map page at `/civic`. No DB, no auth, no session : the only shared state is a 24h in-process answer cache.
 
 ### Agents / logic (`backend/agents/`)
 LLM + business logic. Infra: `llm.py` (Anthropic client + models), `agent_loop.py`
@@ -210,6 +211,38 @@ extraction/matching), `exa.py` (Exa search), `jsonx` use.
 - Apps: `App.jsx` (5-stage pipeline), `BookApp.jsx` (relationship CRM), `TriageApp.jsx` (inbound), `SharedIntake.jsx` (unified intake), `CaptureShared.jsx` (capture/in-person).
 - Shared: `lib/api.js` (all endpoints), `lib/labels.js` `lib/notify.js` `lib/analytics.js` `lib/resilience.jsx`; components `UpgradePaywall` `ContactsButton` `ContactsPage` `MatchingRadarGraph`; `surplusTheme.js` / `intakeFormConstants.js`.
 - Build: Vite multi-page (`vite.config.js`); BookApp kept in its own chunk for health-fingerprint tracking.
+
+## 5b. Civic policy search (`/civic`) — standalone surface
+
+A separate product living in the same process, sharing nothing but the app and
+the Anthropic key. A resident drops a pin on a 3D satellite map, asks why
+something is happening there, and gets an answer ranked by how its evidence was
+produced.
+
+Files:
+- `backend/civic.py` — the engine: prompt, the evidence hierarchy, URL
+  grounding, schema coercion, the 24h answer cache. No FastAPI, no DB.
+- `backend/routes/civic.py` — HTTP: rate limit (10/min/IP), cache lookup,
+  permalinks, the page.
+- `backend/civic_ui/index.html` — the whole client, one file. MapLibre GL from
+  a CDN over keyless tiles (Esri World Imagery + AWS terrarium terrain) and
+  Nominatim for geocoding, so a fresh deploy needs nothing but the API key. If
+  WebGL or the library is missing, the page degrades to a typed-location form.
+
+Flow: `POST /api/civic/ask {question, location, lat, lon}` → one Claude call
+with `web_search` → strip fences → schema-validate → **drop any evidence or
+action whose URL did not appear in a `web_search_tool_result` block** → if the
+answer spans fewer than three tiers, search once more with "harder at tiers A
+and B" and keep whichever pass reached further. Answers are cached by
+`sha256(question|location)` for 24h and shared as `/civic/r/{id}`.
+
+The rules that must not drift into being suggestions live in `validate()`, not
+in the prompt: an ungrounded URL is a fabricated citation, tier F is never
+evidence for a claim, and there is exactly one two-minute action.
+
+Env: `ANTHROPIC_API_KEY` (required — without it `/api/civic/ask` returns 503
+and says why), `CIVIC_MODEL` (default `claude-sonnet-4-6`),
+`CIVIC_MAX_SEARCHES` (default 8).
 
 ## 6. The updates → draft → Book flow (end to end)
 

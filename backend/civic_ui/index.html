@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Civic — why is this happening where I live?</title>
+<meta name="description" content="Ask why something is happening where you live. Answers ranked by how the evidence was produced, not by who agrees with them.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23182129'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%231E6B4A'/%3E%3Ccircle cx='16' cy='16' r='10.5' fill='none' stroke='%235FD3A0' stroke-width='1.5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  :root{
+    --paper:#EEF1EE;
+    --paper-2:#E3E8E3;
+    --ink:#182129;
+    --ink-2:#4A555E;
+    --rule:#C9D1CB;
+    --green:#1E6B4A;
+    --amber:#B9791A;
+    --red:#A63D2F;
+    --focus:#5FD3A0;
+    --glass:rgba(16,23,29,.82);
+    --glass-2:rgba(16,23,29,.94);
+    --glass-rule:rgba(238,241,238,.16);
+    --on-glass:#EEF1EE;
+    --on-glass-2:#A8B5B0;
+    --sans:"Bricolage Grotesque",system-ui,-apple-system,sans-serif;
+    --serif:"Source Serif 4",Georgia,serif;
+    --panel-w:min(860px,44vw);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#0B1116;color:var(--ink);
+    font-family:var(--serif);font-size:17px;line-height:1.55;overscroll-behavior:none}
+  a{color:inherit}
+  :focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:4px}
+  button{font:inherit}
+  .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+  /* ---------- the map is the page ---------- */
+  #map{position:fixed;inset:0;background:#0B1116}
+  #map canvas{outline:none}
+  .maplibregl-ctrl-attrib{font-family:var(--sans);font-size:11px}
+  .vignette{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(6,10,13,.55) 100%)}
+
+  /* ---------- top chrome ---------- */
+  .topbar{position:fixed;top:0;left:0;display:flex;align-items:center;gap:10px;
+    padding:18px 20px;pointer-events:none;z-index:5;max-width:calc(100vw - 140px)}
+  .brand{font-family:var(--sans);font-weight:800;font-size:18px;letter-spacing:-.01em;
+    color:var(--on-glass);background:var(--glass);border:1px solid var(--glass-rule);
+    padding:8px 14px;border-radius:999px;backdrop-filter:blur(14px);pointer-events:auto}
+  .brand small{font-weight:400;color:var(--on-glass-2);font-size:13px;margin-left:8px}
+  .creed{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);background:var(--glass);
+    border:1px solid var(--glass-rule);padding:8px 14px;border-radius:999px;
+    backdrop-filter:blur(14px);pointer-events:auto;white-space:nowrap}
+
+  /* ---------- the console ---------- */
+  .console{position:fixed;left:20px;bottom:20px;width:min(430px,calc(100vw - 40px));
+    background:var(--glass-2);border:1px solid var(--glass-rule);border-radius:18px;
+    backdrop-filter:blur(18px);color:var(--on-glass);z-index:6;
+    box-shadow:0 24px 60px rgba(0,0,0,.45);max-height:calc(100vh - 120px);
+    display:flex;flex-direction:column}
+  .console-body{padding:16px;overflow:auto}
+  .place{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);
+    display:flex;gap:8px;align-items:baseline;margin-bottom:10px;min-height:20px}
+  .place b{font-weight:600;font-size:15px;color:var(--on-glass);letter-spacing:-.01em}
+  .place .sheet-toggle{display:none;margin-left:auto;font-family:var(--sans);font-size:12px;
+    font-weight:600;color:var(--on-glass-2);background:rgba(238,241,238,.06);cursor:pointer;
+    border:1px solid var(--glass-rule);border-radius:999px;padding:5px 11px}
+  .console.collapsed .collapsible{display:none}
+  .place .coords{font-variant-numeric:tabular-nums;font-size:12px}
+  .hint{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);margin:0 0 10px}
+  .hint kbd{font-family:var(--sans);font-size:11px;border:1px solid var(--glass-rule);
+    border-radius:4px;padding:1px 5px;background:rgba(238,241,238,.08)}
+  textarea#q{font-family:var(--sans);font-size:19px;font-weight:600;letter-spacing:-.01em;
+    width:100%;min-height:64px;padding:10px 12px;line-height:1.3;resize:none;color:var(--on-glass);
+    background:rgba(238,241,238,.06);border:1px solid var(--glass-rule);border-radius:12px}
+  textarea#q::placeholder{color:#7C8B86;font-weight:600}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+  input#loc{flex:1;min-width:150px;font-family:var(--sans);font-size:14px;color:var(--on-glass);
+    background:rgba(238,241,238,.06);border:1px solid var(--glass-rule);border-radius:10px;padding:10px 12px}
+  input#loc::placeholder{color:#7C8B86}
+  .btn{font-family:var(--sans);font-weight:600;font-size:14px;border-radius:10px;padding:10px 16px;
+    cursor:pointer;border:1px solid transparent;background:var(--green);color:#fff}
+  .btn:hover{filter:brightness(1.08)}
+  .btn:disabled{opacity:.55;cursor:default;filter:none}
+  .btn.ghost{background:rgba(238,241,238,.06);border-color:var(--glass-rule);color:var(--on-glass)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .chips button{font-family:var(--sans);font-size:13px;background:transparent;color:var(--on-glass-2);
+    border:1px solid var(--glass-rule);border-radius:999px;padding:6px 11px;cursor:pointer;text-align:left}
+  .chips button:hover{border-color:var(--on-glass);color:var(--on-glass)}
+
+  /* progress: the six steps teach the method, so they are not a spinner */
+  .status{display:none;margin-top:14px;border-top:1px solid var(--glass-rule);padding-top:12px}
+  .status.on{display:block}
+  .status h4{font-family:var(--sans);font-size:13px;font-weight:600;margin:0 0 8px;color:var(--on-glass)}
+  .status ol{list-style:none;padding:0;margin:0;display:grid;gap:5px;font-family:var(--sans);font-size:13px}
+  .status li{color:var(--on-glass-2);opacity:.45;transition:opacity .3s}
+  .status li.on{opacity:1;color:var(--on-glass)}
+  .status li.done{opacity:.8}
+  .status li.done::before{content:"✓ ";color:#5FD3A0}
+  .status li.on::before{content:"→ "}
+  .status li::before{content:"· "}
+
+  .error{display:none;margin-top:12px;padding:10px 12px;border-left:3px solid var(--red);
+    background:rgba(166,61,47,.14);font-family:var(--sans);font-size:13px;color:var(--on-glass);border-radius:0 8px 8px 0}
+  .error.on{display:block}
+  .error button{margin-top:6px;background:none;border:0;color:var(--on-glass-2);
+    text-decoration:underline;cursor:pointer;font-size:13px;padding:0}
+  .error pre{white-space:pre-wrap;max-height:170px;overflow:auto;font-size:12px;
+    background:rgba(0,0,0,.3);padding:8px;border-radius:6px;margin:8px 0 0}
+
+  /* ---------- map side controls ---------- */
+  .mapctl{position:fixed;right:20px;top:132px;display:grid;gap:8px;z-index:6;justify-items:end}
+  .mapctl button{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--on-glass);
+    background:var(--glass);border:1px solid var(--glass-rule);border-radius:10px;padding:9px 13px;
+    cursor:pointer;backdrop-filter:blur(14px);text-align:left}
+  .mapctl button:hover{background:var(--glass-2)}
+  .mapctl button[aria-pressed="true"]{border-color:#5FD3A0;color:#5FD3A0}
+
+  /* ---------- pin ---------- */
+  .pin{width:22px;height:22px;border-radius:50%;background:var(--green);
+    border:3px solid #EEF1EE;box-shadow:0 0 0 2px rgba(30,107,74,.7),0 6px 18px rgba(0,0,0,.5);cursor:grab}
+  .pin::after{content:"";position:absolute;inset:-14px;border-radius:50%;
+    border:2px solid rgba(95,211,160,.65);animation:pulse 2.6s ease-out infinite}
+  @keyframes pulse{0%{transform:scale(.55);opacity:.9}100%{transform:scale(1.35);opacity:0}}
+
+  /* ---------- the answer ---------- */
+  .panel{position:fixed;top:0;right:0;bottom:0;width:var(--panel-w);background:var(--paper);
+    border-left:1px solid var(--rule);z-index:7;overflow:auto;transform:translateX(101%);
+    transition:transform .45s cubic-bezier(.2,.8,.2,1);box-shadow:-24px 0 60px rgba(0,0,0,.35)}
+  .panel.open{transform:none}
+  .panel-inner{max-width:860px;margin:0 auto;padding:26px 28px 90px}
+  .panel-bar{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;
+    gap:10px;background:var(--paper);padding:14px 28px;border-bottom:1px solid var(--rule);z-index:2}
+  .panel-bar .asked{font-family:var(--sans);font-size:13px;color:var(--ink-2);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .panel-bar .tools{display:flex;gap:6px;flex:none}
+  .panel-bar button{font-family:var(--sans);font-size:13px;font-weight:600;background:transparent;
+    border:1px solid var(--rule);border-radius:8px;padding:7px 11px;cursor:pointer;color:var(--ink)}
+  .panel-bar button:hover{border-color:var(--ink)}
+
+  .panel h2{font-family:var(--sans);font-weight:800;font-size:clamp(26px,3.2vw,40px);line-height:1.05;
+    letter-spacing:-.025em;margin:14px 0 14px}
+  .summary{font-size:18px;max-width:62ch;margin:0 0 34px}
+  .sec{margin:0 0 40px}
+  .sec h3{font-family:var(--sans);font-weight:600;font-size:14px;color:var(--ink-2);margin:0 0 12px;
+    padding-bottom:6px;border-bottom:1px solid var(--rule);text-transform:none}
+
+  .mech{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+  .mech li{display:grid;grid-template-columns:82px 1fr;gap:14px;align-items:start}
+  .conf{font-family:var(--sans);font-size:12px;font-weight:600;padding-top:4px;letter-spacing:.02em}
+  .conf.high{color:var(--green)}.conf.medium{color:var(--amber)}.conf.low{color:var(--ink-2)}
+  .mech .because{color:var(--ink-2);font-size:15px;margin-top:2px}
+
+  .ladder-key{font-family:var(--sans);font-size:13px;color:var(--ink-2);margin:0 0 12px;max-width:60ch}
+  .ladder{border-left:2px solid var(--ink);margin:0;padding:0;list-style:none}
+  .rung{position:relative;padding:14px 0 14px 22px;border-bottom:1px solid var(--rule)}
+  .rung:last-child{border-bottom:0}
+  .rung::before{content:"";position:absolute;left:-2px;top:0;bottom:0;width:var(--w,6px);background:var(--c,var(--ink))}
+  .rung .tier{font-family:var(--sans);font-weight:600;font-size:14px;margin-bottom:6px}
+  .rung .tier span{color:var(--ink-2);font-weight:400;margin-left:6px;font-size:13px}
+  .rung ul{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+  .rung li{max-width:66ch}
+  .rung .src{font-family:var(--sans);font-size:13px;color:var(--ink-2);margin-top:2px}
+  .rung .src a{text-decoration:underline;text-underline-offset:2px}
+  .rung.empty{color:var(--ink-2);font-style:italic}
+  .tA{--c:var(--green);--w:14px}.tB{--c:#2E7D5B;--w:11px}.tC{--c:#5A8F76;--w:8px}
+  .tD{--c:#8AA394;--w:6px}.tE{--c:#AFA88F;--w:5px}.tF{--c:var(--amber);--w:4px}
+
+  .disputed{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+  .disputed li{padding-left:14px;border-left:3px solid var(--red);max-width:66ch}
+  .live{list-style:none;padding:0;margin:0;display:grid;gap:8px;font-size:16px}
+  .live li::before{content:"● ";color:var(--amber);font-size:11px;vertical-align:middle}
+
+  .actions{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+  .actions li{display:grid;grid-template-columns:112px 1fr auto;gap:14px;align-items:start;
+    background:#fff;border:1px solid var(--rule);border-radius:12px;padding:13px 15px}
+  .effort{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink-2);padding-top:3px}
+  .actions .what{font-family:var(--sans);font-weight:600;font-size:16px}
+  .actions .why{font-size:15px;color:var(--ink-2);margin-top:2px}
+  .actions a{font-family:var(--sans);font-size:13px;font-weight:600;white-space:nowrap;padding-top:3px}
+
+  .rewrites{display:flex;flex-wrap:wrap;gap:8px;margin:0}
+  .rewrites button{font-family:var(--sans);font-size:14px;background:#fff;border:1px solid var(--rule);
+    border-radius:999px;padding:8px 14px;cursor:pointer;color:var(--ink);text-align:left}
+  .rewrites button:hover{border-color:var(--ink)}
+  .caveat{font-size:16px;color:var(--ink-2);max-width:62ch;margin:0 0 8px}
+  .creed-foot{font-family:var(--sans);font-size:13px;color:var(--ink-2);border-top:1px solid var(--rule);
+    padding-top:12px;max-width:62ch}
+
+  /* ---------- small screens: console becomes a sheet, panel full width ---------- */
+  @media (max-width:900px){
+    :root{--panel-w:100vw}
+    .console{left:10px;right:10px;bottom:10px;width:auto;max-height:min(72vh,560px)}
+    .mapctl{right:10px;top:100px;gap:6px}
+    .mapctl button{padding:7px 10px;font-size:12px}
+    .creed{display:none}
+    .place .sheet-toggle{display:inline-block}
+    .panel-inner{padding:20px 18px 80px}
+    .panel-bar{padding:12px 18px}
+    .actions li{grid-template-columns:1fr}
+    .mech li{grid-template-columns:1fr;gap:2px}
+  }
+  @media (max-width:380px){
+    .console-body{padding:12px}
+    textarea#q{font-size:17px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important}
+    .panel{transition:none!important}
+  }
+</style>
+</head>
+<body>
+
+<div id="map" role="application" aria-label="Satellite map. Click, or press P, to drop a pin on the place you are asking about. Arrow keys pan; shift and arrow keys rotate and tilt."></div>
+<div class="vignette" aria-hidden="true"></div>
+
+<div class="topbar">
+  <div class="brand">Civic <small>policy search</small></div>
+  <div class="creed">Evidence first. Social media last.</div>
+</div>
+
+<div class="mapctl">
+  <button id="locate" type="button">Use my location</button>
+  <button id="tilt" type="button" aria-pressed="true">Flatten view</button>
+  <button id="globe" type="button">Back to globe</button>
+</div>
+
+<section class="console" aria-label="Ask about a place">
+  <div class="console-body">
+    <div class="place">
+      <span id="place"><b>Drop a pin</b> <span class="coords">anywhere on the map</span></span>
+      <button class="sheet-toggle" id="sheet" type="button" aria-expanded="true"
+              aria-controls="ask-fields">Hide</button>
+    </div>
+    <div class="collapsible" id="ask-fields">
+    <p class="hint" id="hint">Move the world, then click the place you live — or press <kbd>P</kbd> to drop a pin at the centre. Or type a city below.</p>
+
+    <label class="sr" for="q">Your question</label>
+    <textarea id="q" placeholder="Why did my rent go up 15% this year?"></textarea>
+
+    <div class="row">
+      <label class="sr" for="loc">Place</label>
+      <input id="loc" placeholder="City or region" autocomplete="address-level2">
+      <button class="btn" id="go" type="button">Find the evidence</button>
+    </div>
+
+    <div class="chips" id="chips">
+      <button type="button">What's happening where I dropped this pin?</button>
+      <button type="button">Why is my property tax going up?</button>
+      <button type="button">Is the new zoning proposal going to lower rents?</button>
+      <button type="button">Are data centers raising my electricity bill?</button>
+    </div>
+
+    <div class="status" id="status">
+      <h4>Working through the evidence hierarchy</h4>
+      <ol>
+        <li>Reading the question, pinning down place and time</li>
+        <li>Searching official data and government records</li>
+        <li>Searching peer-reviewed and institutional research</li>
+        <li>Reading expert analysis and reporting</li>
+        <li>Checking what people are saying — as a signal, not a source</li>
+        <li>Ranking evidence, separating settled from disputed</li>
+      </ol>
+    </div>
+
+    <div class="error" id="error"></div>
+    </div>
+  </div>
+</section>
+
+<aside class="panel" id="panel" aria-live="polite" aria-label="Answer">
+  <div class="panel-bar">
+    <div class="asked" id="asked"></div>
+    <div class="tools">
+      <button id="share" type="button">Copy link</button>
+      <button id="close" type="button">Back to map</button>
+    </div>
+  </div>
+  <div class="panel-inner">
+    <h2 id="r-head"></h2>
+    <p class="summary" id="r-summary"></p>
+
+    <div class="sec" id="sec-rewrites" hidden>
+      <h3>Try one of these instead</h3>
+      <div class="rewrites" id="r-rewrites"></div>
+    </div>
+
+    <div class="sec" id="sec-mech"><h3>Why it's happening</h3><ul class="mech" id="r-mech"></ul></div>
+
+    <div class="sec" id="sec-evidence">
+      <h3>What the evidence says</h3>
+      <p class="ladder-key">Wider bar, stronger evidence. Official data and peer-reviewed research
+        can carry a number on their own; social chatter at the bottom tells us what people are
+        worried about, not what is true. Empty rungs stay visible — absence is information.</p>
+      <ol class="ladder" id="r-ladder"></ol>
+    </div>
+
+    <div class="sec" id="sec-disputed"><h3>Still disputed</h3><ul class="disputed" id="r-disputed"></ul></div>
+    <div class="sec" id="sec-live"><h3>Decisions happening now</h3><ul class="live" id="r-live"></ul></div>
+    <div class="sec" id="sec-actions"><h3>What you can do</h3><ul class="actions" id="r-actions"></ul></div>
+
+    <p class="caveat" id="r-caveat"></p>
+    <p class="creed-foot">Sources are ranked by how they were produced, not by who agrees with them.
+      Check the links before you act on a number.</p>
+  </div>
+</aside>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script>
+(function(){
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Config. Every tile source here is keyless on purpose: the page must work on
+// a fresh deploy with nothing but ANTHROPIC_API_KEY set.
+// ---------------------------------------------------------------------------
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
+const STYLE = {
+  version: 8,
+  projection: {type: "globe"},
+  sky: {
+    "sky-color": "#0e2338", "horizon-color": "#7ba3c4", "fog-color": "#0B1116",
+    "sky-horizon-blend": .5, "horizon-fog-blend": .5, "fog-ground-blend": .6
+  },
+  light: {anchor: "map", position: [1.4, 210, 30], intensity: .35},
+  sources: {
+    satellite: {
+      type: "raster", tileSize: 256, maxzoom: 19,
+      tiles: [ESRI + "/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      attribution: "Imagery © Esri, Maxar, Earthstar Geographics"
+    },
+    places: {
+      type: "raster", tileSize: 256, maxzoom: 16,
+      tiles: [ESRI + "/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"],
+      attribution: "Boundaries & places © Esri"
+    },
+    dem: {
+      type: "raster-dem", tileSize: 256, maxzoom: 14, encoding: "terrarium",
+      tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      attribution: "Elevation: Mapzen / AWS Terrain Tiles"
+    },
+    boundary: {type: "geojson", data: {type: "FeatureCollection", features: []}}
+  },
+  layers: [
+    {id: "bg", type: "background", paint: {"background-color": "#0B1116"}},
+    {id: "sat", type: "raster", source: "satellite",
+     paint: {"raster-saturation": -.12, "raster-contrast": .05}},
+    {id: "labels", type: "raster", source: "places", paint: {"raster-opacity": .85}},
+    // The jurisdiction the pin fell inside, drawn from its real boundary.
+    {id: "boundary-fill", type: "fill", source: "boundary",
+     paint: {"fill-color": "#1E6B4A", "fill-opacity": .16}},
+    {id: "boundary-line", type: "line", source: "boundary",
+     paint: {"line-color": "#5FD3A0", "line-width": 2, "line-blur": .6, "line-opacity": .9}}
+  ]
+};
+const HOME = {center: [-30, 22], zoom: 1.7, pitch: 0, bearing: 0};
+const CITY_ZOOM = 12.6, CITY_PITCH = 58;
+
+const TIERS = {
+  A: ["Official data", "census, agency statistics, election results, court and legislative records"],
+  B: ["Peer-reviewed research", "causal studies, meta-analyses, working papers"],
+  C: ["Institutional research", "think tanks, universities, legislative research offices"],
+  D: ["Expert analysis", "named domain experts, professional bodies"],
+  E: ["Journalism", "reporting from established outlets"],
+  F: ["Social signal", "X, Reddit, forums — what people are noticing and arguing about"]
+};
+const EFFORT = {1: "2 minutes", 2: "an hour", 3: "an evening"};
+
+const $ = id => document.getElementById(id);
+const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const isHttp = u => typeof u === "string" && /^https?:\/\//i.test(u);
+
+const state = {pin: null, place: "", busy: false, spinning: !reduced, map: null, marker: null};
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+let map = null;
+
+function initMap(){
+  // `supported()` was dropped from the library in v3; only ask when it exists,
+  // otherwise a present-and-working MapLibre would be treated as missing.
+  if (!window.maplibregl) return degrade();
+  if (typeof maplibregl.supported === "function" && !maplibregl.supported()) return degrade();
+  try {
+    map = new maplibregl.Map({
+      container: "map", style: STYLE, center: HOME.center, zoom: HOME.zoom,
+      attributionControl: {compact: true}, maxPitch: 75, dragRotate: true,
+      // Keyboard pan/zoom/rotate stays on: the map is reachable without a mouse.
+      keyboard: true, hash: false
+    });
+  } catch (e) { return degrade(); }
+  state.map = map;
+
+  map.addControl(new maplibregl.NavigationControl({visualizePitch: true}), "top-right");
+  map.addControl(new maplibregl.ScaleControl({unit: "imperial"}), "bottom-right");
+
+  map.on("load", () => {
+    // Real relief under the imagery — the reason a city reads as a place and
+    // not a texture. Cheap enough at exaggeration 1.2 to leave on by default.
+    try { map.setTerrain({source: "dem", exaggeration: 1.2}); } catch (e) {}
+    if (state.spinning) spin();
+    boot();
+  });
+
+  map.on("click", e => dropPin(e.lngLat.lat, e.lngLat.lng, {fly: false}));
+
+  // Mouse-free pin drop: MapLibre already pans and rotates from the keyboard,
+  // so "p" is the only missing verb.
+  map.getCanvas().addEventListener("keydown", e => {
+    if (e.key !== "p" && e.key !== "P") return;
+    const c = map.getCenter();
+    dropPin(c.lat, c.lng, {fly: false});
+  });
+  ["mousedown", "touchstart", "wheel", "keydown"].forEach(ev =>
+    map.getCanvas().addEventListener(ev, () => { state.spinning = false; }, {passive: true}));
+  map.on("moveend", () => { if (state.spinning) spin(); });
+}
+
+// Idle globe rotation. Stops on the first interaction, never starts under
+// prefers-reduced-motion.
+function spin(){
+  if (!state.spinning || state.pin || map.getZoom() > 4) return;
+  const c = map.getCenter();
+  map.easeTo({center: [c.lng + 6, c.lat], duration: 4000, easing: t => t});
+}
+
+function degrade(){
+  // No WebGL, or the library did not load: the page still answers questions,
+  // it just cannot show you where.
+  document.getElementById("map").style.background =
+    "linear-gradient(160deg,#12212B 0%,#0B1116 60%)";
+  $("hint").textContent = "Map unavailable in this browser — type a city below and ask.";
+  $("locate").hidden = $("tilt").hidden = $("globe").hidden = true;
+}
+
+function flyTo(lat, lon, zoom){
+  if (!map) return;
+  state.spinning = false;
+  const opts = {center: [lon, lat], zoom: zoom || CITY_ZOOM, pitch: CITY_PITCH,
+                bearing: -18, essential: true};
+  if (reduced) map.jumpTo(opts); else map.flyTo(Object.assign({speed: .9, curve: 1.5}, opts));
+}
+
+// One draggable pin, ever. Dragging it re-asks about wherever it lands.
+function dropPinMarker(lat, lon){
+  const el = document.createElement("div");
+  el.className = "pin";
+  state.marker = new maplibregl.Marker({element: el, draggable: true, anchor: "center"})
+    .setLngLat([lon, lat]).addTo(map);
+  state.marker.on("dragend", () => {
+    const p = state.marker.getLngLat();
+    dropPin(p.lat, p.lng, {fly: false});
+  });
+}
+
+function dropPin(lat, lon, opts){
+  opts = opts || {};
+  state.pin = {lat: lat, lon: lon};
+  state.spinning = false;
+  if (map) {
+    if (!state.marker) dropPinMarker(lat, lon); else state.marker.setLngLat([lon, lat]);
+    if (opts.fly !== false) flyTo(lat, lon, opts.zoom);
+  }
+  setPlace(null, lat, lon);
+  reverseGeocode(lat, lon);
+}
+
+function setPlace(name, lat, lon){
+  state.place = name || "";
+  const coords = (lat != null) ? lat.toFixed(4) + ", " + lon.toFixed(4) : "";
+  $("place").innerHTML = "<b>" + esc(name || "Locating…") + "</b>" +
+    (coords ? ' <span class="coords">' + esc(coords) + "</span>" : "");
+  if (name) {
+    $("loc").value = name;
+    $("hint").textContent = "Asking about this place. Drag the pin to move the question.";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Geocoding (OpenStreetMap Nominatim — keyless, and honest about failing)
+// ---------------------------------------------------------------------------
+const NOMINATIM = "https://nominatim.openstreetmap.org";
+
+async function reverseGeocode(lat, lon){
+  const url = NOMINATIM + "/reverse?format=jsonv2&zoom=10&polygon_geojson=1" +
+    "&polygon_threshold=0.003&lat=" + lat + "&lon=" + lon;
+  try {
+    const r = await fetch(url, {headers: {"Accept": "application/json"}});
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    setPlace(shortPlace(d), lat, lon);
+    drawBoundary(d.geojson);
+  } catch (e) {
+    // Offline or rate-limited: the coordinates are still a usable answer.
+    setPlace(lat.toFixed(3) + ", " + lon.toFixed(3), lat, lon);
+  }
+}
+
+function shortPlace(d){
+  const a = d.address || {};
+  const city = a.city || a.town || a.village || a.municipality || a.county || a.suburb;
+  const region = a.state || a.region || a.province;
+  const parts = [city, region, a.country_code ? a.country_code.toUpperCase() : ""].filter(Boolean);
+  return parts.slice(0, 3).join(", ") || (d.display_name || "").split(",").slice(0, 2).join(",");
+}
+
+function drawBoundary(geojson){
+  if (!map || !map.getSource("boundary")) return;
+  const empty = {type: "FeatureCollection", features: []};
+  const isArea = geojson && /Polygon/i.test(geojson.type || "");
+  map.getSource("boundary").setData(isArea ? {type: "Feature", geometry: geojson, properties: {}} : empty);
+}
+
+async function forwardGeocode(text){
+  try {
+    const r = await fetch(NOMINATIM + "/search?format=jsonv2&limit=1&polygon_geojson=1" +
+      "&polygon_threshold=0.003&q=" + encodeURIComponent(text), {headers: {"Accept": "application/json"}});
+    if (!r.ok) throw new Error(r.status);
+    const list = await r.json();
+    if (!list.length) return null;
+    return list[0];
+  } catch (e) { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// Asking
+// ---------------------------------------------------------------------------
+let stepTimers = [];
+
+function setStep(i){
+  const items = $("status").querySelectorAll("li");
+  items.forEach((li, j) => { li.className = j < i ? "done" : j === i ? "on" : ""; });
+}
+
+function startProgress(){
+  $("status").classList.add("on");
+  setStep(0);
+  stepTimers = [1, 2, 3, 4, 5].map(i => setTimeout(() => setStep(i), 3200 * i));
+}
+
+function stopProgress(){
+  stepTimers.forEach(clearTimeout);
+  stepTimers = [];
+  $("status").classList.remove("on");
+}
+
+function showError(message, raw){
+  const box = $("error");
+  box.innerHTML = "<div>" + esc(message) + "</div>";
+  if (raw) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Show what we found";
+    const pre = document.createElement("pre");
+    pre.textContent = raw;
+    pre.hidden = true;
+    btn.addEventListener("click", () => {
+      pre.hidden = !pre.hidden;
+      btn.textContent = pre.hidden ? "Show what we found" : "Hide it";
+    });
+    box.append(btn, pre);
+  }
+  box.classList.add("on");
+}
+
+async function ask(){
+  if (state.busy) return;
+  const question = $("q").value.trim();
+  if (!question) { $("q").focus(); return; }
+  const location = $("loc").value.trim();
+
+  state.busy = true;
+  $("go").disabled = true;
+  $("error").classList.remove("on");
+  startProgress();
+
+  const body = {question: question, location: location};
+  if (state.pin) { body.lat = state.pin.lat; body.lon = state.pin.lon; }
+
+  try {
+    const res = await fetch("/api/civic/ask", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = (data && data.detail) || {};
+      const msg = detail.message || "The search could not be completed.";
+      showError(res.status === 429
+        ? "That's a lot of questions at once — give it a minute and ask again."
+        : msg, detail.raw || "");
+      return;
+    }
+    setStep(6);
+    render(data);
+  } catch (e) {
+    showError("Couldn't reach the evidence service: " + e.message);
+  } finally {
+    stopProgress();
+    state.busy = false;
+    $("go").disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function link(url, label){
+  return isHttp(url)
+    ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(label) + "</a>"
+    : esc(label);
+}
+
+function render(payload){
+  const d = payload.answer || {};
+  $("asked").textContent = payload.question + (payload.location ? " · " + payload.location : "");
+  $("r-head").textContent = d.headline || "";
+  $("r-summary").textContent = d.summary || "";
+
+  // Vague question: the rewrites ARE the answer, so the rest is hidden.
+  const rewrites = d.rewrites || [];
+  const vague = rewrites.length > 0 && (d.evidence || []).length === 0;
+  $("sec-rewrites").hidden = rewrites.length === 0;
+  $("r-rewrites").innerHTML = rewrites.map(r =>
+    '<button type="button">' + esc(r) + "</button>").join("");
+  ["sec-mech", "sec-evidence", "sec-disputed", "sec-live", "sec-actions"].forEach(id => {
+    $(id).hidden = vague;
+  });
+
+  $("r-mech").innerHTML = (d.mechanisms || []).map(m =>
+    '<li><span class="conf ' + esc(m.confidence) + '">' + esc(m.confidence) + " confidence</span>" +
+    "<div><strong>" + esc(m.mechanism) + '</strong><div class="because">' +
+    esc(m.because || "") + "</div></div></li>").join("") ||
+    '<li><span class="conf low">—</span><div>No mechanism could be pinned down from what was found.</div></li>';
+
+  const byTier = {};
+  (d.evidence || []).forEach(e => { (byTier[e.tier] = byTier[e.tier] || []).push(e); });
+  $("r-ladder").innerHTML = Object.keys(TIERS).map(t => {
+    const items = byTier[t] || [];
+    const head = '<div class="tier">' + esc(TIERS[t][0]) + "<span>" + esc(TIERS[t][1]) + "</span></div>";
+    if (!items.length) return '<li class="rung t' + t + ' empty">' + head + "Nothing found at this level.</li>";
+    return '<li class="rung t' + t + '">' + head + "<ul>" + items.map(e =>
+      "<li>" + esc(e.claim) + '<div class="src">' + link(e.url, e.source || "source") +
+      "</div></li>").join("") + "</ul></li>";
+  }).join("");
+
+  const disputed = d.disputed || [];
+  $("r-disputed").innerHTML = disputed.length
+    ? disputed.map(x => "<li>" + esc(x) + "</li>").join("")
+    : '<li style="border-color:var(--rule);color:var(--ink-2)">No live disagreement found among credible sources.</li>';
+
+  const live = d.live_decisions || [];
+  $("r-live").innerHTML = live.length
+    ? live.map(x => "<li>" + esc(x) + "</li>").join("")
+    : '<li style="color:var(--ink-2)">No open decision found — check your city or county agenda.</li>';
+
+  $("r-actions").innerHTML = (d.actions || []).map(a =>
+    '<li><span class="effort">' + esc(EFFORT[a.effort] || "some time") + "</span>" +
+    '<div><div class="what">' + esc(a.what) + '</div><div class="why">' + esc(a.why || "") + "</div></div>" +
+    (isHttp(a.url) ? link(a.url, "Open ↗") : "<span></span>") + "</li>").join("") ||
+    "<li><span></span><div>No concrete action surfaced for this one.</div><span></span></li>";
+
+  $("r-caveat").textContent = d.caveat || "";
+
+  openPanel();
+  if (payload.id) {
+    const url = "/civic/r/" + payload.id;
+    if (location.pathname !== url) history.replaceState({}, "", url);
+  }
+}
+
+function openPanel(){
+  $("panel").classList.add("open");
+  $("panel").scrollTop = 0;
+  $("close").focus();
+}
+
+function closePanel(){
+  $("panel").classList.remove("open");
+  $("q").focus();
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+$("go").addEventListener("click", ask);
+$("q").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask();
+});
+$("chips").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  $("q").value = e.target.textContent;
+  $("q").focus();
+});
+$("r-rewrites").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  $("q").value = e.target.textContent;
+  closePanel();
+  ask();
+});
+$("close").addEventListener("click", closePanel);
+
+// On a phone the ask sheet covers the map it is asking about; collapsing it
+// leaves the place readout and gives the map back.
+$("sheet").addEventListener("click", () => {
+  const console_ = document.querySelector(".console");
+  const collapsed = console_.classList.toggle("collapsed");
+  $("sheet").setAttribute("aria-expanded", String(!collapsed));
+  $("sheet").textContent = collapsed ? "Ask" : "Hide";
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("panel").classList.contains("open")) closePanel();
+});
+
+$("share").addEventListener("click", async () => {
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    $("share").textContent = "Link copied";
+  } catch (e) {
+    $("share").textContent = url;
+  }
+  setTimeout(() => { $("share").textContent = "Copy link"; }, 2200);
+});
+
+$("locate").addEventListener("click", () => {
+  if (!navigator.geolocation) { $("hint").textContent = "This browser won't share a location — type a city instead."; return; }
+  $("locate").textContent = "Finding you…";
+  navigator.geolocation.getCurrentPosition(
+    p => { $("locate").textContent = "Use my location"; dropPin(p.coords.latitude, p.coords.longitude, {fly: true}); },
+    () => { $("locate").textContent = "Use my location";
+            $("hint").textContent = "Location denied — click the map or type a city."; },
+    {enableHighAccuracy: false, timeout: 8000, maximumAge: 600000});
+});
+
+$("tilt").addEventListener("click", () => {
+  if (!map) return;
+  const flat = map.getPitch() > 10;
+  map.easeTo({pitch: flat ? 0 : CITY_PITCH, duration: reduced ? 0 : 700});
+  $("tilt").setAttribute("aria-pressed", String(!flat));
+  $("tilt").textContent = flat ? "Tilt view" : "Flatten view";
+});
+
+$("globe").addEventListener("click", () => {
+  if (!map) return;
+  state.spinning = !reduced;
+  if (reduced) map.jumpTo(HOME); else map.flyTo(Object.assign({essential: true, speed: .8}, HOME));
+  setTimeout(spin, reduced ? 0 : 2600);
+});
+
+// Typing a city and leaving the field moves the map there too, so the pin and
+// the question never disagree about which place is being asked about.
+$("loc").addEventListener("change", async () => {
+  const text = $("loc").value.trim();
+  if (!text || !map) return;
+  const hit = await forwardGeocode(text);
+  if (!hit) return;
+  const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
+  state.pin = {lat: lat, lon: lon};
+  state.place = text;
+  if (!state.marker) dropPinMarker(lat, lon); else state.marker.setLngLat([lon, lat]);
+  drawBoundary(hit.geojson);
+  flyTo(lat, lon, hit.type === "country" || hit.type === "state" ? 6 : CITY_ZOOM);
+}, false);
+
+// A shared answer opens on its permalink: fetch it, render it, and put the map
+// back over the place it is about.
+async function boot(){
+  const m = location.pathname.match(/^\/civic\/r\/([a-z0-9]+)$/i);
+  if (!m) return;
+  try {
+    const res = await fetch("/api/civic/answer/" + m[1]);
+    if (!res.ok) {
+      showError("That shared answer has expired. Ask the question again to refresh it.");
+      return;
+    }
+    const data = await res.json();
+    $("q").value = data.question || "";
+    $("loc").value = data.location || "";
+    render(data);
+    if (data.location) {
+      const hit = await forwardGeocode(data.location);
+      if (hit) {
+        const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
+        state.pin = {lat: lat, lon: lon};
+        if (!state.marker) dropPinMarker(lat, lon);
+        drawBoundary(hit.geojson);
+        flyTo(lat, lon, CITY_ZOOM);
+      }
+    }
+  } catch (e) { /* a permalink that won't load is not worth an alarm */ }
+}
+
+initMap();
+if (!map) boot();
+})();
+</script>
+</body>
+</html>
