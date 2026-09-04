@@ -2241,3 +2241,29 @@ def test_a_chamber_that_is_neither_house_is_dropped(monkeypatch):
     _csv(monkeypatch, "name,current_party,current_district,current_chamber\n"
                       "A. Governor,Democratic,11,executive\n")
     assert civic_geo.state_legislators_keyless("CA", "06011", "06011") == {}
+
+
+def test_the_box_you_type_into_never_scrolls():
+    # A scrollbar on the thing you just used is the interface hiding its own
+    # output: the answer was below five suggestions inside a scrolling box.
+    page = _page()
+    console = page.split("\n  .console{", 1)[1].split("}", 1)[0]
+    assert "max-height" not in console
+    body = page.split("\n  .console-body{", 1)[1].split("}", 1)[0]
+    assert "overflow" not in body
+
+
+def test_no_scrollbar_is_drawn_over_the_card_either():
+    page = _page()
+    card = page.split("\n  .card{", 1)[1].split("}", 1)[0]
+    assert "scrollbar-width:none" in card
+    assert ".card::-webkit-scrollbar{display:none}" in page
+    assert ".card.more{" in page          # the fade still says there is more
+
+
+def test_three_suggestions_not_five():
+    page = _page()
+    static = page.split('class="chips" id="chips"', 1)[1].split("</div>", 1)[0]
+    assert static.count("<button") == 3
+    built = page.split("function placeChips(", 1)[1].split("];", 1)[0]
+    assert built.count('short + "?"') == 3

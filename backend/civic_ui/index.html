@@ -69,9 +69,9 @@
   .rail-col > *{pointer-events:auto}
   .console{background:var(--glass-2);border:1px solid var(--glass-rule);border-radius:18px;
     backdrop-filter:blur(18px);color:var(--on-glass);
-    box-shadow:0 24px 60px rgba(0,0,0,.45);flex:none;max-height:44vh;
+    box-shadow:0 24px 60px rgba(0,0,0,.45);flex:0 0 auto;
     display:flex;flex-direction:column}
-  .console-body{padding:16px;overflow:auto}
+  .console-body{padding:16px}
   .place{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);
     display:flex;gap:8px;align-items:baseline;margin-bottom:10px;min-height:20px}
   .place b{font-weight:600;font-size:15px;color:var(--on-glass);letter-spacing:-.01em}
@@ -182,7 +182,8 @@
   .card{display:none;background:var(--glass-2);border:1px solid var(--glass-rule);
     border-radius:16px;backdrop-filter:blur(18px);color:var(--on-glass);padding:14px;
     box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:auto;flex:1 1 auto;min-height:0;
-    scrollbar-width:thin;scrollbar-color:rgba(238,241,238,.22) transparent}
+    scrollbar-width:none;flex:1 1 0}
+  .card::-webkit-scrollbar{display:none}
   .card.more{-webkit-mask-image:linear-gradient(#000 calc(100% - 26px),transparent);
     mask-image:linear-gradient(#000 calc(100% - 26px),transparent)}
   .card.on{display:block}
@@ -330,7 +331,7 @@
     .rail{left:10px;right:10px;bottom:12px;transform:none;max-width:none;
       justify-content:flex-start}
     .rail-note{bottom:70px;max-width:calc(100vw - 20px)}
-    .console{max-height:min(46vh,420px)}
+
     .mapctl{right:10px;top:100px;gap:6px}
     .card{max-height:34vh}
     .mapctl button{padding:7px 10px;font-size:12px}
@@ -398,7 +399,6 @@
       <button type="button">What's happening where I dropped my pin?</button>
       <button type="button">Why is my property tax going up?</button>
       <button type="button">Will the new zoning rules lower my rent?</button>
-      <button type="button">Are data centers raising my power bill?</button>
     </div>
 
     </div>
@@ -704,9 +704,7 @@ function placeChips(place){
   const chips = [
     "Why is rent going up in " + short + "?",
     "Why is my property tax going up in " + short + "?",
-    "What is on the ballot in " + short + "?",
-    "Is " + short + " approving new housing?",
-    "What is driving my electricity bill in " + short + "?"
+    "What is on the ballot in " + short + "?"
   ];
   $("chips").innerHTML = chips.map(c =>
     '<button type="button">' + esc(c) + "</button>").join("");
