@@ -191,7 +191,44 @@
   .card-head{display:flex;gap:10px;align-items:flex-start;font-family:var(--sans)}
   .card-head .ico{font-size:20px;line-height:1.2}
   .card-head .dot-lg{width:12px;height:12px;border-radius:50%;margin-top:4px;flex:none}
+  /* Who sits in the seat, first thing, because it is the part of the card
+     that is actually about this district and not about the chamber. */
+  .seats{margin-top:12px;font-family:var(--sans)}
+  .seats .who{display:flex;gap:8px;align-items:baseline;margin-top:7px;font-size:13px}
+  .seats .who b{font-weight:600;color:var(--on-glass);letter-spacing:-.01em}
+  .seats .who .party{font-size:11px;font-weight:600;color:var(--on-glass-2);
+    border:1px solid var(--glass-rule);border-radius:999px;padding:1px 7px;flex:none}
+  .seats .who .role{display:block;font-size:11.5px;color:var(--on-glass-2);margin-top:1px}
+  .seats .who a{text-decoration:none}
+  .seats .who a:hover{text-decoration:underline}
+  .seats .none{font-size:12px;color:var(--on-glass-2);margin-top:6px}
+  /* The record: how they actually voted, with the date and the roll call. */
+  .card-acts{margin-top:14px;font-family:var(--sans)}
+  .card-acts .act{display:flex;gap:8px;align-items:baseline;margin-top:8px;font-size:12.5px;
+    line-height:1.4}
+  .card-acts .how{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:5px;padding:2px 6px;flex:none;background:rgba(238,241,238,.10);
+    color:var(--on-glass-2)}
+  .card-acts .how.yea{background:rgba(95,211,160,.16);color:#8FE3BE}
+  .card-acts .how.nay{background:rgba(214,109,109,.16);color:#E39A9A}
+  .card-acts .what{color:var(--on-glass)}
+  .card-acts .when{display:block;font-size:11px;color:var(--on-glass-2);margin-top:1px}
+  .card-acts a{text-decoration:none}
+  .card-acts a:hover{text-decoration:underline}
+  /* An outline the map estimated says so, next to the outline. */
+  .estimate{margin-top:10px;font-family:var(--sans);font-size:11.5px;line-height:1.45;
+    color:var(--amber);background:rgba(185,121,26,.10);border:1px solid rgba(185,121,26,.35);
+    border-radius:10px;padding:7px 9px}
+  .estimate b{font-weight:700}
+  /* What the chamber decides is the same in every district in the country,
+     so it folds away under the parts that are not. */
   .decides{margin-top:12px;font-family:var(--sans);font-size:12.5px;line-height:1.45}
+  .decides > summary{cursor:pointer;list-style:none;font-size:12px;font-weight:600;
+    color:var(--on-glass-2);text-transform:uppercase;letter-spacing:.08em}
+  .decides > summary::-webkit-details-marker{display:none}
+  .decides > summary::after{content:" +";font-weight:700}
+  .decides[open] > summary::after{content:" \2212"}
+  .decides > summary:hover{color:var(--on-glass)}
   .decides ul{margin:6px 0 0;padding-left:16px;display:grid;gap:4px;color:var(--on-glass)}
   .decides li{padding-left:2px}
   .elected{margin-top:8px;font-size:11.5px;color:var(--on-glass-2);border-top:1px solid var(--glass-rule);
@@ -463,13 +500,19 @@ const STYLE = {
     // The district you are inside, for the lens you have chosen: filled in
     // its own colour, so switching lenses re-masks the map.
     {id: "layer-fill", type: "fill", source: "layer",
-     paint: {"fill-color": ["get", "color"], "fill-opacity": .17,
-             "fill-antialias": true}},
+     paint: {"fill-color": ["get", "color"], "fill-antialias": true,
+             // A boundary the Census or OpenStreetMap actually published is
+             // shaded solid. One matched only by name is washed fainter and
+             // outlined in dashes, so an estimate never looks surveyed.
+             "fill-opacity": ["case", ["==", ["get", "exact"], 1], .17, .09]}},
     {id: "layer-glow", type: "line", source: "layer",
      paint: {"line-color": ["get", "color"], "line-width": 10, "line-blur": 8,
-             "line-opacity": .35}},
+             "line-opacity": ["case", ["==", ["get", "exact"], 1], .35, .18]}},
     {id: "layer-line", type: "line", source: "layer",
-     paint: {"line-color": ["get", "color"], "line-width": 2.5, "line-opacity": .95}}
+     paint: {"line-color": ["get", "color"], "line-width": 2.5,
+             "line-opacity": ["case", ["==", ["get", "exact"], 1], .95, .7],
+             "line-dasharray": ["case", ["==", ["get", "exact"], 1],
+                                ["literal", [1, 0]], ["literal", [2, 1.6]]]}}
   ]
 };
 const HOME = {center: [-30, 22], zoom: 1.7, pitch: 0, bearing: 0};
@@ -836,9 +879,10 @@ function setSites(sites){
 // we had ; showing one at a time, with its boundary drawn and its own things
 // on the map, is a map you can read.
 
-let stack = {layers: []}, activeLayer = "";
+let stack = {layers: []}, activeLayer = "", stackAt = null;
 
 async function loadStack(lat, lon){
+  stackAt = {lat: lat, lon: lon};
   try {
     const res = await fetch("/api/civic/jurisdictions?lat=" + lat + "&lon=" + lon);
     if (!res.ok) throw new Error(res.status);
@@ -908,22 +952,22 @@ function showLayerCard(layer){
     (layer.source ? " · " + esc(layer.source === "census" ? "US Census" : "OpenStreetMap") : "") +
     "</div></div>" +
     '<button type="button" class="card-x" id="card-close" aria-label="Close">✕</button></div>' +
-    '<div class="decides"><div class="facts-head">What it decides</div><ul>' +
-    layer.decides.map(d => "<li>" + esc(d) + "</li>").join("") + "</ul>" +
-    '<div class="elected">' + esc(layer.elected) + "</div></div>" +
+    // Who is in the seat, and how the outline on the map was arrived at:
+    // the two things that are about THIS district rather than about the
+    // kind of body it is.
+    '<div class="seats" id="card-seats"><div class="facts-head">Who holds this seat</div>' +
+    '<div class="none">Checking the roster\u2026</div></div>' +
+    '<div class="estimate" id="card-estimate" hidden></div>' +
+
     // The body's own site, and the one thing worth looking up on it. A tax
     // question ends at the assessor's record for your parcel ; no synthesis
     // replaces the reader clicking through to it.
-    (layer.lookup
-      ? '<div class="lookup"><div class="facts-head">Look this up yourself</div>' +
-        "<p>" + esc(layer.lookup) + "</p>" +
-        (layer.website ? "<p>" + link(layer.website, "Official site ↗") + "</p>" : "") +
-        "</div>"
+    (layer.website
+      ? '<div class="lookup">' + link(layer.website, "Official site \u2197") + "</div>"
       : "") +
-    '<div class="card-news" id="card-news"><div class="loading">Looking for recent coverage…</div></div>' +
-    '<button type="button" class="btn card-ask" id="card-ask">What\u2019s changing here?</button>' +
-    '<p class="card-note">Boundaries from the US Census and OpenStreetMap. ' +
-    "The button asks the evidence-ranked question about this body ; the box below is for your own.</p>";
+    '<div class="card-acts" id="card-acts"></div>' +
+    '<div class="card-news" id="card-news"><div class="loading">Looking for what changed\u2026</div></div>' +
+    '<button type="button" class="btn card-ask" id="card-ask">Search the full evidence</button>';
   $("card").classList.add("on");
   requestAnimationFrame(markCardOverflow);
   $("card-close").addEventListener("click", closeSiteCard);
@@ -933,6 +977,87 @@ function showLayerCard(layer){
     ask({question: question, brief: true});
   });
   fillNews(layer, layer.name, where);
+  fillSeats(layer);
+}
+
+// The roster for the whole point is fetched once and every lens reads its own
+// row out of it -- switching lenses should not re-ask GovTrack.
+let seatsFor = "", seatsData = null, seatsWait = null;
+
+function loadSeats(){
+  if (!stackAt) return Promise.resolve({by_layer: {}, sources: {}});
+  const at = stackAt.lat + "," + stackAt.lon;
+  if (seatsFor === at && seatsWait) return seatsWait;
+  seatsFor = at; seatsData = null;
+  const congress = (stack.layers.find(l => l.key === "congress") || {}).geoid || "";
+  seatsWait = fetch("/api/civic/officials?lat=" + stackAt.lat + "&lon=" + stackAt.lon +
+                    "&congress=" + encodeURIComponent(congress))
+    .then(r => r.ok ? r.json() : {by_layer: {}, sources: {}})
+    .catch(() => ({by_layer: {}, sources: {}}))
+    .then(d => { seatsData = d; return d; });
+  return seatsWait;
+}
+
+// Why a chamber has no names against it. "Nobody could be looked up" and
+// "nobody holds the seat" are very different claims and the card makes only
+// the first one.
+const NO_ROSTER = {
+  congress: "No current roster for this district right now.",
+  state_upper: "State legislator rosters need an OpenStates key on this deploy.",
+  state_lower: "State legislator rosters need an OpenStates key on this deploy.",
+};
+
+// How the person in the seat has voted lately. Not "cares about housing" --
+// "Voted Yea on H.R. 1, passed, 14 Feb", with the roll call behind it.
+function fillActs(layer, people){
+  const who = people.find(p => p.id) || {};
+  if (!who.id) return;
+  fetch("/api/civic/activity?layer=" + encodeURIComponent(layer.key) +
+        "&person=" + who.id)
+    .then(r => r.ok ? r.json() : {votes: []})
+    .catch(() => ({votes: []}))
+    .then(data => {
+      const box = $("card-acts");
+      if (cardSubject !== layer || !box || !(data.votes || []).length) return;
+      box.innerHTML = '<div class="facts-head">How ' + esc(who.name.split(" ").pop()) +
+        " voted lately</div>" +
+        data.votes.slice(0, 5).map(v => {
+          const how = (v.how || "").toLowerCase();
+          const tone = how.startsWith("yea") || how.startsWith("aye") ? " yea"
+                     : how.startsWith("nay") || how.startsWith("no") ? " nay" : "";
+          return '<div class="act"><span class="how' + tone + '">' +
+            esc(v.how || "—") + '</span><div><span class="what">' +
+            (v.url ? link(v.url, v.what) : esc(v.what)) + "</span>" +
+            '<span class="when">' + esc([v.result, v.date].filter(Boolean).join(" \u00b7 ")) +
+            "</span></div></div>";
+        }).join("");
+      markCardOverflow();
+    });
+}
+
+function fillSeats(layer){
+  loadSeats().then(data => {
+    if (cardSubject !== layer || !$("card-seats")) return;
+    const people = (data.by_layer || {})[layer.key] || [];
+    const box = $("card-seats");
+    if (people.length) {
+      fillActs(layer, people);
+      box.innerHTML = '<div class="facts-head">Who holds this seat</div>' +
+        people.slice(0, 4).map(p =>
+          '<div class="who"><div><b>' +
+          (p.url ? link(p.url, p.name) : esc(p.name)) + "</b>" +
+          '<span class="role">' + esc(p.role) +
+          (p.since ? " · since " + esc(p.since.slice(0, 4)) : "") + "</span></div>" +
+          (p.party ? '<span class="party">' + esc(p.party) + "</span>" : "") +
+          "</div>").join("");
+    } else {
+      box.innerHTML = '<div class="facts-head">Who holds this seat</div>' +
+        '<div class="none">' +
+        esc(NO_ROSTER[layer.key] || "No public roster names this seat by location.") +
+        "</div>";
+    }
+    markCardOverflow();
+  });
 }
 
 // The question a layer raises, in that layer's vocabulary. Kept in step with
@@ -956,22 +1081,54 @@ function layerQuestion(layer, place){
 
 async function drawLayer(layer){
   if (!map || !map.getSource("layer")) return;
-  const empty = {type: "FeatureCollection", features: []};
-  map.getSource("layer").setData(empty);
-  // By relation when OpenStreetMap gave us one, by name for the Census
-  // layers, which name a district without handing back its shape.
-  const where = layer.relation
-    ? "relation=" + layer.relation
-    : "name=" + encodeURIComponent(layer.name || "");
-  if (!layer.relation && !layer.name) return;
+  map.getSource("layer").setData({type: "FeatureCollection", features: []});
+  showEstimate(layer, null);
+  // Everything the server can use to find this shape, best route first: the
+  // Census GEOID that named the district, the OpenStreetMap relation the pin
+  // fell inside, and the name as a last resort. The server says which one it
+  // actually used, and the map says so too.
+  const ask = [];
+  if (layer.geoid) {
+    ask.push("layer=" + encodeURIComponent(layer.key),
+             "geoid=" + encodeURIComponent(layer.geoid),
+             "detail=" + encodeURIComponent(layer.detail || ""));
+  }
+  if (layer.relation) ask.push("relation=" + layer.relation);
+  if (layer.name) ask.push("name=" + encodeURIComponent(layer.name));
+  if (!ask.length) return;
   try {
-    const res = await fetch("/api/civic/outline?" + where);
+    const res = await fetch("/api/civic/outline?" + ask.join("&"));
     const data = await res.json();
-    if (activeLayer !== layer.key || !data.geometry) return;
+    if (activeLayer !== layer.key) return;
+    if (!data.geometry) { showEstimate(layer, {basis: "", exact: false}); return; }
     map.getSource("layer").setData({
-      type: "Feature", geometry: data.geometry, properties: {color: layer.color}
+      type: "Feature", geometry: data.geometry,
+      properties: {color: layer.color, exact: data.exact ? 1 : 0}
     });
+    showEstimate(layer, data);
   } catch (e) { /* an undrawn boundary is still a named one */ }
+}
+
+// An outline the map is not certain of is drawn, and said so. Passing an
+// estimate off as a survey is the one thing worse than not drawing it.
+const ESTIMATE_HEAD = {
+  name: "Estimated outline",
+  partial: "Partial outline",
+  "": "No outline available",
+};
+
+function showEstimate(layer, data){
+  const box = $("card-estimate");
+  if (!box || cardSubject !== layer) return;
+  if (data && data.exact) { box.hidden = true; return; }
+  if (!data) { box.hidden = true; return; }
+  const head = ESTIMATE_HEAD[data.basis] || ESTIMATE_HEAD[""];
+  const why = data.note ||
+    "No source published a boundary for this district, so the map shows the " +
+    "lens without shading it.";
+  box.innerHTML = "<b>" + esc(head) + ".</b> " + esc(why);
+  box.hidden = false;
+  markCardOverflow();
 }
 
 async function fillNews(card, subject, near){
