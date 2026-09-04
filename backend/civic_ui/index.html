@@ -173,6 +173,10 @@
   .decides li{padding-left:2px}
   .elected{margin-top:8px;font-size:11.5px;color:var(--on-glass-2);border-top:1px solid var(--glass-rule);
     padding-top:6px}
+  .lookup{margin-top:12px;font-family:var(--sans);font-size:12.5px;line-height:1.45;
+    border-left:2px solid var(--green);padding-left:10px}
+  .lookup p{margin:4px 0 0;color:var(--on-glass)}
+  .lookup a{text-decoration:underline;text-underline-offset:2px}
   .card-head b{font-size:16px;font-weight:600;letter-spacing:-.01em;display:block}
   .card-head .sub{font-size:12px;color:var(--on-glass-2);margin-top:2px}
   .card-x{margin-left:auto;background:none;border:0;color:var(--on-glass-2);cursor:pointer;
@@ -857,6 +861,15 @@ function showLayerCard(layer){
     '<div class="decides"><div class="facts-head">What it decides</div><ul>' +
     layer.decides.map(d => "<li>" + esc(d) + "</li>").join("") + "</ul>" +
     '<div class="elected">' + esc(layer.elected) + "</div></div>" +
+    // The body's own site, and the one thing worth looking up on it. A tax
+    // question ends at the assessor's record for your parcel ; no synthesis
+    // replaces the reader clicking through to it.
+    (layer.lookup
+      ? '<div class="lookup"><div class="facts-head">Look this up yourself</div>' +
+        "<p>" + esc(layer.lookup) + "</p>" +
+        (layer.website ? "<p>" + link(layer.website, "Official site ↗") + "</p>" : "") +
+        "</div>"
+      : "") +
     '<div class="card-news" id="card-news"><div class="loading">Looking for recent coverage…</div></div>' +
     '<button type="button" class="btn card-ask" id="card-ask">What\u2019s changing here?</button>' +
     '<p class="card-note">Boundaries from the US Census and OpenStreetMap. ' +
@@ -882,7 +895,7 @@ const LAYER_ASKS = {
   place: (n, p) => "What is " + n + " deciding now about zoning, housing, permits or local taxes, and what changed in the last two years?",
   council: (n, p) => "What is on the agenda for " + n + " in " + p + " — projects, hearings and votes affecting this neighbourhood?",
   school: (n, p) => "What is changing in " + n + " — budget, boundaries, closures, board policy — and what decisions are open?",
-  landuse: (n, p) => "What zoning applies at " + p + ", what does it permit, and what change to it is being proposed?"
+  landuse: (n, p) => "Which zoning district covers " + p + ", what does that section of the municipal code permit — height, density, parking — and what change to it is proposed?"
 };
 
 function layerQuestion(layer, place){

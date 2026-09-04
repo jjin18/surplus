@@ -92,6 +92,15 @@ def exa_status() -> str:
 # What to search for, one query per rung
 # ---------------------------------------------------------------------------
 
+# Where municipal codes actually live. An ordinance is the primary law for a
+# zoning question -- more authoritative than any reporting about it -- so these
+# rank as official data, not as somebody's website.
+_CODE_HOSTS = {
+    "library.municode.com", "municode.com", "codelibrary.amlegal.com",
+    "amlegal.com", "ecode360.com", "municipal.codes", "sterlingcodifiers.com",
+    "codepublishing.com", "qcode.us", "legislation.gov.uk",
+}
+
 _SOCIAL_DOMAINS = ["reddit.com", "x.com", "twitter.com", "news.ycombinator.com",
                    "nextdoor.com", "quora.com", "bsky.app"]
 
@@ -111,6 +120,10 @@ TIER_PLAN: list[dict] = [
      "query": "{q} {place} what is happening now, reporting and coverage"},
     {"tier": "F", "results": 4, "category": None, "domains": _SOCIAL_DOMAINS,
      "query": "{q} {place} what residents are saying and complaining about"},
+    # The code section itself. Only Exa can be pointed at a domain list, so
+    # this rung exists only on that path.
+    {"tier": "A", "results": 4, "category": None, "domains": sorted(_CODE_HOSTS),
+     "query": "{q} {place} municipal code ordinance section"},
 ]
 
 # When the first pass comes back thin, this is what "search harder at tiers A
@@ -636,6 +649,8 @@ def classify(url: str, claimed: str = "E") -> str:
         return "F"
     if host.endswith(_GOV_SUFFIXES) or ".gov." in host:
         return "A"
+    if _matches(host, _CODE_HOSTS):
+        return "A"          # the ordinance itself, not an account of it
     if _matches(host, _RESEARCH_HOSTS):
         return "B"
     if _matches(host, _INSTITUTE_HOSTS) or host.endswith((".edu", ".ac.uk")):
