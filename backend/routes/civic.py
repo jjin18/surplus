@@ -44,7 +44,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import civic, civic_sources
+from .. import civic, civic_geo, civic_sources
 from ..rate_limit import per_ip_rate_limit
 
 router = APIRouter(prefix="/api/civic", tags=["civic"])
@@ -402,6 +402,84 @@ def get_answer(answer_id: str) -> AskOut:
     return AskOut(id=answer_id, cached=True, **hit)
 
 
+# 30/min/IP: this costs two HTTP calls and no tokens, so it is bounded for
+# politeness to the free APIs rather than for money.
+_PLACE_LIMIT = per_ip_rate_limit(limit=30, window_s=60, tag="civic_place")
+
+
+class PlaceOut(BaseModel):
+    subject: str
+    items: list[dict]
+    ran: dict
+
+
+@router.get("/place", response_model=PlaceOut, dependencies=[Depends(_PLACE_LIMIT)])
+def place(subject: str, near: str = "") -> PlaceOut:
+    """What has been written lately about one thing on the map.
+
+    The fast lane. Tapping a school should say something about that school in
+    about a second, so this asks the two news indexes directly and returns
+    what they have -- no model, no synthesis, no evidence ladder, no cost. The
+    side panel is where a question gets the full treatment.
+    """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    subject = (subject or "").strip()
+    if not subject:
+        raise HTTPException(400, {"code": "empty_subject",
+                                  "message": "Name the place first."})
+    found = civic_sources.headlines(subject, (near or "").strip())
+    print(f"  [civic] place {subject[:60]!r} near={near[:40]!r} "
+          f"items={len(found['items'])} ran={found['ran']}")
+    return PlaceOut(subject=subject, items=found["items"], ran=found["ran"])
+
+
+# 60/min/IP : two HTTP calls, no tokens, and the map asks on every click.
+_GEO_LIMIT = per_ip_rate_limit(limit=60, window_s=60, tag="civic_geo")
+
+
+@router.get("/jurisdictions", dependencies=[Depends(_GEO_LIMIT)])
+def jurisdictions(lat: float, lon: float) -> dict:
+    """Every government standing over one point, and what each one decides.
+
+    The map's lens. Picking a layer paints the boundary you are inside and
+    asks that layer's question in that layer's vocabulary -- which is the
+    difference between "what is happening in Oakland" and "what does my
+    school board decide, and when do I vote for it".
+    """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(400, {"code": "bad_point",
+                                  "message": "That is not a point on Earth."})
+    found = civic_geo.stack(lat, lon)
+    print(f"  [civic] jurisdictions {lat:.4f},{lon:.4f} "
+          f"layers={[l['key'] for l in found['layers']]} sources={found['sources']}")
+    return found
+
+
+@router.get("/outline", dependencies=[Depends(_GEO_LIMIT)])
+def outline(relation: int = 0, name: str = "") -> dict:
+    """One boundary's geometry, so the map can draw the district you are in.
+
+    By relation id when OpenStreetMap gave us one, otherwise by name: the
+    Census names districts without shapes, and a district you cannot see is
+    half an answer.
+    """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    try:
+        shape = (civic_geo.outline(relation) if relation
+                 else civic_geo.outline_by_name(name))
+    except Exception as exc:  # noqa: BLE001 : a missing outline is not an error
+        print(f"  [civic] outline {relation or name!r} failed: {type(exc).__name__}")
+        shape = {}
+    return {"relation": relation, "name": name, "geometry": shape}
+
+
 @router.get("/selftest")
 def selftest(probe: int = 0) -> dict:
     """Why is every question failing? Read this instead of the Railway logs.
@@ -446,6 +524,7 @@ def selftest(probe: int = 0) -> dict:
         # it after a deploy: it says which indexes answer from THIS network,
         # which are rate-limiting us, and which have changed shape.
         report["probe"] = civic_sources.probe()
+        report["probe"]["jurisdictions"] = civic_geo.probe()
     return report
 
 

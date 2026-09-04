@@ -58,10 +58,15 @@
     backdrop-filter:blur(14px);pointer-events:auto;white-space:nowrap}
 
   /* ---------- the console ---------- */
-  .console{position:fixed;left:20px;bottom:20px;width:min(430px,calc(100vw - 40px));
-    background:var(--glass-2);border:1px solid var(--glass-rule);border-radius:18px;
-    backdrop-filter:blur(18px);color:var(--on-glass);z-index:6;
-    box-shadow:0 24px 60px rgba(0,0,0,.45);max-height:calc(100vh - 120px);
+  /* One column down the left: the lens, what it governs, then your question.
+     Nothing floats over anything else -- the old card and console fought for
+     the same corner. */
+  .rail-col{position:fixed;left:20px;top:76px;bottom:20px;width:min(400px,calc(100vw - 40px));
+    z-index:6;display:flex;flex-direction:column;gap:10px;pointer-events:none}
+  .rail-col > *{pointer-events:auto}
+  .console{background:var(--glass-2);border:1px solid var(--glass-rule);border-radius:18px;
+    backdrop-filter:blur(18px);color:var(--on-glass);
+    box-shadow:0 24px 60px rgba(0,0,0,.45);flex:none;max-height:44vh;
     display:flex;flex-direction:column}
   .console-body{padding:16px;overflow:auto}
   .place{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);
@@ -98,6 +103,20 @@
   .btn:hover{filter:brightness(1.08)}
   .btn:disabled{opacity:.55;cursor:default;filter:none}
   .btn.ghost{background:rgba(238,241,238,.06);border-color:var(--glass-rule);color:var(--on-glass)}
+  /* The lens picker. Every layer is a government you vote for. */
+  .rail{display:flex;flex-wrap:wrap;gap:6px;padding:2px;flex:none}
+  .rail button{font-family:var(--sans);font-size:11.5px;font-weight:600;white-space:nowrap;
+    color:var(--on-glass-2);background:var(--glass-2);border:1px solid var(--glass-rule);
+    border-radius:999px;padding:6px 11px;cursor:pointer;backdrop-filter:blur(14px);
+    display:flex;align-items:center;gap:6px}
+  .rail button:hover{color:var(--on-glass)}
+  .rail button .dot{width:8px;height:8px;border-radius:50%;background:var(--layer,#888);
+    flex:none}
+  .rail button[aria-pressed="true"]{color:#0B1116;background:var(--layer,#5FD3A0);
+    border-color:var(--layer,#5FD3A0)}
+  .rail button[aria-pressed="true"] .dot{background:rgba(11,17,22,.5)}
+  .rail .empty{color:var(--on-glass-2);font-family:var(--sans);font-size:12px;padding:7px 4px}
+
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
   .chips button{font-family:var(--sans);font-size:13px;background:transparent;color:var(--on-glass-2);
     border:1px solid var(--glass-rule);border-radius:999px;padding:6px 11px;cursor:pointer;text-align:left}
@@ -140,6 +159,43 @@
   .pin::after{content:"";position:absolute;inset:-14px;border-radius:50%;
     border:2px solid rgba(95,211,160,.65);animation:pulse 2.6s ease-out infinite}
   @keyframes pulse{0%{transform:scale(.55);opacity:.9}100%{transform:scale(1.35);opacity:0}}
+
+  /* ---------- tap a pin: facts now, question later ---------- */
+  .card{display:none;background:var(--glass-2);border:1px solid var(--glass-rule);
+    border-radius:16px;backdrop-filter:blur(18px);color:var(--on-glass);padding:14px;
+    box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:auto;flex:1 1 auto;min-height:0}
+  .card.on{display:block}
+  .card-head{display:flex;gap:10px;align-items:flex-start;font-family:var(--sans)}
+  .card-head .ico{font-size:20px;line-height:1.2}
+  .card-head .dot-lg{width:12px;height:12px;border-radius:50%;margin-top:4px;flex:none}
+  .decides{margin-top:12px;font-family:var(--sans);font-size:12.5px;line-height:1.45}
+  .decides ul{margin:6px 0 0;padding-left:16px;display:grid;gap:4px;color:var(--on-glass)}
+  .decides li{padding-left:2px}
+  .elected{margin-top:8px;font-size:11.5px;color:var(--on-glass-2);border-top:1px solid var(--glass-rule);
+    padding-top:6px}
+  .card-head b{font-size:16px;font-weight:600;letter-spacing:-.01em;display:block}
+  .card-head .sub{font-size:12px;color:var(--on-glass-2);margin-top:2px}
+  .card-x{margin-left:auto;background:none;border:0;color:var(--on-glass-2);cursor:pointer;
+    font-size:14px;padding:2px 4px;line-height:1}
+  .facts{display:grid;gap:4px;margin:12px 0 0;font-family:var(--sans);font-size:13px}
+  .facts-head{font-size:11px;font-weight:600;color:var(--on-glass-2);letter-spacing:.02em}
+  .fact{display:flex;gap:10px;justify-content:space-between;border-bottom:1px solid var(--glass-rule);
+    padding-bottom:3px}
+  .fact span{color:var(--on-glass-2)}
+  .fact b{font-weight:600;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    max-width:60%}
+  .card-links{font-family:var(--sans);font-size:12px;margin-top:10px;color:var(--on-glass-2)}
+  .card-links a{text-decoration:underline;text-underline-offset:2px}
+  .card-news{margin-top:12px;font-family:var(--sans)}
+  .card-news h4{font-size:12px;font-weight:600;color:var(--on-glass-2);margin:0 0 6px;
+    text-transform:none}
+  .card-news .head{margin-bottom:8px;font-size:13px;line-height:1.35}
+  .card-news .head a{text-decoration:none}
+  .card-news .head a:hover{text-decoration:underline}
+  .card-news .head span{display:block;font-size:11px;color:var(--on-glass-2);margin-top:1px}
+  .card-news .loading{font-size:12px;color:var(--on-glass-2)}
+  .card-ask{width:100%;margin-top:12px}
+  .card-note{font-family:var(--sans);font-size:11px;color:var(--on-glass-2);margin:8px 0 0;line-height:1.4}
 
   /* ---------- the answer ---------- */
   .panel{position:fixed;top:0;right:0;bottom:0;width:var(--panel-w);background:var(--paper);
@@ -208,8 +264,10 @@
   /* ---------- small screens: console becomes a sheet, panel full width ---------- */
   @media (max-width:900px){
     :root{--panel-w:100vw}
-    .console{left:10px;right:10px;bottom:10px;width:auto;max-height:min(72vh,560px)}
+    .rail-col{left:10px;right:10px;top:auto;bottom:10px;width:auto;max-height:82vh}
+    .console{max-height:min(46vh,420px)}
     .mapctl{right:10px;top:100px;gap:6px}
+    .card{max-height:34vh}
     .mapctl button{padding:7px 10px;font-size:12px}
     .creed{display:none}
     .place .sheet-toggle{display:inline-block}
@@ -244,6 +302,10 @@
   <button id="globe" type="button">Back to globe</button>
 </div>
 
+<div class="rail-col">
+<nav class="rail" id="rail" aria-label="Which government to look through"></nav>
+<aside class="card" id="card" aria-live="polite" aria-label="About this place"></aside>
+
 <section class="console" aria-label="Ask about a place">
   <div class="console-body">
     <div class="place">
@@ -253,7 +315,7 @@
     </div>
     <div class="collapsible" id="ask-fields">
     <p class="sites-note" id="sites-note"></p>
-    <p class="hint" id="hint">Spin the globe, then click where you live — or press <kbd>P</kbd> to drop a pin in the middle. You can also just type a city.</p>
+    <p class="hint" id="hint">Spin the globe, then click where you live — or press <kbd>P</kbd> to drop a pin in the middle. Tap anything on the map for quick facts; ask here for the evidence.</p>
 
     <label class="sr" for="q">Your question</label>
     <textarea id="q" placeholder="Why did my rent go up 15% this year?"></textarea>
@@ -281,6 +343,7 @@
     </div>
   </div>
 </section>
+</div>
 
 <aside class="panel" id="panel" aria-live="polite" aria-label="Answer">
   <div class="panel-bar">
@@ -353,7 +416,8 @@ const STYLE = {
       tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
       attribution: "Elevation: Mapzen / AWS Terrain Tiles"
     },
-    boundary: {type: "geojson", data: {type: "FeatureCollection", features: []}}
+    boundary: {type: "geojson", data: {type: "FeatureCollection", features: []}},
+    layer: {type: "geojson", data: {type: "FeatureCollection", features: []}}
   },
   layers: [
     {id: "bg", type: "background", paint: {"background-color": "#0B1116"}},
@@ -362,9 +426,15 @@ const STYLE = {
     {id: "labels", type: "raster", source: "places", paint: {"raster-opacity": .85}},
     // The jurisdiction the pin fell inside, drawn from its real boundary.
     {id: "boundary-fill", type: "fill", source: "boundary",
-     paint: {"fill-color": "#1E6B4A", "fill-opacity": .16}},
+     paint: {"fill-color": "#1E6B4A", "fill-opacity": .10}},
     {id: "boundary-line", type: "line", source: "boundary",
-     paint: {"line-color": "#5FD3A0", "line-width": 2, "line-blur": .6, "line-opacity": .9}}
+     paint: {"line-color": "#5FD3A0", "line-width": 1.5, "line-blur": .6, "line-opacity": .5}},
+    // The district you are inside, for the lens you have chosen.
+    {id: "layer-glow", type: "line", source: "layer",
+     paint: {"line-color": ["get", "color"], "line-width": 10, "line-blur": 8,
+             "line-opacity": .35}},
+    {id: "layer-line", type: "line", source: "layer",
+     paint: {"line-color": ["get", "color"], "line-width": 2.5, "line-opacity": .95}}
   ]
 };
 const HOME = {center: [-30, 22], zoom: 1.7, pitch: 0, bearing: 0};
@@ -388,6 +458,18 @@ const SITE_KINDS = {
   park:        {icon: "\u{1F333}", color: "#7FBF8F", label: "Park"}
 };
 const MAX_SITES = 40;
+
+// A lens shows the things that lens decides about. Everything at once was the
+// clutter ; this is the fix.
+const LAYER_PINS = {
+  landuse: ["development", "housing"],
+  council: ["development", "housing", "park", "civic"],
+  place: ["civic", "court", "development", "park"],
+  school: ["school"],
+  county: ["court", "hospital", "civic"],
+  state_lower: [], state_upper: [], congress: [],
+  utilities: ["datacenter", "power", "transit"]
+};
 
 const TIERS = {
   A: ["Official data", "governments counting things: census figures, budgets, court and council records"],
@@ -450,7 +532,10 @@ function initMap(){
     boot();
   });
 
-  map.on("click", e => dropPin(e.lngLat.lat, e.lngLat.lng, {fly: false}));
+  map.on("click", e => {
+    dropPin(e.lngLat.lat, e.lngLat.lng, {fly: false});
+    loadStack(e.lngLat.lat, e.lngLat.lng);
+  });
 
   // Mouse-free pin drop: MapLibre already pans and rotates from the keyboard,
   // so "p" is the only missing verb.
@@ -658,20 +743,31 @@ function toSite(el){
     name: t.name || t["construction:name"] || "",
     label: t.name || spec.label,
     what: spec.label,
-    street: [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" ")
+    street: [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" "),
+    // Everything OpenStreetMap already knows about this thing. It is on the
+    // page the instant you tap it, before any search has run.
+    tags: t,
+    osm: (el.type || "node") + "/" + (el.id || "")
   };
 }
 
-let siteMarkers = [];
+let siteMarkers = [], lastSites = [];
 
 // A pill per thing: icon, and its name when it has one. Close enough to the
 // map-pin idiom people already know that nobody has to be told to click it.
 function setSites(sites){
+  lastSites = sites || [];
   siteMarkers.forEach(m => m.remove());
   siteMarkers = [];
   if (!map) return;
 
-  sites.slice(0, MAX_SITES).forEach(site => {
+  // Only the things this lens decides about.
+  const allowed = LAYER_PINS[activeLayer];
+  const shown = allowed && allowed.length
+    ? lastSites.filter(s => allowed.indexOf(s.kind) >= 0)
+    : (allowed ? [] : lastSites);
+
+  shown.slice(0, MAX_SITES).forEach(site => {
     const el = document.createElement("button");
     el.type = "button";
     el.className = "site-pin";
@@ -681,19 +777,158 @@ function setSites(sites){
     el.title = site.what + (site.street ? " · " + site.street : "");
     el.addEventListener("click", ev => {
       ev.stopPropagation();
-      askAboutSite(site, {lat: site.lat, lng: site.lon});
+      openSiteCard(site);
     });
     siteMarkers.push(new maplibregl.Marker({element: el, anchor: "bottom"})
       .setLngLat([site.lon, site.lat]).addTo(map));
   });
 
   const counts = {};
-  sites.slice(0, MAX_SITES).forEach(s => { counts[s.kind] = (counts[s.kind] || 0) + 1; });
+  shown.slice(0, MAX_SITES).forEach(s => { counts[s.kind] = (counts[s.kind] || 0) + 1; });
   const parts = Object.keys(counts).map(k =>
     counts[k] + " " + SITE_KINDS[k].label.toLowerCase() + (counts[k] > 1 ? "s" : ""));
   $("sites-note").textContent = parts.length
-    ? "In view: " + parts.join(" · ") + " — click one to ask about it"
+    ? "In view: " + parts.join(" · ") + " — tap one to see what's there"
     : "";
+}
+
+// ---------------------------------------------------------------------------
+// The lens: which government you are looking through
+// ---------------------------------------------------------------------------
+//
+// Every point sits inside seven or eight governments at once, each with its
+// own election and its own powers. Showing all of them at once is the clutter
+// we had ; showing one at a time, with its boundary drawn and its own things
+// on the map, is a map you can read.
+
+let stack = {layers: []}, activeLayer = "";
+
+async function loadStack(lat, lon){
+  try {
+    const res = await fetch("/api/civic/jurisdictions?lat=" + lat + "&lon=" + lon);
+    if (!res.ok) throw new Error(res.status);
+    stack = await res.json();
+  } catch (e) {
+    stack = {layers: []};
+  }
+  renderRail();
+  if (stack.layers.length) {
+    const keep = stack.layers.some(l => l.key === activeLayer);
+    selectLayer(keep ? activeLayer : stack.layers[0].key);
+  }
+}
+
+function renderRail(){
+  const rail = $("rail");
+  if (!stack.layers.length) {
+    rail.innerHTML = '<span class="empty">Click the map to see which districts you are in.</span>';
+    return;
+  }
+  rail.innerHTML = stack.layers.map(l =>
+    '<button type="button" data-key="' + l.key + '" style="--layer:' + l.color + '" ' +
+    'aria-pressed="' + (l.key === activeLayer) + '">' +
+    '<span class="dot"></span>' + esc(l.label) + "</button>").join("");
+  [...rail.querySelectorAll("button")].forEach(b =>
+    b.addEventListener("click", () => selectLayer(b.dataset.key)));
+}
+
+function selectLayer(key){
+  activeLayer = key;
+  renderRail();
+  const layer = stack.layers.find(l => l.key === key);
+  if (!layer) return;
+  showLayerCard(layer);
+  drawLayer(layer);
+  setSites(lastSites);            // re-filter the pins to this lens
+}
+
+// The card is the layer: what it is, what it decides, when you vote for it,
+// what has been written about it lately, and the question it raises.
+function showLayerCard(layer){
+  cardSubject = layer;
+  const where = state.place || "this area";
+  $("card").innerHTML =
+    '<div class="card-head"><span class="dot-lg" style="background:' + esc(layer.color) + '"></span>' +
+    "<div><b>" + esc(layer.name) + "</b>" +
+    '<div class="sub">' + esc(layer.label) +
+    (layer.source ? " · " + esc(layer.source === "census" ? "US Census" : "OpenStreetMap") : "") +
+    "</div></div>" +
+    '<button type="button" class="card-x" id="card-close" aria-label="Close">✕</button></div>' +
+    '<div class="decides"><div class="facts-head">What it decides</div><ul>' +
+    layer.decides.map(d => "<li>" + esc(d) + "</li>").join("") + "</ul>" +
+    '<div class="elected">' + esc(layer.elected) + "</div></div>" +
+    '<div class="card-news" id="card-news"><div class="loading">Looking for recent coverage…</div></div>' +
+    '<button type="button" class="btn card-ask" id="card-ask">What\u2019s changing here?</button>' +
+    '<p class="card-note">Boundaries from the US Census and OpenStreetMap. ' +
+    "The button asks the evidence-ranked question about this body ; the box below is for your own.</p>";
+  $("card").classList.add("on");
+  $("card-close").addEventListener("click", closeSiteCard);
+  $("card-ask").addEventListener("click", () => {
+    const question = layerQuestion(layer, where);
+    $("q").value = question;
+    ask({question: question, brief: true});
+  });
+  fillNews(layer, layer.name, where);
+}
+
+// The question a layer raises, in that layer's vocabulary. Kept in step with
+// backend/civic_geo.py, which builds the same sentence server-side.
+const LAYER_ASKS = {
+  congress: (n, p) => "What has " + n + " voted on lately that reaches " + p +
+    " — housing, tax, energy or transport — and what is moving in Congress now?",
+  state_upper: (n, p) => "What bills in " + n + " would change rents, property tax, schools or utility bills in " + p + ", and where are they now?",
+  state_lower: (n, p) => "What bills in " + n + " would change housing, tax or schools in " + p + ", and what is on the floor now?",
+  county: (n, p) => "What is changing in " + n + " about property assessment, tax rates, or services that reach " + p + "?",
+  place: (n, p) => "What is " + n + " deciding now about zoning, housing, permits or local taxes, and what changed in the last two years?",
+  council: (n, p) => "What is on the agenda for " + n + " in " + p + " — projects, hearings and votes affecting this neighbourhood?",
+  school: (n, p) => "What is changing in " + n + " — budget, boundaries, closures, board policy — and what decisions are open?",
+  landuse: (n, p) => "What zoning applies at " + p + ", what does it permit, and what change to it is being proposed?"
+};
+
+function layerQuestion(layer, place){
+  const build = LAYER_ASKS[layer.key] || ((n, p) => "What is changing in " + n + " near " + p + "?");
+  return build(layer.name, place);
+}
+
+async function drawLayer(layer){
+  if (!map || !map.getSource("layer")) return;
+  const empty = {type: "FeatureCollection", features: []};
+  map.getSource("layer").setData(empty);
+  // By relation when OpenStreetMap gave us one, by name for the Census
+  // layers, which name a district without handing back its shape.
+  const where = layer.relation
+    ? "relation=" + layer.relation
+    : "name=" + encodeURIComponent(layer.name || "");
+  if (!layer.relation && !layer.name) return;
+  try {
+    const res = await fetch("/api/civic/outline?" + where);
+    const data = await res.json();
+    if (activeLayer !== layer.key || !data.geometry) return;
+    map.getSource("layer").setData({
+      type: "Feature", geometry: data.geometry, properties: {color: layer.color}
+    });
+  } catch (e) { /* an undrawn boundary is still a named one */ }
+}
+
+async function fillNews(card, subject, near){
+  try {
+    const res = await fetch("/api/civic/place?subject=" + encodeURIComponent(subject) +
+                            "&near=" + encodeURIComponent(near));
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (cardSubject !== card) return;
+    const items = data.items || [];
+    $("card-news").innerHTML = items.length
+      ? "<h4>Recently</h4>" + items.slice(0, 4).map(i =>
+          '<div class="head"><a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' +
+          esc(i.title) + "</a><span>" + esc(i.host) +
+          (i.published ? " · " + esc(i.published) : "") + "</span></div>").join("")
+      : '<div class="loading">Nothing written about this one lately.</div>';
+  } catch (e) {
+    if (cardSubject === card) {
+      $("card-news").innerHTML = '<div class="loading">Couldn\'t reach the news indexes.</div>';
+    }
+  }
 }
 
 // Clicking a site asks about that specific thing, in that specific street.
@@ -710,6 +945,73 @@ const SITE_QUESTIONS = {
   power: (n, w, p) => "What does " + n + " in " + p + " supply, and what is driving electricity bills here?",
   park: (n, w, p) => "Who maintains " + n + " in " + p + ", and what is proposed for it?"
 };
+
+// Facts worth putting on the card, in the order someone would ask for them.
+const SITE_FACTS = [
+  ["operator", "Run by"], ["addr:street", "Street"], ["start_date", "Since"],
+  ["building:levels", "Storeys"], ["capacity", "Capacity"],
+  ["opening_hours", "Open"], ["phone", "Phone"], ["construction", "Building"],
+  ["school:type", "Type"], ["healthcare", "Care"], ["network", "Network"],
+  ["operator:type", "Ownership"]
+];
+
+let cardSubject = null;
+
+// Tapping a thing answers immediately from what the map already knows, then
+// fills in what has been written about it lately. Neither step calls the
+// model : the side panel is where a question gets the full treatment.
+function openSiteCard(site){
+  cardSubject = site;
+  const t = site.tags || {};
+  const facts = SITE_FACTS
+    .filter(([key]) => t[key])
+    .slice(0, 6)
+    .map(([key, label]) =>
+      '<div class="fact"><span>' + esc(label) + "</span><b>" +
+      esc(String(t[key]).slice(0, 60)) + "</b></div>").join("");
+
+  const links = [];
+  if (t.website || t["contact:website"]) {
+    links.push(link(t.website || t["contact:website"], "Website ↗"));
+  }
+  if (t.wikipedia) {
+    const [lang, title] = String(t.wikipedia).split(":");
+    if (title) links.push(link("https://" + lang + ".wikipedia.org/wiki/" +
+      encodeURIComponent(title.replace(/ /g, "_")), "Wikipedia ↗"));
+  }
+  if (site.osm) links.push(link("https://www.openstreetmap.org/" + site.osm, "OpenStreetMap ↗"));
+
+  $("card").innerHTML =
+    '<div class="card-head"><span class="ico">' + site.icon + "</span>" +
+    "<div><b>" + esc(site.name || site.what) + "</b>" +
+    '<div class="sub">' + esc(site.what) +
+    (site.street ? " · " + esc(site.street) : "") + "</div></div>" +
+    '<button type="button" class="card-x" id="card-close" aria-label="Close">✕</button></div>' +
+    (facts ? '<div class="facts">' + facts + "</div>" : "") +
+    (links.length ? '<div class="card-links">' + links.join(" · ") + "</div>" : "") +
+    '<div class="card-news" id="card-news"><div class="loading">Looking for recent coverage…</div></div>' +
+    '<button type="button" class="btn card-ask" id="card-ask">Ask the full question</button>' +
+    '<p class="card-note">Quick facts from OpenStreetMap and recent news. ' +
+    "The box on the left is for the question you want the evidence for.</p>";
+
+  $("card").classList.add("on");
+  $("card-close").addEventListener("click", closeSiteCard);
+  $("card-ask").addEventListener("click", () => {
+    closeSiteCard();
+    askAboutSite(site, {lat: site.lat, lng: site.lon});
+  });
+  loadSiteNews(site);
+}
+
+function closeSiteCard(){
+  cardSubject = null;
+  $("card").classList.remove("on");
+}
+
+function loadSiteNews(site){
+  const subject = site.name || (site.what + " " + (site.street || ""));
+  return fillNews(site, subject, state.place || "");
+}
 
 function askAboutSite(props, lngLat){
   const where = props.street || props.name || (state.place || "this area");

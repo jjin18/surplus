@@ -14,7 +14,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import civic
+from backend import civic, civic_sources
 from backend.main import app
 
 
@@ -590,9 +590,10 @@ def test_civic_imports_nothing_from_the_crm():
     import ast
     import pathlib
 
-    allowed = {"civic", "civic_sources", "rate_limit"}
+    allowed = {"civic", "civic_sources", "civic_geo", "rate_limit"}
     root = pathlib.Path(__file__).resolve().parent.parent / "backend"
-    for path in (root / "civic.py", root / "civic_sources.py", root / "routes" / "civic.py"):
+    for path in (root / "civic.py", root / "civic_sources.py", root / "civic_geo.py",
+                 root / "routes" / "civic.py"):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             # `from . import x` / `from ..thing import y` -- the relative ones
@@ -1274,3 +1275,167 @@ def test_a_permalink_this_replica_did_answer_is_served_from_cache(client, monkey
 
 def test_a_link_that_is_not_ours_is_still_a_404(client):
     assert client.get("/api/civic/answer/deadbeefdeadbeef").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# The fast lane: tap a thing on the map, no model involved
+# --------------------------------------------------------------------------
+
+def test_the_place_endpoint_returns_headlines_without_calling_the_model(
+        client, monkeypatch):
+    called = []
+    monkeypatch.setattr(civic, "synthesize",
+                        lambda *a, **k: called.append(1))
+    monkeypatch.setattr(civic_sources, "headlines", lambda subject, near="", limit=6: {
+        "items": [{"tier": "E", "title": "School board votes on the budget",
+                   "url": "https://www.mercurynews.com/story", "host": "mercurynews.com",
+                   "published": "2026-03-02", "snippet": "", "found_by": "google_news"}],
+        "ran": {"google_news": 1, "gdelt": "rate_limited"}})
+
+    r = client.get("/api/civic/place?subject=Lincoln Elementary&near=Oakland, CA")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"][0]["host"] == "mercurynews.com"
+    assert body["ran"]["gdelt"] == "rate_limited"
+    assert called == []                 # the fast lane never synthesizes
+
+
+def test_the_place_endpoint_needs_a_subject(client):
+    assert client.get("/api/civic/place?subject=%20%20").status_code == 400
+
+
+def test_the_place_endpoint_is_off_when_civic_is(client, monkeypatch):
+    monkeypatch.setenv("CIVIC_ENABLED", "0")
+    assert client.get("/api/civic/place?subject=Lincoln").status_code == 503
+
+
+# --------------------------------------------------------------------------
+# The stack of governments over a point
+# --------------------------------------------------------------------------
+
+from backend import civic_geo  # noqa: E402
+
+_CENSUS = {
+    "Congressional Districts": [{"NAME": "Congressional District 12", "GEOID": "0612"}],
+    "State Legislative Districts - Upper Chamber": [{"NAME": "State Senate District 7"}],
+    "State Legislative Districts - Lower Chamber": [{"NAME": "Assembly District 18"}],
+    "Counties": [{"NAME": "Alameda County"}],
+    "Incorporated Places": [{"NAME": "Oakland"}],
+    "Unified School Districts": [{"NAME": "Oakland Unified School District"}],
+    "Census Tracts": [{"NAME": "Census Tract 4030"}],
+}
+
+_OSM = [
+    {"type": "relation", "id": 77, "tags": {"boundary": "political",
+     "political_division": "city_council", "name": "Council District 3"}},
+    {"type": "relation", "id": 12, "tags": {"boundary": "administrative",
+     "admin_level": "8", "name": "Oakland"}},
+    {"type": "way", "id": 9, "tags": {"landuse": "residential"}},
+]
+
+
+def _stack(monkeypatch, census=None, osm=None):
+    civic_geo._CACHE.clear()
+    monkeypatch.setattr(civic_geo, "census_geographies",
+                        lambda lat, lon: census if census is not None else _CENSUS)
+    monkeypatch.setattr(civic_geo, "osm_areas",
+                        lambda lat, lon: osm if osm is not None else _OSM)
+    return civic_geo.stack(37.8044, -122.2712)
+
+
+def test_the_stack_names_every_layer_closest_to_home_first(monkeypatch):
+    found = _stack(monkeypatch)
+    assert [l["key"] for l in found["layers"]] == [
+        "landuse", "council", "place", "school", "county",
+        "state_lower", "state_upper", "congress"]
+    by_key = {l["key"]: l for l in found["layers"]}
+    assert by_key["congress"]["name"] == "Congressional District 12"
+    assert by_key["council"]["name"] == "Council District 3"      # OSM only
+    assert by_key["school"]["name"] == "Oakland Unified School District"
+
+
+def test_every_layer_says_what_it_decides(monkeypatch):
+    for layer in _stack(monkeypatch)["layers"]:
+        assert layer["decides"], layer["key"]
+        assert layer["elected"]
+        assert layer["color"].startswith("#")
+
+
+def test_the_council_district_carries_the_relation_the_outline_needs(monkeypatch):
+    council = next(l for l in _stack(monkeypatch)["layers"] if l["key"] == "council")
+    assert council["relation"] == 77
+    assert council["source"] == "openstreetmap"
+
+
+def test_land_use_says_plainly_that_it_is_not_the_zoning_code(monkeypatch):
+    landuse = next(l for l in _stack(monkeypatch)["layers"] if l["key"] == "landuse")
+    assert "not the legal zoning code" in landuse["detail"]
+
+
+def test_one_source_failing_still_names_what_the_other_knows(monkeypatch):
+    civic_geo._CACHE.clear()
+
+    def boom(lat, lon):
+        raise RuntimeError("HTTP 503")
+
+    monkeypatch.setattr(civic_geo, "census_geographies", boom)
+    monkeypatch.setattr(civic_geo, "osm_areas", lambda lat, lon: _OSM)
+    found = civic_geo.stack(37.8, -122.2)
+    assert [l["key"] for l in found["layers"]] == ["landuse", "council", "place"]
+    assert found["sources"]["census"] == "RuntimeError"
+
+
+def test_the_question_speaks_the_layer_s_own_vocabulary(monkeypatch):
+    by_key = {l["key"]: l for l in _stack(monkeypatch)["layers"]}
+    school = civic_geo.question_for(by_key["school"], "Oakland")
+    assert "Oakland Unified School District" in school
+    assert "boundaries" in school
+    congress = civic_geo.question_for(by_key["congress"], "Oakland")
+    assert "Congressional District 12" in congress and "Oakland" in congress
+
+
+def test_the_jurisdictions_endpoint_returns_the_stack(client, monkeypatch):
+    _stack(monkeypatch)
+    civic_geo._CACHE.clear()
+    r = client.get("/api/civic/jurisdictions?lat=37.8044&lon=-122.2712")
+    assert r.status_code == 200
+    assert {l["key"] for l in r.json()["layers"]} >= {"place", "school", "congress"}
+
+
+def test_the_jurisdictions_endpoint_rejects_a_point_off_the_earth(client):
+    assert client.get("/api/civic/jurisdictions?lat=999&lon=0").status_code == 400
+
+
+def test_a_census_named_district_is_outlined_by_looking_it_up(monkeypatch):
+    calls = []
+
+    def fake_outline(relation_id):
+        calls.append(relation_id)
+        return {"type": "MultiLineString", "coordinates": [[[0, 0], [1, 1]]]}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"elements": [{"type": "relation", "id": 4242}]}
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, data=None, headers=None): return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(civic_geo, "outline", fake_outline)
+    shape = civic_geo.outline_by_name("Oakland Unified School District")
+    assert calls == [4242]
+    assert shape["type"] == "MultiLineString"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", 'name" with a quote', "back\\slash"])
+def test_outline_by_name_refuses_anything_that_could_escape_the_query(bad):
+    # The name goes inside an Overpass query string, so it is checked before
+    # it gets there rather than escaped afterwards.
+    assert civic_geo.outline_by_name(bad) == {}
