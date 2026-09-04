@@ -340,8 +340,14 @@ serial round-trip, so it is capped at 3 and a second pass needs the answer to
 be thinner (`MIN_TIERS_FALLBACK`) than it does when we searched ourselves.
 
 `GET /api/civic/selftest` answers "why is every question failing" without the
-deploy logs (add `?probe=1` to run every backend once and report which indexes
-answer from the deploy's own network). Production runs two replicas behind one
+deploy logs, in two tiers: anyone gets the configuration and the *shape* of the
+last failure (`NotFoundError`, `404`), which is what diagnoses a broken deploy;
+the upstream error text and `?probe=1` (ten outbound calls) need
+`X-Admin-Token`, because unauthenticated error strings are an information leak
+and an unauthenticated fan-out is a cost-DoS — the same pair this repo already
+fixed once for `/api/diagnostics` (security review H-2). The token is checked
+locally against `ADMIN_TOKEN` rather than through `routes/admin`, which takes a
+DB session Civic must not have. Production runs two replicas behind one
 URL and its counters are per-process, so it carries a `boot` id — refresh until
 you have seen both. Every failure is also printed as one greppable line
 (`[civic] error boot=… type=… status=…`), which makes the aggregated deploy log

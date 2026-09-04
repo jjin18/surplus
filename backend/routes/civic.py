@@ -32,6 +32,7 @@ backend/civic.py; this module is the HTTP skin and the fence around it.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import queue
@@ -40,7 +41,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,21 @@ _UI_HTML = _UI_DIR / "index.html"
 # gate as much as an abuse gate. Its own tag, so it doesn't share a window
 # with signup or checkout.
 _ASK_LIMIT = per_ip_rate_limit(limit=10, window_s=60, tag="civic_ask")
+
+
+def _redact(detail: dict, admin: bool) -> dict:
+    """A failure's shape for anyone, its text for an operator.
+
+    Type, status and time are what tell you a deploy is broken. The upstream
+    message can carry a URL, a quota, an account hint -- detail that belongs
+    to whoever runs this, not to whoever found the URL.
+    """
+    if not detail:
+        return {}
+    if admin:
+        return dict(detail)
+    return {k: detail[k] for k in ("at", "type", "status", "mode", "boot")
+            if k in detail}
 
 
 def _int_env(name: str, default: int) -> int:
@@ -480,13 +496,35 @@ def outline(relation: int = 0, name: str = "") -> dict:
     return {"relation": relation, "name": name, "geometry": shape}
 
 
-@router.get("/selftest")
-def selftest(probe: int = 0) -> dict:
+# 30/min/IP. The endpoint is cheap, but it is unauthenticated and it exists to
+# be hit when something is wrong, which is exactly when it gets hammered.
+_SELFTEST_LIMIT = per_ip_rate_limit(limit=30, window_s=60, tag="civic_selftest")
+
+
+def _is_admin(x_admin_token: str = Header(default="", alias="X-Admin-Token")) -> bool:
+    """The same ADMIN_TOKEN the rest of the app uses, checked locally.
+
+    Deliberately not routes/admin._require_admin_token: that one takes a DB
+    session, and Civic's whole isolation story is that it never touches the
+    database. Same secret, constant-time compare, no audit row -- and no
+    coupling that could break the CRM.
+    """
+    expected = (os.environ.get("ADMIN_TOKEN") or "").strip()
+    given = (x_admin_token or "").strip()
+    return bool(expected) and hmac.compare_digest(expected, given)
+
+
+@router.get("/selftest", dependencies=[Depends(_SELFTEST_LIMIT)])
+def selftest(probe: int = 0, admin: bool = Depends(_is_admin)) -> dict:
     """Why is every question failing? Read this instead of the Railway logs.
 
-    Costs nothing and calls nothing upstream : it reports how the surface is
-    configured and what the last upstream failure actually was. No key
-    material, no question text -- the error string only, truncated.
+    Two tiers, because the useful half is also the disclosing half. Anyone can
+    read how the surface is configured and the SHAPE of the last failure --
+    "NotFoundError, 404" is what diagnoses a broken deploy. The upstream error
+    text, and the probe that makes ten outbound calls, need X-Admin-Token:
+    unauthenticated error strings are an information leak and an
+    unauthenticated fan-out is a cost-DoS, which is the same pair this repo
+    already fixed once for /api/diagnostics (security review H-2).
     """
     report = {
         # Production runs two replicas behind one URL and every counter here
@@ -512,14 +550,18 @@ def selftest(probe: int = 0) -> dict:
         "daily_cap": _DAILY_CAP,
         "max_concurrency": _MAX_CONCURRENCY,
         "cached_answers": civic.cache_size(),
-        # {} when nothing has failed since boot.
-        "last_error": dict(civic.LAST_ERROR),
-        "recent_errors": list(civic.RECENT_ERRORS),
+        # The shape of the last failure is public ; its text is not.
+        "last_error": _redact(civic.LAST_ERROR, admin),
+        "recent_errors": [_redact(e, admin) for e in civic.RECENT_ERRORS],
         # What each search backend returned on the last question this replica
         # answered : a count, or the error it raised.
-        "sources_last_run": dict(civic_sources.LAST_RUN),
+        "sources_last_run": (dict(civic_sources.LAST_RUN) if admin
+                             else {k: (v if isinstance(v, int) else "error")
+                                   for k, v in civic_sources.LAST_RUN.items()}),
     }
-    if probe:
+    if probe and not admin:
+        report["probe"] = "needs X-Admin-Token: it makes ten outbound calls"
+    elif probe:
         # ?probe=1 runs every keyless backend once against a fixed query. Read
         # it after a deploy: it says which indexes answer from THIS network,
         # which are rate-limiting us, and which have changed shape.

@@ -239,7 +239,11 @@ def outline_by_name(name: str) -> dict:
     this looks one up by name and draws that.
     """
     name = " ".join((name or "").split())[:120]
-    if not name or '"' in name or "\\" in name:
+    # The name goes inside an Overpass ["name"="..."] filter. A quote or a
+    # backslash could end that string ; a control character could end the
+    # line. Rejected rather than escaped, because the only names we care
+    # about contain neither.
+    if not name or any(c in name for c in ('"', "\\", "\n", "\r", "\x00")):
         return {}
     import httpx
     query = (f'[out:json][timeout:25];rel["boundary"]["name"="{name}"];out ids 1;')
