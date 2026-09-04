@@ -854,7 +854,7 @@ def test_the_streaming_call_reports_searches_writing_and_the_headline(monkeypatc
     response = civic._create([{"role": "user", "content": "x"}],
                              on_event=lambda name, **f: seen.append((name, f)))
 
-    assert response is final
+    assert response.content == final.content        # one turn, passed through
     names = [n for n, _ in seen]
     assert names.count("searching") == 2
     assert "writing" in names
@@ -865,7 +865,7 @@ def test_without_a_callback_the_call_does_not_stream(monkeypatch):
     final = _Response([_text_block(_answer_payload())])
     fake = _FakeClient([], final)
     monkeypatch.setattr(civic, "_client", lambda: fake)
-    assert civic._create([{"role": "user", "content": "x"}]) is final
+    assert civic._create([{"role": "user", "content": "x"}]).content == final.content
     assert "tools" in fake.kwargs          # web_search mode by default
 
 
@@ -995,3 +995,218 @@ def test_a_missing_web_search_entitlement_says_what_to_do(monkeypatch):
     # Never the workaround of answering from memory: an unsourced answer is
     # the failure this product exists to prevent.
     assert "web_search tool" in str(exc.value)
+
+
+# --------------------------------------------------------------------------
+# Dropping a pin is a briefing, not a vague question
+# --------------------------------------------------------------------------
+
+def test_a_briefing_tells_the_model_not_to_ask_for_a_narrower_question():
+    msg = civic.user_message("What is happening in Oakland right now?",
+                             "Oakland, California", brief=True)
+    assert "place briefing" in msg
+    assert "Do NOT ask for a narrower question" in msg
+    assert "rewrites" in msg
+
+
+def test_an_ordinary_question_is_not_a_briefing():
+    assert "place briefing" not in civic.user_message("Why is my rent up?", "Oakland")
+
+
+def test_the_brief_flag_reaches_the_prompt(client, monkeypatch):
+    seen = {}
+
+    def fake(question, location="", **kw):
+        seen.update(kw)
+        return civic.validate(_answer_payload(), _allowed(GOOD_URL, STUDY_URL, NEWS_URL))[0], {
+            "evidence_dropped": 0, "actions_dropped": 0, "mechanisms_dropped": 0,
+            "latency_ms": 5, "sources": "exa", "sources_found": 12, "retried": False}
+
+    monkeypatch.setattr(civic, "available", lambda: True)
+    monkeypatch.setattr(civic, "synthesize", fake)
+    r = client.post("/api/civic/ask", json={
+        "question": "What is happening in Oakland right now?",
+        "location": "Oakland, CA", "brief": True})
+    assert r.status_code == 200
+    assert seen["brief"] is True
+
+
+def test_selftest_names_the_replica_and_its_recent_failures(client):
+    civic.RECENT_ERRORS.clear()
+    civic.LAST_ERROR.clear()
+    body = client.get("/api/civic/selftest").json()
+    assert body["boot"] == civic.BOOT_ID
+    assert body["uptime_s"] >= 0
+    assert body["recent_errors"] == []
+    assert "sources_last_run" in body
+
+
+def test_every_failure_is_kept_in_the_ring_buffer(monkeypatch):
+    civic.RECENT_ERRORS.clear()
+    monkeypatch.setattr(civic, "_model_override", "")
+
+    def create(messages):
+        raise RuntimeError("connection reset by peer")
+
+    for _ in range(3):
+        with pytest.raises(civic.CivicError):
+            civic.synthesize("Why?", "", create=create)
+    assert len(civic.RECENT_ERRORS) == 3
+    assert all(e["boot"] == civic.BOOT_ID for e in civic.RECENT_ERRORS)
+    civic.RECENT_ERRORS.clear()
+
+
+# --------------------------------------------------------------------------
+# A long search loop pauses the turn. Resuming it is the difference between
+# an answer and "the model answered in prose".
+# --------------------------------------------------------------------------
+
+class _Paused:
+    def __init__(self, content, stop_reason):
+        self.content = content
+        self.stop_reason = stop_reason
+
+
+class _TurnClient:
+    """Returns a queued response per call, recording what it was sent."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.sent = []
+
+    def with_options(self, **kw): return self
+
+    @property
+    def messages(self): return self
+
+    def create(self, **kwargs):
+        self.sent.append(kwargs["messages"])
+        return self._responses.pop(0)
+
+
+def test_a_paused_turn_is_resumed_and_its_searches_are_kept(monkeypatch):
+    payload = _answer_payload()
+    fake = _TurnClient([
+        # Searched, ran out of turn before writing anything.
+        _Paused([_search_block(GOOD_URL, STUDY_URL)], "pause_turn"),
+        # Resumed: more searching, then the answer.
+        _Paused([_search_block(NEWS_URL), _text_block(payload)], "end_turn"),
+    ])
+    monkeypatch.setattr(civic, "_client", lambda: fake)
+
+    response = civic._create([{"role": "user", "content": "Why is rent up?"}])
+    assert response.stop_reason == "end_turn"
+    # Both turns' blocks are kept, so the citations found before the pause
+    # still count as grounded.
+    urls = civic.search_urls(response.content)
+    assert civic.normalise_url(GOOD_URL) in urls
+    assert civic.normalise_url(NEWS_URL) in urls
+    # The second call carried the first turn's content back as an assistant turn.
+    assert len(fake.sent) == 2
+    assert fake.sent[1][-1]["role"] == "assistant"
+
+
+def test_resuming_gives_up_rather_than_looping_forever(monkeypatch):
+    fake = _TurnClient([_Paused([_search_block(GOOD_URL)], "pause_turn")
+                        for _ in range(civic.MAX_TURNS + 2)])
+    monkeypatch.setattr(civic, "_client", lambda: fake)
+    response = civic._create([{"role": "user", "content": "x"}])
+    assert len(fake.sent) == civic.MAX_TURNS
+    assert response.stop_reason == "pause_turn"
+
+
+def test_a_cut_off_answer_says_so_instead_of_blaming_prose(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+
+    def create(messages):
+        return _Paused([_search_block(GOOD_URL),
+                        _text_block('{"headline": "Rents rose because')], "max_tokens")
+
+    with pytest.raises(civic.CivicError) as exc:
+        civic.synthesize("Why is rent up?", "", create=create)
+    assert exc.value.code == "truncated"
+    assert "cut off" in str(exc.value)
+
+
+def test_an_unfinished_search_says_so_too(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+
+    def create(messages):
+        return _Paused([_search_block(GOOD_URL)], "pause_turn")
+
+    with pytest.raises(civic.CivicError) as exc:
+        civic.synthesize("Why is rent up?", "", create=create)
+    assert exc.value.code == "unfinished"
+
+
+# --------------------------------------------------------------------------
+# An answer with nothing under it is the one thing this must never publish
+# --------------------------------------------------------------------------
+
+def _tool_error_block(code="max_uses_exceeded"):
+    """What a failed web_search looks like: HTTP 200, error object inside."""
+    return {"type": "web_search_tool_result",
+            "content": {"type": "web_search_tool_result_error", "error_code": code}}
+
+
+def test_a_failed_web_search_stops_the_answer_instead_of_writing_from_memory(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+    # The model happily writes prose with no citations when its search fails.
+    unsourced = _answer_payload(evidence=[], headline="Live search wasn't available")
+
+    def create(messages):
+        return _Response([_tool_error_block("web_search_unavailable"),
+                          _text_block(unsourced)])
+
+    with pytest.raises(civic.CivicError) as exc:
+        civic.synthesize("What is proposed near Mira Mesa Blvd?", "San Diego", create=create)
+    assert exc.value.code == "no_search_backend"
+    assert "web_search_unavailable" in str(exc.value)
+
+
+def test_search_errors_are_read_off_the_tool_result_block():
+    assert civic.search_errors([_tool_error_block("max_uses_exceeded")]) == ["max_uses_exceeded"]
+    # A healthy result carries a LIST of results, and is not an error.
+    assert civic.search_errors([_search_block(GOOD_URL)]) == []
+
+
+def test_an_answer_with_an_empty_ladder_is_refused(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+
+    def create(messages):
+        # Searches ran, nothing was cited: every claim came from the model.
+        return _Response([_search_block(GOOD_URL),
+                          _text_block(_answer_payload(evidence=[]))])
+
+    with pytest.raises(civic.CivicError) as exc:
+        civic.synthesize("What is proposed near Mira Mesa Blvd?", "San Diego", create=create)
+    assert exc.value.code == "no_evidence"
+    assert "answer from memory" in str(exc.value)
+
+
+def test_a_vague_question_is_still_allowed_to_have_no_evidence(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+    vague = {"headline": civic.VAGUE_HEADLINE, "summary": "", "mechanisms": [],
+             "evidence": [], "disputed": [], "live_decisions": [], "actions": [],
+             "caveat": "", "rewrites": ["Why is my rent up?"]}
+
+    def create(messages):
+        return _Response([_text_block(vague)])
+
+    answer, _ = civic.synthesize("politics?", "", create=create)
+    assert answer["headline"] == civic.VAGUE_HEADLINE
+
+
+def test_one_sourced_pass_survives_an_unsourced_one(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+    payloads = [_answer_payload(evidence=[]),                     # thin first pass
+                _answer_payload()]                                 # sourced retry
+    calls = []
+
+    def create(messages):
+        calls.append(1)
+        return _Response([_search_block(GOOD_URL, STUDY_URL, NEWS_URL),
+                          _text_block(payloads[len(calls) - 1])])
+
+    answer, _ = civic.synthesize("Why?", "", create=create)
+    assert len(answer["evidence"]) == 3

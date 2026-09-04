@@ -120,6 +120,9 @@ class AskIn(BaseModel):
     # Set when the answer came from a dropped pin rather than a typed city.
     lat: float | None = Field(None, ge=-90, le=90)
     lon: float | None = Field(None, ge=-180, le=180)
+    # Set when the question came from dropping a pin rather than typing : the
+    # answer is then a briefing about the place, never "ask something narrower".
+    brief: bool = False
 
 
 class AskOut(BaseModel):
@@ -184,6 +187,7 @@ def ask(payload: AskIn) -> AskOut:
     try:
         answer, notes = civic.synthesize(
             question, location, lat=payload.lat, lon=payload.lon,
+            brief=payload.brief,
         )
     except civic.CivicError as exc:
         # Log the shape of the failure; the question and place are already in
@@ -300,6 +304,7 @@ def ask_stream(payload: AskIn):
             try:
                 answer, notes = civic.synthesize(
                     question, location, lat=payload.lat, lon=payload.lon,
+                    brief=payload.brief,
                     on_event=lambda name, **fields: events.put((name, fields)),
                 )
             except civic.CivicError as exc:
@@ -373,14 +378,20 @@ def get_answer(answer_id: str) -> AskOut:
 
 
 @router.get("/selftest")
-def selftest() -> dict:
+def selftest(probe: int = 0) -> dict:
     """Why is every question failing? Read this instead of the Railway logs.
 
     Costs nothing and calls nothing upstream : it reports how the surface is
     configured and what the last upstream failure actually was. No key
     material, no question text -- the error string only, truncated.
     """
-    return {
+    report = {
+        # Production runs two replicas behind one URL and every counter here
+        # is one process's. Refresh until you have seen both boot ids.
+        "boot": civic.BOOT_ID,
+        "booted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                   time.gmtime(civic.BOOTED_AT)),
+        "uptime_s": int(time.time() - civic.BOOTED_AT),
         "enabled": enabled(),
         "anthropic_key": bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
         "anthropic_sdk": civic.available() or bool(
@@ -397,7 +408,17 @@ def selftest() -> dict:
         "cached_answers": civic.cache_size(),
         # {} when nothing has failed since boot.
         "last_error": dict(civic.LAST_ERROR),
+        "recent_errors": list(civic.RECENT_ERRORS),
+        # What each search backend returned on the last question this replica
+        # answered : a count, or the error it raised.
+        "sources_last_run": dict(civic_sources.LAST_RUN),
     }
+    if probe:
+        # ?probe=1 runs every keyless backend once against a fixed query. Read
+        # it after a deploy: it says which indexes answer from THIS network,
+        # which are rate-limiting us, and which have changed shape.
+        report["probe"] = civic_sources.probe()
+    return report
 
 
 def _page():

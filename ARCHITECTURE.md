@@ -256,7 +256,13 @@ serial round-trip, so it is capped at 5 and a second pass needs the answer to
 be thinner (`MIN_TIERS_FALLBACK`) than it does in Exa mode.
 
 `GET /api/civic/selftest` answers "why is every question failing" without the
-deploy logs: how the surface is configured, which model is actually in use,
+deploy logs (add `?probe=1` to run every backend once and report which indexes
+answer from the deploy's own network). Production runs two replicas behind one
+URL and its counters are per-process, so it carries a `boot` id — refresh until
+you have seen both. Every failure is also printed as one greppable line
+(`[civic] error boot=… type=… status=…`), which makes the aggregated deploy log
+the shared error store, and is optionally POSTed to `CIVIC_ERROR_WEBHOOK`. It
+reports: how the surface is configured, which model is actually in use,
 and the last upstream failure (type, status, truncated message — no keys, no
 question text). Two failures are self-healing or self-explaining: a model this
 account cannot use falls back to the one `agents/llm.py` already runs in
@@ -270,6 +276,14 @@ action whose URL is not in the source set** → if the answer spans fewer than
 three tiers, search once more (harder at tiers A and B) and keep whichever
 pass reached further. Answers are cached by `sha256(question|location)` for
 24h and shared as `/civic/r/{id}`.
+
+**An answer with an empty ladder is refused, not rendered.** Two failures used
+to produce a confident page with six grey "nothing found at this level" rungs
+under it: a `web_search` tool error (which arrives as HTTP 200 with an error
+object inside the result block, not as an exception) and a model that answers
+from memory when its searches came back empty. Both now raise — the reader gets
+"the search itself failed, here is why", never an unsourced answer wearing the
+ladder's authority.
 
 The rules that must not drift into being suggestions live in `validate()`, not
 in the prompt: a citation the search never returned is dropped; the tier comes

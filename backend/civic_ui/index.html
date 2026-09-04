@@ -73,6 +73,16 @@
   .console.collapsed .collapsible{display:none}
   .place .coords{font-variant-numeric:tabular-nums;font-size:12px}
   .hint{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);margin:0 0 10px}
+  .sites-note{font-family:var(--sans);font-size:12px;color:var(--amber);margin:0 0 8px;
+    font-weight:600}
+  .site-pin{display:flex;align-items:center;gap:5px;font-family:var(--sans);font-size:12px;
+    font-weight:600;color:var(--on-glass);background:rgba(16,23,29,.9);cursor:pointer;
+    border:1px solid var(--pin,#B9791A);border-radius:999px;padding:4px 9px 4px 6px;
+    box-shadow:0 6px 16px rgba(0,0,0,.45);white-space:nowrap;max-width:190px}
+  .site-pin:hover{background:var(--pin);color:#0B1116}
+  .site-pin .ico{font-size:13px;line-height:1}
+  .site-pin .txt{overflow:hidden;text-overflow:ellipsis}
+  @media (max-width:560px){ .site-pin .txt{display:none} }
   .hint kbd{font-family:var(--sans);font-size:11px;border:1px solid var(--glass-rule);
     border-radius:4px;padding:1px 5px;background:rgba(238,241,238,.08)}
   textarea#q{font-family:var(--sans);font-size:19px;font-weight:600;letter-spacing:-.01em;
@@ -242,6 +252,7 @@
               aria-controls="ask-fields">Hide</button>
     </div>
     <div class="collapsible" id="ask-fields">
+    <p class="sites-note" id="sites-note"></p>
     <p class="hint" id="hint">Spin the globe, then click where you live — or press <kbd>P</kbd> to drop a pin in the middle. You can also just type a city.</p>
 
     <label class="sr" for="q">Your question</label>
@@ -284,7 +295,7 @@
     <p class="summary" id="r-summary"></p>
 
     <div class="sec" id="sec-rewrites" hidden>
-      <h3>Ask one of these instead</h3>
+      <h3 id="rewrites-head">Ask one of these instead</h3>
       <div class="rewrites" id="r-rewrites"></div>
     </div>
 
@@ -357,7 +368,26 @@ const STYLE = {
   ]
 };
 const HOME = {center: [-30, 22], zoom: 1.7, pitch: 0, bearing: 0};
-const CITY_ZOOM = 12.6, CITY_PITCH = 58;
+const CITY_ZOOM = 13.4, CITY_PITCH = 58;
+
+// Zoom past this and the map starts showing what is actually being built.
+const SITES_ZOOM = 12.5;
+const OVERPASS = "https://overpass-api.de/api/interpreter";
+// What the map can point at, and the icon it wears. Each kind is a question
+// someone might actually have about the thing in front of them.
+const SITE_KINDS = {
+  development: {icon: "\u{1F3D7}", color: "#B9791A", label: "Development"},
+  housing:     {icon: "\u{1F3E0}", color: "#B9791A", label: "Housing"},
+  civic:       {icon: "\u{1F3DB}", color: "#5FD3A0", label: "City hall"},
+  court:       {icon: "\u2696",    color: "#5FD3A0", label: "Court"},
+  school:      {icon: "\u{1F3EB}", color: "#8FBF9F", label: "School"},
+  hospital:    {icon: "\u{1F3E5}", color: "#8FBF9F", label: "Hospital"},
+  transit:     {icon: "\u{1F687}", color: "#7FB0D0", label: "Transit"},
+  datacenter:  {icon: "\u{1F5C4}", color: "#C77FD0", label: "Data centre"},
+  power:       {icon: "\u26A1",    color: "#D0B87F", label: "Power"},
+  park:        {icon: "\u{1F333}", color: "#7FBF8F", label: "Park"}
+};
+const MAX_SITES = 40;
 
 const TIERS = {
   A: ["Official data", "governments counting things: census figures, budgets, court and council records"],
@@ -378,7 +408,16 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
   c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const isHttp = u => typeof u === "string" && /^https?:\/\//i.test(u);
 
-const state = {pin: null, place: "", busy: false, spinning: !reduced, map: null, marker: null};
+const state = {pin: null, place: "", busy: false, spinning: !reduced, map: null,
+               marker: null, briefed: "", briefTimer: null};
+
+// Dropping a pin asks the place what is going on, without waiting for anyone
+// to type. Debounced, because dragging the pin across a county should ask once
+// at the end, not once per frame.
+const BRIEF_DELAY_MS = 900;
+const briefQuestion = place =>
+  "What is happening in " + place + " right now \u2014 what decisions are open, " +
+  "what is changing, and what is driving it?";
 
 // ---------------------------------------------------------------------------
 // Map
@@ -422,7 +461,21 @@ function initMap(){
   });
   ["mousedown", "touchstart", "wheel", "keydown"].forEach(ev =>
     map.getCanvas().addEventListener(ev, () => { state.spinning = false; }, {passive: true}));
-  map.on("moveend", () => { if (state.spinning) spin(); });
+  map.on("moveend", () => {
+    if (state.spinning) spin();
+    scheduleSites();
+  });
+
+  // Clicking something on the map asks about that thing, by name.
+  ["sites-dot", "sites-halo"].forEach(layer => {
+    map.on("click", layer, e => {
+      const f = e.features && e.features[0];
+      if (!f) return;
+      askAboutSite(f.properties || {}, e.lngLat);
+    });
+    map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+  });
 }
 
 // Idle globe rotation. Stops on the first interaction, never starts under
@@ -482,7 +535,192 @@ function setPlace(name, lat, lon){
   if (name) {
     $("loc").value = name;
     $("hint").textContent = "Asking about this place. Drag the pin to ask about somewhere else.";
+    placeChips(name);
+    scheduleBrief(name);
   }
+}
+
+// Follow-ups written for the place under the pin. Free, instant, and the
+// answer to "what else could I ask" without a round-trip.
+function placeChips(place){
+  const short = place.split(",")[0].trim() || place;
+  const chips = [
+    "Why is rent going up in " + short + "?",
+    "Why is my property tax going up in " + short + "?",
+    "What is on the ballot in " + short + "?",
+    "Is " + short + " approving new housing?",
+    "What is driving my electricity bill in " + short + "?"
+  ];
+  $("chips").innerHTML = chips.map(c =>
+    '<button type="button">' + esc(c) + "</button>").join("");
+}
+
+// Ask about the place as soon as the pin settles. Skipped when the reader has
+// typed a question of their own -- theirs wins -- and never asked twice for
+// the same place.
+function scheduleBrief(place){
+  clearTimeout(state.briefTimer);
+  if ($("q").value.trim()) return;
+  if (state.briefed === place) return;
+  state.briefTimer = setTimeout(() => {
+    if ($("q").value.trim() || state.busy) return;
+    state.briefed = place;
+    ask({question: briefQuestion(place), brief: true});
+  }, BRIEF_DELAY_MS);
+}
+
+// ---------------------------------------------------------------------------
+// What is being built here — OpenStreetMap, live, keyless
+// ---------------------------------------------------------------------------
+//
+// Zoomed into a place, the question "what is going on here" has a literal
+// answer the map can show without asking anyone: the construction sites and
+// the civic buildings in view. It costs nothing, arrives in a second or two,
+// and each one is a thing you can then ask about by name.
+
+let sitesTimer = null, sitesKey = "";
+
+function scheduleSites(){
+  if (!map) return;
+  clearTimeout(sitesTimer);
+  if (map.getZoom() < SITES_ZOOM) {
+    setSites([]);
+    return;
+  }
+  sitesTimer = setTimeout(loadSites, 700);
+}
+
+async function loadSites(){
+  const b = map.getBounds();
+  const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
+    .map(n => n.toFixed(4)).join(",");
+  if (bbox === sitesKey) return;
+  sitesKey = bbox;
+
+  const query = `[out:json][timeout:20];(
+    way["building"="construction"](${bbox});
+    way["landuse"="construction"](${bbox});
+    way["construction"](${bbox});
+    way["proposed:building"](${bbox});
+    way["building"="apartments"]["building:levels"~"^[5-9]|^[1-9][0-9]"](${bbox});
+    nwr["amenity"="townhall"](${bbox});
+    nwr["amenity"="courthouse"](${bbox});
+    nwr["amenity"="school"](${bbox});
+    nwr["amenity"="hospital"](${bbox});
+    nwr["railway"="station"](${bbox});
+    nwr["railway"="construction"](${bbox});
+    nwr["telecom"="data_center"](${bbox});
+    nwr["building"="data_center"](${bbox});
+    nwr["power"="plant"](${bbox});
+    nwr["power"="substation"](${bbox});
+    nwr["leisure"="park"]["name"](${bbox});
+  );out center 120;`;
+
+  let data;
+  try {
+    const res = await fetch(OVERPASS, {method: "POST", body: "data=" + encodeURIComponent(query),
+      headers: {"Content-Type": "application/x-www-form-urlencoded"}});
+    if (!res.ok) throw new Error(res.status);
+    data = await res.json();
+  } catch (e) {
+    // Overpass is free and busy ; an empty map is the honest failure here.
+    return;
+  }
+  if (bbox !== sitesKey) return;                  // the view moved on
+  setSites((data.elements || []).map(toSite).filter(Boolean));
+}
+
+function toSite(el){
+  const point = el.center || el;
+  if (typeof point.lat !== "number" || typeof point.lon !== "number") return null;
+  const t = el.tags || {};
+  let kind = "";
+  if (t.telecom === "data_center" || t.building === "data_center") kind = "datacenter";
+  else if (t.power === "plant" || t.power === "substation") kind = "power";
+  else if (t.amenity === "townhall") kind = "civic";
+  else if (t.amenity === "courthouse") kind = "court";
+  else if (t.amenity === "school") kind = "school";
+  else if (t.amenity === "hospital") kind = "hospital";
+  else if (t.railway === "station" || t.railway === "construction") kind = "transit";
+  else if (t.leisure === "park") kind = "park";
+  else if (t.building === "apartments") kind = "housing";
+  else if (t.building === "construction" || t.landuse === "construction"
+           || t.construction || t["proposed:building"]) kind = "development";
+  if (!kind) return null;
+
+  const spec = SITE_KINDS[kind];
+  return {
+    kind: kind,
+    icon: spec.icon,
+    color: spec.color,
+    lat: point.lat,
+    lon: point.lon,
+    name: t.name || t["construction:name"] || "",
+    label: t.name || spec.label,
+    what: spec.label,
+    street: [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" ")
+  };
+}
+
+let siteMarkers = [];
+
+// A pill per thing: icon, and its name when it has one. Close enough to the
+// map-pin idiom people already know that nobody has to be told to click it.
+function setSites(sites){
+  siteMarkers.forEach(m => m.remove());
+  siteMarkers = [];
+  if (!map) return;
+
+  sites.slice(0, MAX_SITES).forEach(site => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "site-pin";
+    el.style.setProperty("--pin", site.color);
+    el.innerHTML = '<span class="ico">' + site.icon + "</span>" +
+                   '<span class="txt">' + esc(site.label.slice(0, 22)) + "</span>";
+    el.title = site.what + (site.street ? " · " + site.street : "");
+    el.addEventListener("click", ev => {
+      ev.stopPropagation();
+      askAboutSite(site, {lat: site.lat, lng: site.lon});
+    });
+    siteMarkers.push(new maplibregl.Marker({element: el, anchor: "bottom"})
+      .setLngLat([site.lon, site.lat]).addTo(map));
+  });
+
+  const counts = {};
+  sites.slice(0, MAX_SITES).forEach(s => { counts[s.kind] = (counts[s.kind] || 0) + 1; });
+  const parts = Object.keys(counts).map(k =>
+    counts[k] + " " + SITE_KINDS[k].label.toLowerCase() + (counts[k] > 1 ? "s" : ""));
+  $("sites-note").textContent = parts.length
+    ? "In view: " + parts.join(" · ") + " — click one to ask about it"
+    : "";
+}
+
+// Clicking a site asks about that specific thing, in that specific street.
+// The question a thing on the map raises depends on what kind of thing it is.
+const SITE_QUESTIONS = {
+  civic: (n, w, p) => "What is on the agenda at " + n + " in " + p + " right now, and what is being decided?",
+  court: (n, w, p) => "What cases or rulings at " + n + " in " + p + " are changing local rules?",
+  development: (n, w, p) => "What is being built at " + w + " in " + p + ", who approved it, and what did the approval change?",
+  housing: (n, w, p) => "Who approved the housing at " + w + " in " + p + ", and what did it do to rents nearby?",
+  school: (n, w, p) => "How is " + n + " in " + p + " funded, and what is changing about its budget or enrolment?",
+  hospital: (n, w, p) => "What is changing about services or funding at " + n + " in " + p + "?",
+  transit: (n, w, p) => "What service or funding decisions are open for " + n + " in " + p + "?",
+  datacenter: (n, w, p) => "What does the data centre at " + w + " in " + p + " use in power and water, who approved it, and what did it do to local bills?",
+  power: (n, w, p) => "What does " + n + " in " + p + " supply, and what is driving electricity bills here?",
+  park: (n, w, p) => "Who maintains " + n + " in " + p + ", and what is proposed for it?"
+};
+
+function askAboutSite(props, lngLat){
+  const where = props.street || props.name || (state.place || "this area");
+  const place = state.place || "this area";
+  const name = props.name || props.what.toLowerCase();
+  const ask_ = SITE_QUESTIONS[props.kind] || SITE_QUESTIONS.development;
+  const question = ask_(name, where, place);
+  $("q").value = question;
+  clearTimeout(state.briefTimer);
+  if (lngLat) dropPin(lngLat.lat, lngLat.lng, {fly: false});
+  ask({question: question, brief: true});
 }
 
 // ---------------------------------------------------------------------------
@@ -588,9 +826,10 @@ function showError(message, raw, label){
   box.classList.add("on");
 }
 
-async function ask(){
+async function ask(opts){
+  opts = opts || {};
   if (state.busy) return;
-  const question = $("q").value.trim();
+  const question = (opts.question || $("q").value).trim();
   if (!question) { $("q").focus(); return; }
   const location = $("loc").value.trim();
 
@@ -599,8 +838,11 @@ async function ask(){
   $("error").classList.remove("on");
   startProgress();
 
-  const body = {question: question, location: location};
+  const body = {question: question, location: location, brief: !!opts.brief};
   if (state.pin) { body.lat = state.pin.lat; body.lon = state.pin.lon; }
+  $("status-head").textContent = opts.brief
+    ? "Reading what is live in " + (location || "this place")
+    : "Searching, strongest sources first";
 
   try {
     const res = await fetch("/api/civic/ask/stream", {
@@ -704,6 +946,8 @@ function render(payload){
   // Vague question: the rewrites ARE the answer, so the rest is hidden.
   const rewrites = d.rewrites || [];
   const vague = rewrites.length > 0 && (d.evidence || []).length === 0;
+  // On a briefing the rewrites are follow-ups, not a correction.
+  $("rewrites-head").textContent = vague ? "Ask one of these instead" : "Go deeper";
   $("sec-rewrites").hidden = rewrites.length === 0;
   $("r-rewrites").innerHTML = rewrites.map(r =>
     '<button type="button">' + esc(r) + "</button>").join("");
@@ -768,7 +1012,7 @@ function closePanel(){
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
-$("go").addEventListener("click", ask);
+$("go").addEventListener("click", () => ask());
 $("q").addEventListener("keydown", e => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask();
 });
@@ -782,6 +1026,12 @@ $("r-rewrites").addEventListener("click", e => {
   $("q").value = e.target.textContent;
   closePanel();
   ask();
+});
+
+// A typed question outranks the automatic briefing : as soon as there is one,
+// the pending brief is cancelled.
+$("q").addEventListener("input", () => {
+  if ($("q").value.trim()) clearTimeout(state.briefTimer);
 });
 $("close").addEventListener("click", closePanel);
 
@@ -878,6 +1128,16 @@ async function boot(){
 
 initMap();
 if (!map) boot();
+
+// A deliberate handle on the page's internals. Support (and the browser
+// console) can ask what the map is doing without reading the source:
+//   civic.map.getZoom() · civic.state.pin · civic.loadSites()
+window.civic = {
+  get map(){ return map; },
+  state: state,
+  loadSites: loadSites,
+  ask: ask
+};
 })();
 </script>
 </body>
