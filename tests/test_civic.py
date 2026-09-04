@@ -2222,3 +2222,22 @@ def test_an_error_is_not_buried_under_the_suggestions():
     page = _page()
     assert page.index('id="error"') < page.index('class="chips"')
     assert page.index('id="status"') < page.index('class="chips"')
+
+
+def test_the_two_rosters_agree_on_which_chamber_is_which(monkeypatch):
+    # Both paths map chamber -> lens from the same table, so a row from either
+    # source lands on the same lens.
+    monkeypatch.setenv("OPENSTATES_API_KEY", "k")
+    _http(monkeypatch, lambda url, params: _Reply({"results": [
+        {"name": "U. Senator",
+         "current_role": {"org_classification": "upper", "title": "Senator", "district": "11"}}]}))
+    keyed = civic_geo.state_legislators(37.8, -122.27)
+    _csv(monkeypatch, _ROSTER_CSV)
+    keyless = civic_geo.state_legislators_keyless("CA", "06011", "")
+    assert set(keyed) == set(keyless) == {"state_upper"}
+
+
+def test_a_chamber_that_is_neither_house_is_dropped(monkeypatch):
+    _csv(monkeypatch, "name,current_party,current_district,current_chamber\n"
+                      "A. Governor,Democratic,11,executive\n")
+    assert civic_geo.state_legislators_keyless("CA", "06011", "06011") == {}

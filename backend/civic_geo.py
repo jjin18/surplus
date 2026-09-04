@@ -440,8 +440,9 @@ OPENSTATES_PEOPLE_URL = "https://v3.openstates.org/people.geo"
 # the Census already told us which district the point is in -- so a deploy
 # without an API key still names your two state legislators.
 OPENSTATES_CSV_URL = "https://data.openstates.org/people/current/{state}.csv"
-# The chamber a Census layer belongs to, in OpenStates' vocabulary.
-_CHAMBER = {"state_upper": "upper", "state_lower": "lower"}
+# The lens a chamber belongs to, in OpenStates' vocabulary. One table, so the
+# two rosters cannot drift apart on which chamber is which.
+_LAYER_FOR_CHAMBER = {"upper": "state_upper", "lower": "state_lower"}
 
 # The Census keys states by FIPS code ; every roster keys them by postal
 # abbreviation. One table, no network call, no guessing from a place name.
@@ -531,7 +532,7 @@ def state_legislators(lat: float, lon: float) -> dict:
     for who in resp.json().get("results") or []:
         current = who.get("current_role") or {}
         chamber = str(current.get("org_classification") or "").lower()
-        layer = {"upper": "state_upper", "lower": "state_lower"}.get(chamber)
+        layer = _LAYER_FOR_CHAMBER.get(chamber)
         if not layer:
             continue
         title = current.get("title") or chamber.title()
@@ -592,12 +593,12 @@ def state_legislators_keyless(state: str, upper_geoid: str = "",
         chamber = (row.get("current_chamber") or "").strip().lower()
         district = (row.get("current_district") or "").strip()
         target = wanted.get(chamber)
-        if not target or not district:
+        if not target or not district or chamber not in _LAYER_FOR_CHAMBER:
             continue
         here = str(int(district)) if district.isdigit() else district.lstrip("0")
         if here != target:
             continue
-        layer = "state_upper" if chamber == "upper" else "state_lower"
+        layer = _LAYER_FOR_CHAMBER[chamber]
         title = "Senator" if chamber == "upper" else "Representative"
         found.setdefault(layer, []).append(_person(
             row.get("name") or "", f"{title}, district {district}",
