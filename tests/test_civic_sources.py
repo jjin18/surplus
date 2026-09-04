@@ -88,7 +88,7 @@ def test_gather_searches_every_rung_once_and_orders_the_results():
         "A": ["https://www.census.gov/data"],
         "F": ["https://www.reddit.com/r/x/1"],
     })
-    results = cs.gather("Why is rent up?", "Oakland, CA", search=search)
+    results = cs.gather("Why is rent up?", "Oakland, CA", search=search, backends={})
 
     assert sorted(c["tier"] for c in calls) == ["A", "B", "C", "D", "E", "F"]
     assert [r["tier"] for r in results] == ["A", "E", "F"]
@@ -99,19 +99,19 @@ def test_gather_searches_every_rung_once_and_orders_the_results():
 def test_gather_drops_a_url_found_by_two_rungs():
     same = "https://www.census.gov/data"
     search, _ = _fake_search({"A": [same], "C": [same], "E": [same]})
-    results = cs.gather("Why?", "", search=search)
+    results = cs.gather("Why?", "", search=search, backends={})
     assert [r["url"] for r in results] == [same]
 
 
 def test_gather_passes_the_harder_flag_through():
     search, calls = _fake_search({})
-    cs.gather("Why?", "", harder=True, search=search)
+    cs.gather("Why?", "", harder=True, search=search, backends={})
     assert all(c["harder"] is True for c in calls)
 
 
 def test_gather_needs_a_question():
     search, calls = _fake_search({"A": ["https://www.census.gov/data"]})
-    assert cs.gather("   ", "Oakland", search=search) == []
+    assert cs.gather("   ", "Oakland", search=search, backends={}) == []
     assert calls == []
 
 
@@ -140,3 +140,182 @@ def test_available_follows_the_shared_exa_key(monkeypatch):
     assert cs.available()
     monkeypatch.setenv("EXA_API_KEY", "")
     assert not cs.available()
+
+
+# --------------------------------------------------------------------------
+# The backends : parse what each API actually returns, and never raise
+# --------------------------------------------------------------------------
+
+def _json(monkeypatch, payload):
+    """Stand in for one keyless API call."""
+    calls = []
+
+    def fake(url, params, timeout=None):
+        calls.append({"url": url, "params": params})
+        return payload
+
+    monkeypatch.setattr(cs, "_get_json", fake)
+    return calls
+
+
+def test_openalex_rebuilds_the_inverted_abstract(monkeypatch):
+    _json(monkeypatch, {"results": [{
+        "display_name": "Supply and rents",
+        "publication_date": "2024-03-01",
+        "primary_location": {"landing_page_url": "https://www.aeaweb.org/articles/x",
+                             "source": {"display_name": "AEJ"}},
+        # OpenAlex ships abstracts as word -> positions.
+        "abstract_inverted_index": {"New": [0], "supply": [1], "lowers": [2], "rents": [3]},
+    }]})
+    [item] = cs._openalex("rent", "")
+    assert item["tier"] == "B"
+    assert item["url"] == "https://www.aeaweb.org/articles/x"
+    assert item["snippet"] == "New supply lowers rents"
+    assert item["published"] == "2024-03-01"
+
+
+def test_crossref_reads_the_first_title_and_strips_markup(monkeypatch):
+    _json(monkeypatch, {"message": {"items": [{
+        "title": ["Rent control and supply"],
+        "URL": "https://doi.org/10.1234/abc",
+        "abstract": "<jats:p>We find a 2% effect.</jats:p>",
+        "container-title": ["Journal of Urban Economics"],
+        "issued": {"date-parts": [[2023, 7, 4]]},
+    }]}})
+    [item] = cs._crossref("rent control", "")
+    assert item["tier"] == "B"
+    assert item["snippet"] == "We find a 2% effect."
+    assert item["published"] == "2023-07-04"
+
+
+def test_federal_register_keeps_the_agency_when_there_is_no_abstract(monkeypatch):
+    _json(monkeypatch, {"results": [{
+        "title": "Housing Choice Voucher Program",
+        "html_url": "https://www.federalregister.gov/documents/2026/01/02/x",
+        "publication_date": "2026-01-02",
+        "abstract": "",
+        "agencies": [{"name": "Housing and Urban Development Department"}],
+    }]})
+    [item] = cs._federal_register("vouchers", "Oakland")
+    assert item["tier"] == "A"          # .gov settles it
+    assert "Housing and Urban Development" in item["snippet"]
+
+
+def test_data_gov_builds_the_dataset_url_from_the_slug(monkeypatch):
+    _json(monkeypatch, {"result": {"results": [{
+        "title": "Median rent by county",
+        "name": "median-rent-by-county",
+        "notes": "Annual series.",
+        "organization": {"title": "Census Bureau"},
+    }]}})
+    [item] = cs._data_gov("rent", "California")
+    assert item["url"] == "https://catalog.data.gov/dataset/median-rent-by-county"
+    assert item["tier"] == "A"
+
+
+def test_govtrack_names_the_bill_and_its_status(monkeypatch):
+    _json(monkeypatch, {"objects": [{
+        "display_number": "H.R. 1234",
+        "title": "H.R. 1234: Housing Supply Act",
+        "title_without_number": "Housing Supply Act",
+        "link": "https://www.govtrack.us/congress/bills/119/hr1234",
+        "current_status": "referred_to_committee",
+        "current_status_date": "2026-02-11",
+    }]})
+    [item] = cs._govtrack("housing supply", "")
+    assert item["tier"] == "A"
+    assert item["title"].startswith("H.R. 1234")
+    assert "referred to committee" in item["snippet"]
+
+
+def test_uk_parliament_builds_the_bill_url(monkeypatch):
+    _json(monkeypatch, {"items": [{
+        "billId": 3712,
+        "shortTitle": "Renters' Rights Bill",
+        "currentHouse": "Lords",
+        "currentStage": {"description": "Committee stage"},
+        "lastUpdate": "2026-05-06T10:00:00",
+    }]})
+    [item] = cs._uk_parliament("renters rights", "")
+    assert item["url"] == "https://bills.parliament.uk/bills/3712"
+    assert item["published"] == "2026-05-06"
+    assert "Committee stage" in item["snippet"]
+
+
+def test_gdelt_carries_the_source_country(monkeypatch):
+    _json(monkeypatch, {"articles": [{
+        "title": "Council debates rent cap",
+        "url": "https://www.thehindu.com/news/cities/kochi/x",
+        "domain": "thehindu.com",
+        "sourcecountry": "India",
+        "seendate": "20260301T120000Z",
+    }]})
+    [item] = cs._gdelt("rent cap", "Kochi")
+    assert item["tier"] == "E"
+    assert "India" in item["snippet"]
+
+
+def test_hacker_news_falls_back_to_the_discussion_url(monkeypatch):
+    _json(monkeypatch, {"hits": [{"title": "Rent control study",
+                                  "url": None, "objectID": "4242",
+                                  "created_at": "2026-01-05T00:00:00Z"}]})
+    [item] = cs._hacker_news("rent control", "")
+    assert item["url"] == "https://news.ycombinator.com/item?id=4242"
+    assert item["tier"] == "F"
+
+
+def test_reddit_builds_the_permalink_and_stays_tier_f(monkeypatch):
+    _json(monkeypatch, {"data": {"children": [{"data": {
+        "title": "Rents up 20% here",
+        "permalink": "/r/oakland/comments/abc/rents_up/",
+        "selftext": "Anyone else seeing this?",
+        "subreddit": "oakland",
+    }}]}})
+    [item] = cs._reddit("rent", "Oakland")
+    assert item["url"] == "https://www.reddit.com/r/oakland/comments/abc/rents_up/"
+    assert item["tier"] == "F"
+
+
+def test_a_backend_that_returns_something_unexpected_yields_nothing(monkeypatch):
+    _json(monkeypatch, {"unexpected": "shape"})
+    for fn in (cs._openalex, cs._crossref, cs._federal_register, cs._data_gov,
+               cs._govtrack, cs._uk_parliament, cs._gdelt, cs._hacker_news, cs._reddit):
+        assert fn("rent", "Oakland") == []
+
+
+def test_a_result_without_a_url_is_dropped():
+    assert cs._result("A", "test", "No link", "") is None
+    assert cs._result("A", "test", "Not a url", "not-a-url") is None
+
+
+@pytest.mark.parametrize("place,expected", [
+    ("Oakland, California, US", "California"),
+    ("Brooklyn, New York, US", "New York"),
+    ("Kochi, Kerala, IN", ""),
+    ("", ""),
+])
+def test_state_of_reads_the_us_state_for_the_legislature_query(place, expected):
+    assert cs._state_of(place) == expected
+
+
+def test_one_backend_failing_does_not_lose_the_others(monkeypatch):
+    def good(question, place): return [cs._result("E", "good", "t",
+                                                  "https://news.example.com/a")]
+
+    def bad(question, place): raise RuntimeError("HTTP 429: slow down")
+
+    results = cs.gather("Why?", "Oakland", backends={
+        "good": (good, False), "bad": (bad, False),
+    })
+    assert [r["url"] for r in results] == ["https://news.example.com/a"]
+    assert cs.LAST_RUN["good"] == 1
+    assert "429" in cs.LAST_RUN["bad"]
+
+
+def test_the_probe_reports_every_backend(monkeypatch):
+    _json(monkeypatch, {"results": [], "message": {"items": []}, "items": [],
+                        "objects": [], "articles": [], "hits": [],
+                        "data": {"children": []}, "result": {"results": []}})
+    report = cs.probe("housing", "California")
+    assert set(report["backends"]) >= {"openalex", "crossref", "gdelt", "govtrack"}
+    assert report["backends"]["openalex"]["results"] == 0
