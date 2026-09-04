@@ -477,7 +477,8 @@ def jurisdictions(lat: float, lon: float) -> dict:
 
 
 @router.get("/officials", dependencies=[Depends(_GEO_LIMIT)])
-def officials(lat: float, lon: float, congress: str = "") -> dict:
+def officials(lat: float, lon: float, congress: str = "",
+              upper: str = "", lower: str = "") -> dict:
     """Who currently holds the seats this point votes for.
 
     The static list of what a chamber decides is the same in every district
@@ -491,7 +492,7 @@ def officials(lat: float, lon: float, congress: str = "") -> dict:
         raise HTTPException(400, {"code": "bad_point",
                                   "message": "That is not a point on Earth."})
     try:
-        return civic_geo.officials(lat, lon, congress)
+        return civic_geo.officials(lat, lon, congress, upper, lower)
     except Exception as exc:  # noqa: BLE001 : an unnamed seat is not an error
         print(f"  [civic] officials failed: {type(exc).__name__}")
         return {"by_layer": {}, "sources": {"error": type(exc).__name__}}

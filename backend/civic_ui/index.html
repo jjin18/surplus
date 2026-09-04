@@ -143,17 +143,15 @@
   .chips button:hover{border-color:var(--on-glass);color:var(--on-glass)}
 
   /* progress: the six steps teach the method, so they are not a spinner */
-  .status{display:none;margin-top:14px;border-top:1px solid var(--glass-rule);padding-top:12px}
-  .status.on{display:block}
-  .status h4{font-family:var(--sans);font-size:13px;font-weight:600;margin:0 0 8px;color:var(--on-glass)}
-  .status ol{list-style:none;padding:0;margin:0;display:grid;gap:5px;font-family:var(--sans);font-size:13px}
-  .status li{color:var(--on-glass-2);opacity:.45;transition:opacity .3s}
-  .status li.on{opacity:1;color:var(--on-glass)}
-  .status li.done{opacity:.8}
-  .status li.done::before{content:"✓ ";color:#5FD3A0}
-  .status li.on::before{content:"→ "}
-  .status li::before{content:"· "}
-  .status-note{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);
+  /* One line, not a six-step checklist. The reader is waiting for an answer,
+     not for a progress report on the search. */
+  .status{display:none;margin-top:10px;font-family:var(--sans);font-size:13px;
+    color:var(--on-glass-2)}
+  .status.on{display:flex;gap:8px;align-items:baseline}
+  .status .spin{width:9px;height:9px;border-radius:50%;background:var(--green);flex:none;
+    animation:pulse 1.1s ease-in-out infinite;align-self:center}
+  @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+  .status-note{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);display:none;
     margin:10px 0 0;border-top:1px solid var(--glass-rule);padding-top:8px}
   .status-note b{color:var(--on-glass);font-weight:600}
 
@@ -393,6 +391,9 @@
       <button class="btn" id="go" type="button">Find the evidence</button>
     </div>
 
+    <div class="status" id="status"><span class="spin"></span><span id="status-head"></span></div>
+    <div class="error" id="error"></div>
+
     <div class="chips" id="chips">
       <button type="button">What's happening where I dropped my pin?</button>
       <button type="button">Why is my property tax going up?</button>
@@ -400,13 +401,6 @@
       <button type="button">Are data centers raising my power bill?</button>
     </div>
 
-    <div class="status" id="status">
-      <h4 id="status-head">Searching, strongest sources first</h4>
-      <ol id="status-steps"></ol>
-      <p class="status-note" id="status-note"></p>
-    </div>
-
-    <div class="error" id="error"></div>
     </div>
   </div>
 </section>
@@ -990,9 +984,11 @@ function loadSeats(){
   const at = stackAt.lat + "," + stackAt.lon;
   if (seatsFor === at && seatsWait) return seatsWait;
   seatsFor = at; seatsData = null;
-  const congress = (stack.layers.find(l => l.key === "congress") || {}).geoid || "";
+  const geoid = key => (stack.layers.find(l => l.key === key) || {}).geoid || "";
   seatsWait = fetch("/api/civic/officials?lat=" + stackAt.lat + "&lon=" + stackAt.lon +
-                    "&congress=" + encodeURIComponent(congress))
+                    "&congress=" + encodeURIComponent(geoid("congress")) +
+                    "&upper=" + encodeURIComponent(geoid("state_upper")) +
+                    "&lower=" + encodeURIComponent(geoid("state_lower")))
     .then(r => r.ok ? r.json() : {by_layer: {}, sources: {}})
     .catch(() => ({by_layer: {}, sources: {}}))
     .then(d => { seatsData = d; return d; });
@@ -1004,8 +1000,8 @@ function loadSeats(){
 // the first one.
 const NO_ROSTER = {
   congress: "GovTrack did not answer for this district just now.",
-  state_upper: "State rosters need an OpenStates key on this deploy.",
-  state_lower: "State rosters need an OpenStates key on this deploy.",
+  state_upper: "The state roster did not name a member for this district.",
+  state_lower: "The state roster did not name a member for this district.",
   county: "Counties publish their board themselves \u2014 no national roster covers them.",
   place: "Cities publish their mayor and council themselves.",
   council: "Council seats are published by the city, not by any national roster.",
@@ -1309,35 +1305,30 @@ async function forwardGeocode(text){
 // ---------------------------------------------------------------------------
 // Asking
 // ---------------------------------------------------------------------------
-// The steps are what the server says it is doing, not a timer. A question
-// takes 15-40s and the old checklist ran out after 16, so it sat on the last
-// line looking stuck while the work carried on.
+// One line that says where the search has got to. The old version was a
+// six-step checklist narrating the machinery -- which is not what anyone is
+// waiting for, and it pushed the answer below the fold.
 const STEP_TEXT = {
-  started: "Working out what you asked, and where",
-  retrieving: "Searching all six kinds of source at once",
-  retrieved: "Read the sources that came back",
+  started: "Working out what you asked",
+  retrieving: "Searching every kind of source at once",
+  retrieved: "Reading what came back",
   searching: "Searching the web",
   writing: "Writing the answer",
-  headline: "Sorting it: what's settled, what's still argued about",
-  searching_again: "Thin so far — searching again for official data and research"
+  headline: "Sorting what's settled from what's argued",
+  searching_again: "Thin so far \u2014 searching again for official data"
 };
 
 function startProgress(){
   $("status").classList.add("on");
-  $("status-steps").innerHTML = "";
-  $("status-note").textContent = "";
   step("started");
 }
 
-// Mark every earlier line done and add this one as current.
 function step(name, detail){
-  const list = $("status-steps");
-  if (!list) return;
-  [...list.children].forEach(li => { li.className = "done"; });
-  const li = document.createElement("li");
-  li.className = "on";
-  li.textContent = detail ? STEP_TEXT[name] + " — " + detail : (STEP_TEXT[name] || name);
-  list.appendChild(li);
+  const line = $("status-head");
+  if (!line) return;
+  const text = STEP_TEXT[name] || "";
+  if (!text) return;                       // an event with no line of its own
+  line.textContent = detail ? text + " \u2014 " + detail : text;
 }
 
 function stopProgress(){
@@ -1377,9 +1368,6 @@ async function ask(opts){
 
   const body = {question: question, location: location, brief: !!opts.brief};
   if (state.pin) { body.lat = state.pin.lat; body.lon = state.pin.lon; }
-  $("status-head").textContent = opts.brief
-    ? "Reading what is live in " + (location || "this place")
-    : "Searching, strongest sources first";
 
   try {
     const res = await fetch("/api/civic/ask/stream", {
@@ -1442,15 +1430,14 @@ function handleEvent(block){
     return;
   }
   if (name === "retrieved") {
-    step("retrieved", data.count + " sources across " + (data.tiers || []).join(", "));
+    step("retrieved", data.count + " sources");
     return;
   }
-  if (name === "searching") { step("searching", "search " + data.n); return; }
+  if (name === "searching") { step("searching"); return; }
   if (name === "headline") {
     // The headline is the first thing the model writes, so it lands well
-    // before the rest. Show it : the wait stops feeling like nothing.
-    step("headline");
-    $("status-note").innerHTML = "<b>" + esc(data.text) + "</b>";
+    // before the rest. Showing it is better than any step name.
+    $("status-head").textContent = data.text || STEP_TEXT.headline;
     return;
   }
   step(name);
