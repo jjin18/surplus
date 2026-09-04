@@ -319,3 +319,79 @@ def test_the_probe_reports_every_backend(monkeypatch):
     report = cs.probe("housing", "California")
     assert set(report["backends"]) >= {"openalex", "crossref", "gdelt", "govtrack"}
     assert report["backends"]["openalex"]["results"] == 0
+
+
+# --------------------------------------------------------------------------
+# Free APIs under load : a 429 is an event, not a fault
+# --------------------------------------------------------------------------
+
+def test_google_news_reads_the_rss_feed(monkeypatch):
+    feed = """<rss><channel>
+      <item><title>Council debates rent cap</title>
+            <link>https://www.mercurynews.com/story</link>
+            <pubDate>Tue, 03 Mar 2026 08:00:00 GMT</pubDate>
+            <source url="https://www.mercurynews.com">Mercury News</source></item>
+      <item><title><![CDATA[Housing plan advances]]></title>
+            <link>https://www.sfchronicle.com/story2</link>
+            <source url="https://www.sfchronicle.com">SF Chronicle</source></item>
+    </channel></rss>"""
+    monkeypatch.setattr(cs, "_get_text", lambda url, params, timeout=None: feed)
+    items = cs._google_news("rent cap", "Oakland")
+    assert [i["url"] for i in items] == ["https://www.mercurynews.com/story",
+                                         "https://www.sfchronicle.com/story2"]
+    assert items[0]["tier"] == "E"
+    assert items[0]["snippet"] == "Mercury News"
+    assert items[1]["title"] == "Housing plan advances"      # CDATA unwrapped
+
+
+def test_a_rate_limited_backend_is_reported_as_such_not_as_an_error():
+    def limited(question, place): raise cs.RateLimited("rate_limited (HTTP 429)")
+
+    def fine(question, place): return [cs._result("E", "fine", "t",
+                                                  "https://news.example.com/a")]
+
+    cs._RESULT_CACHE.clear()
+    results = cs.gather("Why?", "Oakland", backends={
+        "gdelt": (limited, True), "google_news": (fine, True)})
+    assert cs.LAST_RUN["gdelt"] == "rate_limited"
+    assert cs.LAST_RUN["google_news"] == 1
+    assert len(results) == 1          # the ladder is built from what answered
+
+
+def test_a_backend_answer_is_reused_for_a_few_minutes(monkeypatch):
+    cs._RESULT_CACHE.clear()
+    calls = []
+
+    def counted(question, place):
+        calls.append(1)
+        return [cs._result("E", "counted", "t", "https://news.example.com/a")]
+
+    for _ in range(3):
+        cs.gather("Why is rent up?", "Oakland", backends={"news": (counted, True)})
+    assert len(calls) == 1            # asked once, served three times
+    cs.gather("A different question?", "Oakland", backends={"news": (counted, True)})
+    assert len(calls) == 2            # a different question is a different call
+    cs._RESULT_CACHE.clear()
+
+
+def test_one_retry_then_rate_limited(monkeypatch):
+    attempts = []
+
+    class _Resp:
+        status_code = 429
+        text = "slow down"
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, params=None, headers=None):
+            attempts.append(1)
+            return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(cs.time, "sleep", lambda s: None)
+    with pytest.raises(cs.RateLimited):
+        cs._fetch("https://api.gdeltproject.org/x", {})
+    assert len(attempts) == 2         # tried, backed off, tried once more

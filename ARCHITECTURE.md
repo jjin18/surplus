@@ -222,8 +222,8 @@ whose sources are ranked by how they were produced.
 Files:
 - `backend/civic.py` — the engine: prompt, the evidence ladder, URL grounding,
   schema coercion, the 24h answer cache. No FastAPI, no DB.
-- `backend/civic_sources.py` — retrieval: six Exa searches (one per rung) run
-  in parallel, deduplicated, snippet-capped, and tier-classified by host.
+- `backend/civic_sources.py` — retrieval: ten backends queried in parallel,
+  deduplicated, snippet-capped, tier-classified by host, and cached 5 minutes.
 - `backend/routes/civic.py` — HTTP: rate limit (10/min/IP), cache lookup,
   permalinks, the page.
 - `backend/civic_ui/index.html` — the whole client, one file. MapLibre GL from
@@ -231,19 +231,60 @@ Files:
   Nominatim for geocoding, so the map needs no key of its own. If WebGL or the
   library is missing, the page degrades to a typed-location form.
 
-Two ways to find sources, chosen by whether `EXA_API_KEY` is set:
+**Retrieval is a fan-out, and that is the whole latency story.** Handing Claude
+a `web_search` tool and letting it look is slow for a structural reason: every
+search is a serial round-trip — the model decides, the search runs, the results
+land in context, the model re-reads all of it and decides again. A dozen of
+those is minutes of wall-clock, and both the context and the bill grow with
+each one. So `civic_sources.gather()` does the searching: every backend at
+once, deduplicated, snippet-capped (700 chars), and tier-classified by host
+before the model reads a word. Breadth costs threads, not seconds.
 
-| | Exa (preferred) | Claude `web_search` (fallback) |
-|---|---|---|
-| Who searches | we do, six queries at once | the model, one query per round-trip |
-| Model round-trips | one | one per search plus the answer |
-| Text the model reads | capped per result (700 chars) | whole pages, as returned |
-| Tier of a source | known before the model sees it | inferred from the URL afterwards |
+| Rung | Backend | Key | Covers |
+|---|---|---|---|
+| A | GovTrack | — | US federal bills, by name and status |
+| A | UK Parliament Bills | — | bills before Parliament |
+| A | OpenStates | `OPENSTATES_API_KEY` (free) | all 50 US state legislatures |
+| A | Federal Register | — | US rules, proposed rules, notices |
+| A | data.gov catalogue | — | the dataset behind the number |
+| B | OpenAlex, Crossref | — | papers and DOIs, worldwide |
+| E | GDELT | — | news in 100+ languages (rate-limits hard) |
+| E | Google News RSS | — | the second opinion when GDELT says slow down |
+| F | Hacker News, Reddit | — | what people are arguing about |
+| * | Exa | `EXA_API_KEY` | neural search across all six rungs |
 
-Exa is the cheaper and faster path; the fallback keeps the surface working on
-a deploy that only has the Anthropic key. Empty retrieval (dead key, quota,
-outage) falls back to `web_search` for that question rather than answering
-with nothing to cite.
+Every backend is failure-isolated: one that is down, rate-limited, or has
+changed shape contributes nothing, is recorded in `civic_sources.LAST_RUN`, and
+the answer is built from what did come back. A 429 from a free API is weather
+rather than a fault — one short backoff, then the ladder is built from the
+others — and each backend's answer is cached per process for five minutes,
+which is what keeps two replicas from hammering the same free endpoints.
+Claude's own `web_search` is the safety net for when *everything* returns
+empty, capped at `CIVIC_MAX_SEARCHES` (3).
+
+**An answer with an empty ladder is refused, not rendered.** Two failures used
+to produce a confident page with six grey "nothing found at this level" rungs
+under it: a `web_search` tool error (which arrives as HTTP 200 with an error
+object inside the result block, not as an exception) and a model that answers
+from memory when its searches came back empty. Both now raise — the reader
+gets "the search itself failed, here is why", never an unsourced answer wearing
+the ladder's authority.
+
+**Dropping a pin is a briefing.** The page asks about the place ~900ms after
+the pin settles, without waiting for anyone to type, and sends `brief: true` —
+which tells the model to report what is live there rather than ask for a
+narrower question. A typed question always outranks the pending briefing.
+Zoomed past `SITES_ZOOM`, the map also draws what is physically there from
+OpenStreetMap (construction, city halls, courts, schools, hospitals, transit,
+data centres, substations, parks) as labelled pins; clicking one asks the
+question that thing raises, by name and street. Keyless, instant, and free —
+the fastest honest answer on the page.
+
+**A long search loop pauses the turn.** With server-side tools the API can
+return `stop_reason: "pause_turn"` — searching done, answer unwritten — and
+expects the assistant content back to continue. `_create()` resumes up to
+`MAX_TURNS` (4), keeping every turn's blocks so citations found before the
+pause still count as grounded.
 
 Latency, and what is done about it. A question is 15-40s: searches, then a
 JSON answer written a token at a time. `POST /api/civic/ask/stream` reports the
@@ -252,8 +293,8 @@ work as server-sent events — each search, the moment writing starts, and the
 seconds into the write). The page reads that instead of running a timer.
 `POST /api/civic/ask` stays as the non-streaming path and the fallback for a
 proxy that eats event streams. On the `web_search` fallback each search is a
-serial round-trip, so it is capped at 5 and a second pass needs the answer to
-be thinner (`MIN_TIERS_FALLBACK`) than it does in Exa mode.
+serial round-trip, so it is capped at 3 and a second pass needs the answer to
+be thinner (`MIN_TIERS_FALLBACK`) than it does when we searched ourselves.
 
 `GET /api/civic/selftest` answers "why is every question failing" without the
 deploy logs (add `?probe=1` to run every backend once and report which indexes

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 from urllib.parse import urlsplit
@@ -111,14 +112,60 @@ _HARDER = {"A": 10, "B": 9}
 # in the probe (GET /api/civic/selftest?probe=1) rather than breaking an
 # answer.
 
-def _get_json(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S) -> dict:
+def _fetch(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S,
+           accept: str = "application/json"):
+    """One GET, with a single polite retry when the far end says slow down.
+
+    Several of these APIs are free and busy -- GDELT in particular allows only
+    a request every few seconds per IP, and we run two replicas -- so a 429 is
+    an ordinary event rather than a fault. One short backoff catches most of
+    them ; a second 429 is reported as rate_limited and the answer is built
+    without that backend.
+    """
     import httpx
-    headers = {"accept": "application/json", "user-agent": USER_AGENT}
+    headers = {"accept": accept, "user-agent": USER_AGENT}
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         resp = client.get(url, params=params, headers=headers)
+        if resp.status_code == 429:
+            time.sleep(1.2)
+            resp = client.get(url, params=params, headers=headers)
+    if resp.status_code == 429:
+        raise RateLimited("rate_limited (HTTP 429)")
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:120]}")
-    return resp.json()
+    return resp
+
+
+class RateLimited(RuntimeError):
+    """A free API asking us to come back later. Expected, not broken."""
+
+
+def _get_json(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S) -> dict:
+    return _fetch(url, params, timeout).json()
+
+
+def _get_text(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S) -> str:
+    return _fetch(url, params, timeout, accept="application/rss+xml, text/xml")\
+        .text[:400_000]
+
+
+# Results keep for a few minutes, per process. Repeated questions about the
+# same place are the common case, and it takes the edge off the rate limits.
+_CACHE_TTL_S = 300
+_RESULT_CACHE: dict = {}
+
+
+def _cached(key: str, produce: Callable[[], list]) -> list:
+    now = time.time()
+    hit = _RESULT_CACHE.get(key)
+    if hit and now - hit[0] < _CACHE_TTL_S:
+        return hit[1]
+    found = produce()
+    if len(_RESULT_CACHE) > 300:
+        for stale in sorted(_RESULT_CACHE, key=lambda k: _RESULT_CACHE[k][0])[:100]:
+            _RESULT_CACHE.pop(stale, None)
+    _RESULT_CACHE[key] = (now, found)
+    return found
 
 
 def _clean(text: Optional[str], limit: int = SNIPPET_CHARS) -> str:
@@ -231,6 +278,39 @@ def _gdelt(question: str, place: str) -> list[dict]:
         where = " · ".join(x for x in (art.get("sourcecountry"), art.get("domain")) if x)
         out.append(_result("E", "gdelt", art.get("title"), art.get("url"),
                            snippet=where, published=(art.get("seendate") or "")[:8]))
+    return [r for r in out if r]
+
+
+_ITEM_RE = re.compile(r"<item>(.*?)</item>", re.S | re.I)
+
+
+def _tag(block: str, name: str) -> str:
+    match = re.search(rf"<{name}[^>]*>(.*?)</{name}>", block, re.S | re.I)
+    if not match:
+        return ""
+    text = match.group(1)
+    text = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", text, flags=re.S)
+    return " ".join(text.split())
+
+
+def _google_news(question: str, place: str) -> list[dict]:
+    """Tier E, second opinion. GDELT is broader and multilingual but rate-limits
+    hard ; this is the one that answers when it doesn't, so "what is happening
+    now" does not rest on a single busy API.
+
+    The feed is XML, read with bounded regex rather than an XML parser: it is
+    a fixed, simple shape and an untrusted document should not get an entity
+    expander pointed at it.
+    """
+    body = _get_text("https://news.google.com/rss/search",
+                     {"q": f"{question} {place}".strip(), "hl": "en-US",
+                      "gl": "US", "ceid": "US:en"})
+    out = []
+    for block in _ITEM_RE.findall(body)[:8]:
+        out.append(_result("E", "google_news", _tag(block, "title"),
+                           _tag(block, "link"),
+                           snippet=_tag(block, "source"),
+                           published=_tag(block, "pubDate")[:16]))
     return [r for r in out if r]
 
 
@@ -366,6 +446,7 @@ KEYLESS_BACKENDS: dict = {
     "openalex": (_openalex, False),
     "crossref": (_crossref, False),
     "gdelt": (_gdelt, True),
+    "google_news": (_google_news, True),
     "hacker_news": (_hacker_news, False),
     "reddit": (_reddit, True),
 }
@@ -558,9 +639,14 @@ def gather(question: str, location: str = "", *, harder: bool = False,
     def attempt(job):
         name, call = job
         try:
-            found = call() or []
+            found = _cached(f"{name}|{question}|{place}|{harder}", call) or []
             outcomes[name] = len(found)
             return found
+        except RateLimited:
+            # Expected from a free API under load, and not worth alarming
+            # about : the ladder is built from the other nine.
+            outcomes[name] = "rate_limited"
+            return []
         except Exception as exc:  # noqa: BLE001 : one backend down is not an outage
             outcomes[name] = f"{type(exc).__name__}: {str(exc)[:120]}"
             return []
@@ -602,6 +688,8 @@ def probe(question: str = "housing costs", place: str = "California") -> dict:
                 "sample": found[0]["url"] if found else "",
                 "tier": found[0]["tier"] if found else "",
             }
+        except RateLimited:
+            report["backends"][name] = {"rate_limited": True}
         except Exception as exc:  # noqa: BLE001
             report["backends"][name] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     if available():
