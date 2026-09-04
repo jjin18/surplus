@@ -9,6 +9,7 @@ JSON fails loudly with the raw text kept for the UI.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -968,10 +969,16 @@ def test_selftest_reports_configuration_and_the_last_failure(client, monkeypatch
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is True
-    assert body["sources"] == "web_search"
+    assert body["sources"] == "keyless"      # no Exa key, so the fan-out only
     assert body["model_in_use"] == civic.active_model()
     assert body["last_error"]["type"] == "NotFoundError"
-    assert "key" not in json.dumps(body).lower().replace("anthropic_key", "").replace("exa_key", "")
+    # No key material, ever: the key fields say whether one is set, never what
+    # it is, and nothing in the payload looks like a token.
+    assert body["anthropic_key"] is True or body["anthropic_key"] is False
+    assert body["exa_key"] is True or body["exa_key"] is False
+    blob = json.dumps(body)
+    assert "sk-ant" not in blob
+    assert not re.search(r"[A-Za-z0-9_-]{32,}", blob)
     civic.LAST_ERROR.clear()
 
 

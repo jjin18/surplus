@@ -396,8 +396,11 @@ def selftest(probe: int = 0) -> dict:
         "anthropic_key": bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
         "anthropic_sdk": civic.available() or bool(
             (os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
-        "exa_key": civic_sources.available(),
-        "sources": "exa" if civic_sources.available() else "web_search",
+        # `exa_key` was true while every Exa call 402'd, which read as "the
+        # fast path is on" when it was not. Report what Exa last did.
+        "exa_key": bool((os.environ.get("EXA_API_KEY") or "").strip()),
+        "exa_status": civic_sources.exa_status(),
+        "sources": "exa + keyless" if civic_sources.available() else "keyless",
         "model_configured": civic.MODEL,
         "model_in_use": civic.active_model(),
         "max_tokens": civic.MAX_TOKENS,

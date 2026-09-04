@@ -66,9 +66,26 @@ def _api_key() -> str:
     return (os.environ.get("EXA_API_KEY") or "").strip()
 
 
+# Set when Exa answers 402 (out of credits) or 401 (bad key). Six parallel
+# queries that all fail the same way, on every question, is latency spent to
+# learn nothing.
+_exa_paused_until = 0.0
+EXA_PAUSE_S = 1800
+LAST_EXA_STATUS = ""
+
+
 def available() -> bool:
     """True when retrieval can run here (and `civic.py` should prefer it)."""
-    return bool(_api_key())
+    return bool(_api_key()) and time.time() >= _exa_paused_until
+
+
+def exa_status() -> str:
+    """"" when Exa has not failed, else the reason and how long it is paused."""
+    if not _api_key():
+        return "no key"
+    if time.time() < _exa_paused_until:
+        return f"{LAST_EXA_STATUS} (paused {int(_exa_paused_until - time.time())}s)"
+    return LAST_EXA_STATUS or "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +148,10 @@ def _fetch(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S,
             resp = client.get(url, params=params, headers=headers)
     if resp.status_code == 429:
         raise RateLimited("rate_limited (HTTP 429)")
+    if resp.status_code == 403:
+        # Reddit and friends block datacenter IPs outright. That is a fact
+        # about where we are hosted, not a bug to alarm about every question.
+        raise Blocked("blocked (HTTP 403)")
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:120]}")
     return resp
@@ -138,6 +159,10 @@ def _fetch(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S,
 
 class RateLimited(RuntimeError):
     """A free API asking us to come back later. Expected, not broken."""
+
+
+class Blocked(RuntimeError):
+    """A source that refuses this host. Structural, and not worth retrying."""
 
 
 def _get_json(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S) -> dict:
@@ -249,9 +274,25 @@ def _federal_register(question: str, place: str) -> list[dict]:
 
 
 def _data_gov(question: str, place: str) -> list[dict]:
-    """The US open-data catalogue : the dataset behind the number."""
-    data = _get_json("https://catalog.data.gov/api/3/action/package_search",
-                     {"q": f"{question} {place}".strip(), "rows": 4})
+    """The US open-data catalogue : the dataset behind the number.
+
+    Two paths, because the documented CKAN one (/api/3/action/...) now 404s
+    through data.gov's gateway with a non-CKAN error body. The legacy path
+    still answers ; try both before calling it down.
+    """
+    params = {"q": f"{question} {place}".strip(), "rows": 4}
+    data = None
+    for url in ("https://catalog.data.gov/api/action/package_search",
+                "https://catalog.data.gov/api/3/action/package_search"):
+        try:
+            data = _get_json(url, params)
+            break
+        except RateLimited:
+            raise
+        except Exception:
+            continue
+    if data is None:
+        raise RuntimeError("no data.gov endpoint answered")
     out = []
     for pkg in ((data.get("result") or {}).get("results") or []):
         slug = pkg.get("name") or ""
@@ -315,15 +356,27 @@ def _google_news(question: str, place: str) -> list[dict]:
 
 
 def _hacker_news(question: str, place: str) -> list[dict]:
-    """Tier F. Never evidence of a claim -- evidence that people are arguing."""
+    """Tier F. Never evidence of a claim -- evidence that people are arguing.
+
+    The link is the DISCUSSION, not the article it points at. A newspaper
+    story that happened to be posted here is journalism and belongs on tier E
+    with its own link ; citing it from a forum thread would put real reporting
+    on the bottom rung and dress the thread up as the source.
+    """
     data = _get_json("https://hn.algolia.com/api/v1/search",
                      {"query": question, "tags": "story", "hitsPerPage": 4})
     out = []
     for hit in data.get("hits") or []:
-        url = hit.get("url") or (f"https://news.ycombinator.com/item?id={hit['objectID']}"
-                                 if hit.get("objectID") else "")
-        out.append(_result("F", "hacker_news", hit.get("title") or hit.get("story_title"),
-                           url, snippet=hit.get("story_text") or "",
+        object_id = hit.get("objectID")
+        if not object_id:
+            continue
+        linked = host_of(hit.get("url") or "")
+        points = hit.get("points") or 0
+        out.append(_result("F", "hacker_news",
+                           hit.get("title") or hit.get("story_title"),
+                           f"https://news.ycombinator.com/item?id={object_id}",
+                           snippet=f"{points} points, {hit.get('num_comments', 0)} comments"
+                                   + (f" — discussing {linked}" if linked else ""),
                            published=(hit.get("created_at") or "")[:10]))
     return [r for r in out if r]
 
@@ -551,6 +604,14 @@ def _post(body: dict) -> dict:
     with httpx.Client(timeout=TIMEOUT_S) as client:
         resp = client.post(EXA_SEARCH_URL, headers=headers, json=body)
     if resp.status_code >= 400:
+        global _exa_paused_until, LAST_EXA_STATUS
+        LAST_EXA_STATUS = f"HTTP {resp.status_code}"
+        if resp.status_code in (401, 402, 403):
+            # Out of credits or a dead key : nothing will change in the next
+            # few minutes, so stop paying six round-trips a question for it.
+            _exa_paused_until = time.time() + EXA_PAUSE_S
+            print(f"  [civic.exa] {LAST_EXA_STATUS} — pausing Exa for "
+                  f"{EXA_PAUSE_S}s and searching with the keyless backends")
         # Raised, not swallowed : a dead key or an exhausted quota must show up
         # as a failed backend in LAST_RUN and the selftest, because silently
         # returning nothing looks identical to "the world has nothing".
@@ -644,8 +705,11 @@ def gather(question: str, location: str = "", *, harder: bool = False,
             return found
         except RateLimited:
             # Expected from a free API under load, and not worth alarming
-            # about : the ladder is built from the other nine.
+            # about : the ladder is built from the others.
             outcomes[name] = "rate_limited"
+            return []
+        except Blocked:
+            outcomes[name] = "blocked"
             return []
         except Exception as exc:  # noqa: BLE001 : one backend down is not an outage
             outcomes[name] = f"{type(exc).__name__}: {str(exc)[:120]}"
@@ -690,6 +754,8 @@ def probe(question: str = "housing costs", place: str = "California") -> dict:
             }
         except RateLimited:
             report["backends"][name] = {"rate_limited": True}
+        except Blocked:
+            report["backends"][name] = {"blocked": True}
         except Exception as exc:  # noqa: BLE001
             report["backends"][name] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     if available():
