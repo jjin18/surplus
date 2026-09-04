@@ -829,7 +829,8 @@ function renderRail(){
     return;
   }
   rail.innerHTML = stack.layers.map(l =>
-    '<button type="button" data-key="' + l.key + '" style="--layer:' + l.color + '" ' +
+    '<button type="button" data-key="' + esc(l.key) + '" style="--layer:' +
+    esc(l.color) + '" ' +
     'aria-pressed="' + (l.key === activeLayer) + '">' +
     '<span class="dot"></span>' + esc(l.label) + "</button>").join("");
   [...rail.querySelectorAll("button")].forEach(b =>

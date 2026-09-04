@@ -1475,3 +1475,103 @@ def test_the_prompt_tells_the_model_to_cite_the_ordinance():
     assert "cite the ORDINANCE" in prompt
     assert "17.13.040" in prompt          # the shape of a section citation
     assert "assessor" in prompt and "permit" in prompt
+
+
+# --------------------------------------------------------------------------
+# The selftest tells you what broke without telling everyone what we run
+# --------------------------------------------------------------------------
+
+def _seed_failure():
+    civic.LAST_ERROR.clear()
+    civic.LAST_ERROR.update({
+        "boot": civic.BOOT_ID, "at": "2026-09-04T07:00:00Z", "type": "NotFoundError",
+        "status": 404, "mode": "web_search", "model": "claude-sonnet-5",
+        "message": "model: claude-sonnet-5 not found for account acct_12345",
+    })
+
+
+def test_an_anonymous_reader_gets_the_shape_of_a_failure_not_its_text(client):
+    _seed_failure()
+    body = client.get("/api/civic/selftest").json()
+    # Enough to diagnose a broken deploy...
+    assert body["last_error"]["type"] == "NotFoundError"
+    assert body["last_error"]["status"] == 404
+    # ...without the upstream text, which can carry accounts, quotas and URLs.
+    assert "message" not in body["last_error"]
+    assert "acct_12345" not in json.dumps(body)
+    civic.LAST_ERROR.clear()
+
+
+def test_an_operator_gets_the_whole_thing(client, monkeypatch):
+    _seed_failure()
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret-token")
+    body = client.get("/api/civic/selftest",
+                      headers={"X-Admin-Token": "s3cret-token"}).json()
+    assert "acct_12345" in body["last_error"]["message"]
+    civic.LAST_ERROR.clear()
+
+
+def test_a_wrong_token_is_treated_as_anonymous(client, monkeypatch):
+    _seed_failure()
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret-token")
+    body = client.get("/api/civic/selftest",
+                      headers={"X-Admin-Token": "not-the-token"}).json()
+    assert "message" not in body["last_error"]
+    civic.LAST_ERROR.clear()
+
+
+def test_no_admin_token_configured_means_nobody_is_an_operator(client, monkeypatch):
+    _seed_failure()
+    monkeypatch.setenv("ADMIN_TOKEN", "")
+    body = client.get("/api/civic/selftest", headers={"X-Admin-Token": ""}).json()
+    assert "message" not in body["last_error"]
+    civic.LAST_ERROR.clear()
+
+
+def test_the_probe_needs_the_token_because_it_makes_ten_outbound_calls(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(civic_sources, "probe", lambda *a, **k: called.append(1) or {})
+    body = client.get("/api/civic/selftest?probe=1").json()
+    assert called == []
+    assert "X-Admin-Token" in body["probe"]
+
+
+def test_the_probe_runs_for_an_operator(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret-token")
+    monkeypatch.setattr(civic_sources, "probe", lambda *a, **k: {"backends": {}})
+    monkeypatch.setattr(civic_geo, "probe", lambda *a, **k: {"census": {}})
+    body = client.get("/api/civic/selftest?probe=1",
+                      headers={"X-Admin-Token": "s3cret-token"}).json()
+    assert "backends" in body["probe"]
+
+
+@pytest.mark.parametrize("bad", ['name" or true', "nul\x00byte", "back\\slash"])
+def test_outline_by_name_rejects_anything_that_could_break_the_query(bad):
+    assert civic_geo.outline_by_name(bad) == {}
+
+
+def test_outline_by_name_flattens_whitespace_before_it_reaches_the_query(monkeypatch):
+    # A newline never reaches the Overpass filter : it is collapsed to a space
+    # by the normalisation, which is why it is not in the rejection list.
+    sent = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"elements": []}
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, data=None, headers=None):
+            sent.append(data["data"])
+            return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    civic_geo.outline_by_name("Council\nDistrict 3")
+    assert "\n" not in sent[0].split("[out:json]")[1]
+    assert '"Council District 3"' in sent[0]
