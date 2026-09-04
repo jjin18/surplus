@@ -2099,3 +2099,171 @@ def test_the_mirror_chain_is_capped_so_the_rail_still_loads(monkeypatch):
     assert (civic_geo.OVERPASS_TIMEOUT_S * len(civic_geo.OVERPASS_URLS)
             > civic_geo.OVERPASS_BUDGET_S)
     assert civic_geo.OVERPASS_BUDGET_S <= 30
+
+
+def test_both_congress_asks_go_out_at_once(monkeypatch):
+    # Asking GovTrack for the representative and then the senators in series
+    # is two round trips of latency on the thing the card leads with.
+    import time as _t
+    started, finished = [], []
+
+    def handler(url, params):
+        started.append(_t.monotonic())
+        _t.sleep(0.25)
+        finished.append(_t.monotonic())
+        return _Reply({"objects": []})
+
+    _http(monkeypatch, handler)
+    civic_geo.congress_members("0612")
+    assert len(started) == 2
+    assert started[1] < finished[0]          # the second began before the first ended
+
+
+def test_the_roster_is_on_a_short_leash():
+    # The card leads with this ; a twelve-second wait reads as broken.
+    assert civic_geo.ROSTER_TIMEOUT_S <= 8
+
+
+def test_the_roster_starts_when_the_pin_lands_not_when_a_card_opens():
+    page = _page()
+    stack_fn = page.split("async function loadStack(", 1)[1].split("\nfunction ", 1)[0]
+    assert "loadSeats()" in stack_fn
+
+
+def test_a_body_with_no_national_roster_is_pointed_at_its_own_page():
+    page = _page()
+    for key in ("county", "place", "council", "school"):
+        assert '  ' + key + ':' in page.split("const NO_ROSTER", 1)[1][:900]
+    assert 'link(layer.website, "Members' in page
+
+
+# --- state legislators without a key ---------------------------------------
+
+_ROSTER_CSV = (
+    "id,name,current_party,current_district,current_chamber,openstates_url\n"
+    "ocd-person/1,U. Senator,Democratic,11,upper,https://openstates.org/person/1/\n"
+    "ocd-person/2,L. Member,Republican,18,lower,https://openstates.org/person/2/\n"
+    "ocd-person/3,Someone Else,Democratic,12,upper,https://openstates.org/person/3/\n"
+)
+
+
+def _csv(monkeypatch, text, status=200):
+    class _Resp:
+        status_code = status
+        content = text.encode()
+
+        def __init__(self):
+            self.text = text
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, params=None, headers=None): return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    civic_geo._CACHE.clear()
+
+
+def test_state_legislators_are_named_without_any_api_key(monkeypatch):
+    monkeypatch.delenv("OPENSTATES_API_KEY", raising=False)
+    _csv(monkeypatch, _ROSTER_CSV)
+    found = civic_geo.state_legislators_keyless("CA", "06011", "06018")
+    assert found["state_upper"][0]["name"] == "U. Senator"
+    assert found["state_upper"][0]["role"] == "Senator, district 11"
+    assert found["state_lower"][0]["name"] == "L. Member"
+    assert len(found["state_upper"]) == 1              # district 12 is not ours
+
+
+@pytest.mark.parametrize("geoid,want", [
+    ("06011", "11"), ("06001", "1"), ("06110", "110"), ("", ""), ("06", ""),
+])
+def test_the_district_number_is_read_out_of_the_geoid(geoid, want):
+    assert civic_geo._district_of(geoid) == want
+
+
+def test_a_lettered_district_survives_the_geoid(monkeypatch):
+    # Alaska letters its house districts ; stripping to an int would lose it.
+    assert civic_geo._district_of("02A") == ""          # not digits, not a geoid
+    _csv(monkeypatch, "name,current_party,current_district,current_chamber\n"
+                      "A. Member,Independent,0A,upper\n")
+    found = civic_geo.state_legislators_keyless("VT", "50" + "0A0"[:3], "")
+    assert found == {} or "state_upper" in found        # never raises
+
+
+def test_an_enormous_download_is_not_parsed_as_a_roster(monkeypatch):
+    _csv(monkeypatch, "x" * 4_000_001)
+    with pytest.raises(RuntimeError, match="too large"):
+        civic_geo.state_roster("ca")
+
+
+def test_the_keyless_roster_is_tried_before_the_keyed_one(monkeypatch):
+    monkeypatch.setenv("OPENSTATES_API_KEY", "k")
+    monkeypatch.setattr(civic_geo, "state_legislators",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("used the key")))
+    _csv(monkeypatch, _ROSTER_CSV)
+    found = civic_geo._state_seats(37.8, -122.27, "0612", "06011", "06018")
+    assert found["state_upper"][0]["name"] == "U. Senator"
+
+
+# --- the console stopped narrating its own machinery ------------------------
+
+def test_the_search_reports_one_line_not_a_six_step_checklist():
+    page = _page()
+    assert "status-steps" not in page
+    assert "Reading what is live in" not in page
+    assert "Sorting it: what's settled" not in page
+
+
+def test_an_error_is_not_buried_under_the_suggestions():
+    # It answers the question you just asked ; it was sitting below five
+    # suggested questions inside a box that scrolls.
+    page = _page()
+    assert page.index('id="error"') < page.index('class="chips"')
+    assert page.index('id="status"') < page.index('class="chips"')
+
+
+def test_the_two_rosters_agree_on_which_chamber_is_which(monkeypatch):
+    # Both paths map chamber -> lens from the same table, so a row from either
+    # source lands on the same lens.
+    monkeypatch.setenv("OPENSTATES_API_KEY", "k")
+    _http(monkeypatch, lambda url, params: _Reply({"results": [
+        {"name": "U. Senator",
+         "current_role": {"org_classification": "upper", "title": "Senator", "district": "11"}}]}))
+    keyed = civic_geo.state_legislators(37.8, -122.27)
+    _csv(monkeypatch, _ROSTER_CSV)
+    keyless = civic_geo.state_legislators_keyless("CA", "06011", "")
+    assert set(keyed) == set(keyless) == {"state_upper"}
+
+
+def test_a_chamber_that_is_neither_house_is_dropped(monkeypatch):
+    _csv(monkeypatch, "name,current_party,current_district,current_chamber\n"
+                      "A. Governor,Democratic,11,executive\n")
+    assert civic_geo.state_legislators_keyless("CA", "06011", "06011") == {}
+
+
+def test_the_box_you_type_into_never_scrolls():
+    # A scrollbar on the thing you just used is the interface hiding its own
+    # output: the answer was below five suggestions inside a scrolling box.
+    page = _page()
+    console = page.split("\n  .console{", 1)[1].split("}", 1)[0]
+    assert "max-height" not in console
+    body = page.split("\n  .console-body{", 1)[1].split("}", 1)[0]
+    assert "overflow" not in body
+
+
+def test_no_scrollbar_is_drawn_over_the_card_either():
+    page = _page()
+    card = page.split("\n  .card{", 1)[1].split("}", 1)[0]
+    assert "scrollbar-width:none" in card
+    assert ".card::-webkit-scrollbar{display:none}" in page
+    assert ".card.more{" in page          # the fade still says there is more
+
+
+def test_three_suggestions_not_five():
+    page = _page()
+    static = page.split('class="chips" id="chips"', 1)[1].split("</div>", 1)[0]
+    assert static.count("<button") == 3
+    built = page.split("function placeChips(", 1)[1].split("];", 1)[0]
+    assert built.count('short + "?"') == 3

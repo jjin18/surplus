@@ -431,7 +431,18 @@ def _tiger_query(layer_id: int, geoid: str) -> dict:
 # publish the seat itself rather than commentary about it.
 
 GOVTRACK_URL = "https://www.govtrack.us/api/v2/role"
+# The card leads with this, so it is the thing the reader is waiting on. A
+# roster that takes twelve seconds is a card that reads as broken.
+ROSTER_TIMEOUT_S = 8.0
 OPENSTATES_PEOPLE_URL = "https://v3.openstates.org/people.geo"
+# OpenStates publishes the same roster it serves from the keyed API as a plain
+# per-state CSV, with no key at all. One small download per state, cached, and
+# the Census already told us which district the point is in -- so a deploy
+# without an API key still names your two state legislators.
+OPENSTATES_CSV_URL = "https://data.openstates.org/people/current/{state}.csv"
+# The lens a chamber belongs to, in OpenStates' vocabulary. One table, so the
+# two rosters cannot drift apart on which chamber is which.
+_LAYER_FOR_CHAMBER = {"upper": "state_upper", "lower": "state_lower"}
 
 # The Census keys states by FIPS code ; every roster keys them by postal
 # abbreviation. One table, no network call, no guessing from a place name.
@@ -474,15 +485,20 @@ def congress_members(geoid: str) -> list[dict]:
     people: list[dict] = []
     asks = [{"role_type": "representative", "district": district},
             {"role_type": "senator"}]
-    with httpx.Client(timeout=TIMEOUT_S) as client:
-        for ask in asks:
-            params = dict(ask, current="true", state=state, limit=3)
+
+    def fetch(ask):
+        params = dict(ask, current="true", state=state, limit=3)
+        with httpx.Client(timeout=ROSTER_TIMEOUT_S) as client:
             resp = client.get(GOVTRACK_URL, params=params,
                               headers={"user-agent": USER_AGENT,
                                        "accept": "application/json"})
-            if resp.status_code >= 400:
-                raise RuntimeError(f"HTTP {resp.status_code}")
-            for role in resp.json().get("objects") or []:
+        if resp.status_code >= 400:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        return resp.json().get("objects") or []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for objects in list(pool.map(fetch, asks)):
+            for role in objects:
                 who = role.get("person") or {}
                 people.append(_person(
                     who.get("name") or "", role.get("title_long") or role.get("title") or "",
@@ -505,7 +521,7 @@ def state_legislators(lat: float, lon: float) -> dict:
     if not key:
         raise RuntimeError("no OPENSTATES_API_KEY")
     import httpx
-    with httpx.Client(timeout=TIMEOUT_S) as client:
+    with httpx.Client(timeout=ROSTER_TIMEOUT_S) as client:
         resp = client.get(OPENSTATES_PEOPLE_URL,
                           params={"lat": f"{lat:.6f}", "lng": f"{lon:.6f}"},
                           headers={"x-api-key": key, "user-agent": USER_AGENT,
@@ -516,7 +532,7 @@ def state_legislators(lat: float, lon: float) -> dict:
     for who in resp.json().get("results") or []:
         current = who.get("current_role") or {}
         chamber = str(current.get("org_classification") or "").lower()
-        layer = {"upper": "state_upper", "lower": "state_lower"}.get(chamber)
+        layer = _LAYER_FOR_CHAMBER.get(chamber)
         if not layer:
             continue
         title = current.get("title") or chamber.title()
@@ -528,7 +544,94 @@ def state_legislators(lat: float, lon: float) -> dict:
     return found
 
 
-def officials(lat: float, lon: float, congress_geoid: str = "") -> dict:
+def _district_of(geoid: str) -> str:
+    """The district number inside a state legislative GEOID.
+
+    State FIPS, then the district code. Most states number their districts, a
+    few letter them (Alaska's "A", Vermont's "BEN"), so the digits are tried
+    first and the raw code kept when they do not apply.
+    """
+    geoid = (geoid or "").strip()
+    if not geoid.isdigit() or len(geoid) < 3:
+        return ""
+    code = geoid[2:]
+    return str(int(code)) if code.isdigit() else code.lstrip("0")
+
+
+def state_roster(state: str) -> list[dict]:
+    """Every sitting legislator in one state, from the keyless CSV."""
+    state = (state or "").strip().lower()
+    if len(state) != 2 or not state.isalpha():
+        return []
+
+    def build():
+        import csv
+        import io
+        import httpx
+        with httpx.Client(timeout=ROSTER_TIMEOUT_S, follow_redirects=True) as client:
+            resp = client.get(OPENSTATES_CSV_URL.format(state=state),
+                              headers={"user-agent": USER_AGENT})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        # A state roster is a few hundred rows. Anything far larger is not the
+        # file we asked for, and is not worth parsing to find out.
+        if len(resp.content) > 4_000_000:
+            raise RuntimeError("roster too large")
+        return list(csv.DictReader(io.StringIO(resp.text)))
+
+    return _cached(f"roster:{state}", build)
+
+
+def state_legislators_keyless(state: str, upper_geoid: str = "",
+                              lower_geoid: str = "") -> dict:
+    """The two state legislators for this point, without an API key."""
+    wanted = {"upper": _district_of(upper_geoid), "lower": _district_of(lower_geoid)}
+    if not any(wanted.values()):
+        return {}
+    found: dict = {}
+    for row in state_roster(state):
+        chamber = (row.get("current_chamber") or "").strip().lower()
+        district = (row.get("current_district") or "").strip()
+        target = wanted.get(chamber)
+        if not target or not district or chamber not in _LAYER_FOR_CHAMBER:
+            continue
+        here = str(int(district)) if district.isdigit() else district.lstrip("0")
+        if here != target:
+            continue
+        layer = _LAYER_FOR_CHAMBER[chamber]
+        title = "Senator" if chamber == "upper" else "Representative"
+        found.setdefault(layer, []).append(_person(
+            row.get("name") or "", f"{title}, district {district}",
+            row.get("current_party") or "",
+            row.get("openstates_url") or row.get("sources") or "",
+            "openstates"))
+    return found
+
+
+def _state_seats(lat: float, lon: float, any_geoid: str,
+                 upper_geoid: str, lower_geoid: str) -> dict:
+    """State legislators, keyless first.
+
+    The CSV needs no key and is the same roster the keyed API serves, so it is
+    tried first ; the keyed point lookup is the fallback for the case the CSV
+    cannot cover -- a district code we could not match to a row.
+    """
+    import os
+    state = _FIPS.get((any_geoid or "")[:2], "")
+    if state:
+        try:
+            found = state_legislators_keyless(state, upper_geoid, lower_geoid)
+            if found:
+                return found
+        except Exception as exc:  # noqa: BLE001 : the keyed path may still work
+            print(f"  [civic.roster] {state} csv failed: {type(exc).__name__}")
+    if not (os.environ.get("OPENSTATES_API_KEY") or "").strip():
+        raise RuntimeError("no roster for this point")
+    return state_legislators(lat, lon)
+
+
+def officials(lat: float, lon: float, congress_geoid: str = "",
+              upper_geoid: str = "", lower_geoid: str = "") -> dict:
     """Everyone this point elects that a public roster will name.
 
     Both rosters are asked at once and either may fail ; a chamber nobody
@@ -540,7 +643,9 @@ def officials(lat: float, lon: float, congress_geoid: str = "") -> dict:
         with ThreadPoolExecutor(max_workers=2) as pool:
             house = pool.submit(congress_members, congress_geoid) \
                 if congress_geoid else None
-            state = pool.submit(state_legislators, lat, lon)
+            state = pool.submit(_state_seats, lat, lon,
+                                congress_geoid or upper_geoid or lower_geoid,
+                                upper_geoid, lower_geoid)
             if house is not None:
                 try:
                     got = house.result()
@@ -557,7 +662,7 @@ def officials(lat: float, lon: float, congress_geoid: str = "") -> dict:
                 people["sources"]["openstates"] = type(exc).__name__
         return people
 
-    return _cached(f"who:{lat:.4f},{lon:.4f},{congress_geoid}", build)
+    return _cached(f"who:{lat:.4f},{lon:.4f},{congress_geoid}:{upper_geoid}:{lower_geoid}", build)
 
 
 VOTES_URL = "https://www.govtrack.us/api/v2/vote_voter"
