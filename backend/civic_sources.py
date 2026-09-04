@@ -786,6 +786,56 @@ def gather(question: str, location: str = "", *, harder: bool = False,
     return results[:MAX_RESULTS]
 
 
+# The two news backends, for the fast lane. Tapping a thing on the map should
+# answer "what happened here" in about a second -- no model, no synthesis, no
+# ladder. The deliberate question in the side panel is the slow lane.
+NEWS_BACKENDS = ("google_news", "gdelt")
+
+
+def headlines(subject: str, place: str = "", limit: int = 6) -> dict:
+    """Recent coverage of one named thing, as fast as two HTTP calls allow.
+
+    Returns {"items": [...], "ran": {backend: count|reason}}. Both backends
+    are asked at once and either may be busy ; an empty list is a real answer
+    and the card says so rather than inventing something.
+    """
+    subject = " ".join((subject or "").split())[:200]
+    if not subject:
+        return {"items": [], "ran": {}}
+    place = " ".join((place or "").split())[:120]
+
+    jobs = [(name, KEYLESS_BACKENDS[name][0]) for name in NEWS_BACKENDS
+            if name in KEYLESS_BACKENDS]
+    ran: dict = {}
+
+    def attempt(job):
+        name, fn = job
+        try:
+            return _cached(f"news|{name}|{subject}|{place}",
+                           lambda: fn(subject, place)) or []
+        except RateLimited:
+            ran[name] = "rate_limited"
+        except Blocked:
+            ran[name] = "blocked"
+        except Exception as exc:  # noqa: BLE001
+            ran[name] = f"{type(exc).__name__}: {str(exc)[:80]}"
+        return []
+
+    with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
+        batches = list(pool.map(attempt, jobs))
+
+    seen, items = set(), []
+    for (name, _), batch in zip(jobs, batches):
+        ran.setdefault(name, len(batch))
+        for item in batch:
+            key = item["url"].rstrip("/").lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+    return {"items": items[:limit], "ran": ran}
+
+
 def probe(question: str = "housing costs", place: str = "California") -> dict:
     """Run every backend once and report what each returned.
 

@@ -402,6 +402,39 @@ def get_answer(answer_id: str) -> AskOut:
     return AskOut(id=answer_id, cached=True, **hit)
 
 
+# 30/min/IP: this costs two HTTP calls and no tokens, so it is bounded for
+# politeness to the free APIs rather than for money.
+_PLACE_LIMIT = per_ip_rate_limit(limit=30, window_s=60, tag="civic_place")
+
+
+class PlaceOut(BaseModel):
+    subject: str
+    items: list[dict]
+    ran: dict
+
+
+@router.get("/place", response_model=PlaceOut, dependencies=[Depends(_PLACE_LIMIT)])
+def place(subject: str, near: str = "") -> PlaceOut:
+    """What has been written lately about one thing on the map.
+
+    The fast lane. Tapping a school should say something about that school in
+    about a second, so this asks the two news indexes directly and returns
+    what they have -- no model, no synthesis, no evidence ladder, no cost. The
+    side panel is where a question gets the full treatment.
+    """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    subject = (subject or "").strip()
+    if not subject:
+        raise HTTPException(400, {"code": "empty_subject",
+                                  "message": "Name the place first."})
+    found = civic_sources.headlines(subject, (near or "").strip())
+    print(f"  [civic] place {subject[:60]!r} near={near[:40]!r} "
+          f"items={len(found['items'])} ran={found['ran']}")
+    return PlaceOut(subject=subject, items=found["items"], ran=found["ran"])
+
+
 @router.get("/selftest")
 def selftest(probe: int = 0) -> dict:
     """Why is every question failing? Read this instead of the Railway logs.

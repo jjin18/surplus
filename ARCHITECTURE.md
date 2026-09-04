@@ -270,6 +270,18 @@ from memory when its searches came back empty. Both now raise — the reader
 gets "the search itself failed, here is why", never an unsourced answer wearing
 the ladder's authority.
 
+**Two speeds, because two different questions.** Tapping something on the map
+is answered in about a second and never reaches the model: `whatsHere()` asks
+OpenStreetMap which boundaries the point falls inside (`is_in`) and what stands
+on it, and the card names them — city, council district, county, state, the
+district that runs the school — alongside the building's own facts. Then
+`GET /api/civic/place` fetches recent coverage from the two news backends
+only: no synthesis, no ladder, no cost. The button on the card asks the
+question that point raises, naming those bodies ("what zoning, property-tax and
+rent rules apply to 1418 Ninth Street in Oakland, Alameda County, California"),
+which is what makes the answer about an address rather than about a city. The
+box on the left stays the deliberate path for a question of your own.
+
 **Dropping a pin is a briefing.** The page asks about the place ~900ms after
 the pin settles, without waiting for anyone to type, and sends `brief: true` —
 which tells the model to report what is live there rather than ask for a

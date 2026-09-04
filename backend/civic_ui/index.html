@@ -141,6 +141,38 @@
     border:2px solid rgba(95,211,160,.65);animation:pulse 2.6s ease-out infinite}
   @keyframes pulse{0%{transform:scale(.55);opacity:.9}100%{transform:scale(1.35);opacity:0}}
 
+  /* ---------- tap a pin: facts now, question later ---------- */
+  .card{position:fixed;left:20px;top:80px;width:min(340px,calc(100vw - 40px));z-index:7;
+    display:none;background:var(--glass-2);border:1px solid var(--glass-rule);
+    border-radius:16px;backdrop-filter:blur(18px);color:var(--on-glass);padding:14px;
+    box-shadow:0 24px 60px rgba(0,0,0,.45);max-height:calc(100vh - 520px);overflow:auto}
+  .card.on{display:block}
+  .card-head{display:flex;gap:10px;align-items:flex-start;font-family:var(--sans)}
+  .card-head .ico{font-size:20px;line-height:1.2}
+  .card-head b{font-size:16px;font-weight:600;letter-spacing:-.01em;display:block}
+  .card-head .sub{font-size:12px;color:var(--on-glass-2);margin-top:2px}
+  .card-x{margin-left:auto;background:none;border:0;color:var(--on-glass-2);cursor:pointer;
+    font-size:14px;padding:2px 4px;line-height:1}
+  .facts{display:grid;gap:4px;margin:12px 0 0;font-family:var(--sans);font-size:13px}
+  .facts-head{font-size:11px;font-weight:600;color:var(--on-glass-2);letter-spacing:.02em}
+  .fact{display:flex;gap:10px;justify-content:space-between;border-bottom:1px solid var(--glass-rule);
+    padding-bottom:3px}
+  .fact span{color:var(--on-glass-2)}
+  .fact b{font-weight:600;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    max-width:60%}
+  .card-links{font-family:var(--sans);font-size:12px;margin-top:10px;color:var(--on-glass-2)}
+  .card-links a{text-decoration:underline;text-underline-offset:2px}
+  .card-news{margin-top:12px;font-family:var(--sans)}
+  .card-news h4{font-size:12px;font-weight:600;color:var(--on-glass-2);margin:0 0 6px;
+    text-transform:none}
+  .card-news .head{margin-bottom:8px;font-size:13px;line-height:1.35}
+  .card-news .head a{text-decoration:none}
+  .card-news .head a:hover{text-decoration:underline}
+  .card-news .head span{display:block;font-size:11px;color:var(--on-glass-2);margin-top:1px}
+  .card-news .loading{font-size:12px;color:var(--on-glass-2)}
+  .card-ask{width:100%;margin-top:12px}
+  .card-note{font-family:var(--sans);font-size:11px;color:var(--on-glass-2);margin:8px 0 0;line-height:1.4}
+
   /* ---------- the answer ---------- */
   .panel{position:fixed;top:0;right:0;bottom:0;width:var(--panel-w);background:var(--paper);
     border-left:1px solid var(--rule);z-index:7;overflow:auto;transform:translateX(101%);
@@ -210,6 +242,7 @@
     :root{--panel-w:100vw}
     .console{left:10px;right:10px;bottom:10px;width:auto;max-height:min(72vh,560px)}
     .mapctl{right:10px;top:100px;gap:6px}
+    .card{left:10px;right:10px;top:auto;bottom:10px;width:auto;max-height:min(70vh,520px)}
     .mapctl button{padding:7px 10px;font-size:12px}
     .creed{display:none}
     .place .sheet-toggle{display:inline-block}
@@ -253,7 +286,7 @@
     </div>
     <div class="collapsible" id="ask-fields">
     <p class="sites-note" id="sites-note"></p>
-    <p class="hint" id="hint">Spin the globe, then click where you live — or press <kbd>P</kbd> to drop a pin in the middle. You can also just type a city.</p>
+    <p class="hint" id="hint">Spin the globe, then click where you live — or press <kbd>P</kbd> to drop a pin in the middle. Tap anything on the map for quick facts; ask here for the evidence.</p>
 
     <label class="sr" for="q">Your question</label>
     <textarea id="q" placeholder="Why did my rent go up 15% this year?"></textarea>
@@ -281,6 +314,8 @@
     </div>
   </div>
 </section>
+
+<aside class="card" id="card" aria-live="polite" aria-label="About this place"></aside>
 
 <aside class="panel" id="panel" aria-live="polite" aria-label="Answer">
   <div class="panel-bar">
@@ -450,7 +485,11 @@ function initMap(){
     boot();
   });
 
-  map.on("click", e => dropPin(e.lngLat.lat, e.lngLat.lng, {fly: false}));
+  map.on("click", e => {
+    dropPin(e.lngLat.lat, e.lngLat.lng, {fly: false});
+    // Zoomed in, a click is a question about a specific address, not a city.
+    if (map.getZoom() >= SITES_ZOOM) whatsHere(e.lngLat.lat, e.lngLat.lng);
+  });
 
   // Mouse-free pin drop: MapLibre already pans and rotates from the keyboard,
   // so "p" is the only missing verb.
@@ -658,7 +697,11 @@ function toSite(el){
     name: t.name || t["construction:name"] || "",
     label: t.name || spec.label,
     what: spec.label,
-    street: [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" ")
+    street: [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" "),
+    // Everything OpenStreetMap already knows about this thing. It is on the
+    // page the instant you tap it, before any search has run.
+    tags: t,
+    osm: (el.type || "node") + "/" + (el.id || "")
   };
 }
 
@@ -681,7 +724,7 @@ function setSites(sites){
     el.title = site.what + (site.street ? " · " + site.street : "");
     el.addEventListener("click", ev => {
       ev.stopPropagation();
-      askAboutSite(site, {lat: site.lat, lng: site.lon});
+      openSiteCard(site);
     });
     siteMarkers.push(new maplibregl.Marker({element: el, anchor: "bottom"})
       .setLngLat([site.lon, site.lat]).addTo(map));
@@ -692,8 +735,217 @@ function setSites(sites){
   const parts = Object.keys(counts).map(k =>
     counts[k] + " " + SITE_KINDS[k].label.toLowerCase() + (counts[k] > 1 ? "s" : ""));
   $("sites-note").textContent = parts.length
-    ? "In view: " + parts.join(" · ") + " — click one to ask about it"
+    ? "In view: " + parts.join(" · ") + " — tap one to see what's there"
     : "";
+}
+
+// ---------------------------------------------------------------------------
+// What is here, and who governs it
+// ---------------------------------------------------------------------------
+//
+// A click at street level is a question about one address: which zoning code
+// applies, which council district votes on it, which school district runs the
+// school on the corner. OpenStreetMap knows the boundaries a point falls
+// inside (is_in) and what stands on it, so the card can name them before any
+// search runs -- and the question we then ask names them too, which is the
+// difference between "what is happening in Oakland" and "what is changing for
+// this address".
+
+const ADMIN_LABELS = {
+  2: "Country", 4: "State", 5: "Region", 6: "County", 7: "District",
+  8: "City", 9: "Borough", 10: "Neighbourhood"
+};
+
+async function whatsHere(lat, lon){
+  const query = `[out:json][timeout:25];
+    is_in(${lat},${lon})->.areas;
+    (way(pivot.areas);rel(pivot.areas););out tags;
+    (nwr(around:30,${lat},${lon})["building"];
+     nwr(around:45,${lat},${lon})["amenity"];
+     nwr(around:60,${lat},${lon})["landuse"];);
+    out center tags 8;`;
+
+  const card = {lat: lat, lon: lon, areas: [], feature: null, address: ""};
+  openHereCard(card, true);
+
+  const [osm, place] = await Promise.all([
+    fetch(OVERPASS, {method: "POST", body: "data=" + encodeURIComponent(query),
+      headers: {"Content-Type": "application/x-www-form-urlencoded"}})
+      .then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(NOMINATIM + "/reverse?format=jsonv2&zoom=18&lat=" + lat + "&lon=" + lon,
+      {headers: {"Accept": "application/json"}})
+      .then(r => r.ok ? r.json() : null).catch(() => null)
+  ]);
+
+  if (osm) {
+    (osm.elements || []).forEach(el => {
+      const t = el.tags || {};
+      const point = el.center || el;
+      const located = typeof point.lat === "number";
+      if (!located && (t.boundary || t.admin_level)) {
+        card.areas.push({
+          name: t.name || t["name:en"] || "",
+          level: parseInt(t.admin_level || "0", 10),
+          boundary: t.boundary || "",
+          kind: t.boundary === "political" ? (t.political_division || "district") : ""
+        });
+      } else if (located && !card.feature && (t.building || t.amenity || t.landuse)) {
+        card.feature = t;
+      }
+    });
+    // Most local first: a resident thinks "my council district, my city,
+    // then the county", and the question should name them that way round.
+    card.areas = card.areas.filter(a => a.name)
+      .sort((a, b) => (b.level || 0) - (a.level || 0));
+  }
+  if (place) {
+    const a = place.address || {};
+    card.address = [a.house_number, a.road].filter(Boolean).join(" ")
+      || place.display_name?.split(",").slice(0, 2).join(",") || "";
+    card.city = a.city || a.town || a.village || a.municipality || "";
+    card.county = a.county || "";
+    card.state = a.state || "";
+  }
+  openHereCard(card, false);
+}
+
+// The named layers that decide things for this point, strongest first.
+function jurisdictions(card){
+  const seen = new Set();
+  const out = [];
+  card.areas.forEach(a => {
+    const label = a.boundary === "political"
+      ? (a.kind || "district").replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase())
+      : (ADMIN_LABELS[a.level] || (a.boundary === "administrative" ? "Area" : ""));
+    if (!label || seen.has(a.name)) return;
+    seen.add(a.name);
+    out.push({label: label, name: a.name});
+  });
+  // Nominatim fills the gaps when the boundary relations are thin.
+  [["City", card.city], ["County", card.county], ["State", card.state]]
+    .forEach(([label, name]) => {
+      if (name && !seen.has(name)) { seen.add(name); out.push({label: label, name: name}); }
+    });
+  return out.slice(0, 6);
+}
+
+function describeFeature(t){
+  if (!t) return "";
+  if (t.amenity === "school") return "School";
+  if (t.amenity) return String(t.amenity).replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase());
+  if (t.building && t.building !== "yes") {
+    return String(t.building).replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase());
+  }
+  if (t.building) return "Building";
+  if (t.landuse) return String(t.landuse).replace(/_/g, " ") + " land";
+  return "";
+}
+
+// The question this exact point raises, naming the bodies that decide it.
+function hereQuestion(card){
+  const where = jurisdictions(card);
+  const named = where.map(j => j.name).slice(0, 3).join(", ");
+  const t = card.feature || {};
+  const address = card.address || named || "this address";
+
+  if (t.amenity === "school") {
+    const district = t.operator || (where[0] && where[0].name) || named;
+    return "What is changing at " + (t.name || "the school") + " and across "
+      + district + " — budget, boundaries, board policy — and what decisions are open?";
+  }
+  if (t.amenity === "hospital") {
+    return "What is changing about funding, services or ownership at "
+      + (t.name || "the hospital at " + address) + " in " + named + "?";
+  }
+  if (t.building === "apartments" || t.building === "residential" || t.building === "house"
+      || t.landuse === "residential") {
+    return "What zoning, property-tax and rent rules apply to " + address + " in "
+      + named + " — what changed in the last two years, and what is proposed now?";
+  }
+  if (t.building === "commercial" || t.building === "retail" || t.landuse === "commercial") {
+    return "What zoning and business rules apply at " + address + " in " + named
+      + ", and what is being proposed for this block?";
+  }
+  return "What decisions are open for " + address + " in " + named
+    + " — zoning, taxes, transport, permits — and what is driving them?";
+}
+
+function openHereCard(card, loading){
+  cardSubject = card;
+  const t = card.feature || {};
+  const title = t.name || card.address || "This spot";
+  const what = describeFeature(t);
+  const where = jurisdictions(card);
+
+  $("card").innerHTML =
+    '<div class="card-head"><span class="ico">\u{1F4CD}</span>' +
+    "<div><b>" + esc(title) + "</b>" +
+    '<div class="sub">' + esc(what || (loading ? "Reading the map…" : "No building mapped here")) +
+    (card.address && card.address !== title ? " · " + esc(card.address) : "") + "</div></div>" +
+    '<button type="button" class="card-x" id="card-close" aria-label="Close">✕</button></div>' +
+    (where.length
+      ? '<div class="facts"><div class="facts-head">Decided by</div>' + where.map(j =>
+          '<div class="fact"><span>' + esc(j.label) + "</span><b>" + esc(j.name) +
+          "</b></div>").join("") + "</div>"
+      : (loading ? '<div class="loading">Finding which districts this falls in…</div>' : "")) +
+    ((t["building:levels"] || t.start_date || t.operator)
+      ? '<div class="facts">' +
+        (t.operator ? '<div class="fact"><span>Run by</span><b>' + esc(t.operator) + "</b></div>" : "") +
+        (t["building:levels"] ? '<div class="fact"><span>Storeys</span><b>' + esc(t["building:levels"]) + "</b></div>" : "") +
+        (t.start_date ? '<div class="fact"><span>Built</span><b>' + esc(t.start_date) + "</b></div>" : "") +
+        "</div>"
+      : "") +
+    '<div class="card-news" id="card-news">' +
+      (loading ? '<div class="loading">…</div>' : '<div class="loading">Looking for recent coverage…</div>') +
+    "</div>" +
+    (loading ? "" :
+      '<button type="button" class="btn card-ask" id="card-ask">What\u2019s changing here?</button>' +
+      '<p class="card-note">Facts from OpenStreetMap. The button asks the full ' +
+      "evidence-ranked question about these bodies ; the box on the left is for " +
+      "your own.</p>");
+
+  $("card").classList.add("on");
+  if ($("card-close")) $("card-close").addEventListener("click", closeSiteCard);
+  if (loading) return;
+
+  $("card-ask").addEventListener("click", () => {
+    const question = hereQuestion(card);
+    $("q").value = question;
+    closeSiteCard();
+    ask({question: question, brief: true});
+  });
+  loadHereNews(card);
+}
+
+async function loadHereNews(card){
+  const t = card.feature || {};
+  const where = jurisdictions(card);
+  const subject = t.name || t.operator || card.address ||
+                  (where[0] && where[0].name) || "";
+  if (!subject) { $("card-news").innerHTML = ""; return; }
+  const near = (where.find(j => j.label === "City") || where[0] || {}).name || state.place || "";
+  await fillNews(card, subject, near);
+}
+
+async function fillNews(card, subject, near){
+  try {
+    const res = await fetch("/api/civic/place?subject=" + encodeURIComponent(subject) +
+                            "&near=" + encodeURIComponent(near));
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (cardSubject !== card) return;
+    const items = data.items || [];
+    $("card-news").innerHTML = items.length
+      ? "<h4>Recently</h4>" + items.slice(0, 4).map(i =>
+          '<div class="head"><a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' +
+          esc(i.title) + "</a><span>" + esc(i.host) +
+          (i.published ? " · " + esc(i.published) : "") + "</span></div>").join("")
+      : '<div class="loading">Nothing written about this one lately.</div>';
+  } catch (e) {
+    if (cardSubject === card) {
+      $("card-news").innerHTML = '<div class="loading">Couldn\'t reach the news indexes.</div>';
+    }
+  }
 }
 
 // Clicking a site asks about that specific thing, in that specific street.
@@ -710,6 +962,73 @@ const SITE_QUESTIONS = {
   power: (n, w, p) => "What does " + n + " in " + p + " supply, and what is driving electricity bills here?",
   park: (n, w, p) => "Who maintains " + n + " in " + p + ", and what is proposed for it?"
 };
+
+// Facts worth putting on the card, in the order someone would ask for them.
+const SITE_FACTS = [
+  ["operator", "Run by"], ["addr:street", "Street"], ["start_date", "Since"],
+  ["building:levels", "Storeys"], ["capacity", "Capacity"],
+  ["opening_hours", "Open"], ["phone", "Phone"], ["construction", "Building"],
+  ["school:type", "Type"], ["healthcare", "Care"], ["network", "Network"],
+  ["operator:type", "Ownership"]
+];
+
+let cardSubject = null;
+
+// Tapping a thing answers immediately from what the map already knows, then
+// fills in what has been written about it lately. Neither step calls the
+// model : the side panel is where a question gets the full treatment.
+function openSiteCard(site){
+  cardSubject = site;
+  const t = site.tags || {};
+  const facts = SITE_FACTS
+    .filter(([key]) => t[key])
+    .slice(0, 6)
+    .map(([key, label]) =>
+      '<div class="fact"><span>' + esc(label) + "</span><b>" +
+      esc(String(t[key]).slice(0, 60)) + "</b></div>").join("");
+
+  const links = [];
+  if (t.website || t["contact:website"]) {
+    links.push(link(t.website || t["contact:website"], "Website ↗"));
+  }
+  if (t.wikipedia) {
+    const [lang, title] = String(t.wikipedia).split(":");
+    if (title) links.push(link("https://" + lang + ".wikipedia.org/wiki/" +
+      encodeURIComponent(title.replace(/ /g, "_")), "Wikipedia ↗"));
+  }
+  if (site.osm) links.push(link("https://www.openstreetmap.org/" + site.osm, "OpenStreetMap ↗"));
+
+  $("card").innerHTML =
+    '<div class="card-head"><span class="ico">' + site.icon + "</span>" +
+    "<div><b>" + esc(site.name || site.what) + "</b>" +
+    '<div class="sub">' + esc(site.what) +
+    (site.street ? " · " + esc(site.street) : "") + "</div></div>" +
+    '<button type="button" class="card-x" id="card-close" aria-label="Close">✕</button></div>' +
+    (facts ? '<div class="facts">' + facts + "</div>" : "") +
+    (links.length ? '<div class="card-links">' + links.join(" · ") + "</div>" : "") +
+    '<div class="card-news" id="card-news"><div class="loading">Looking for recent coverage…</div></div>' +
+    '<button type="button" class="btn card-ask" id="card-ask">Ask the full question</button>' +
+    '<p class="card-note">Quick facts from OpenStreetMap and recent news. ' +
+    "The box on the left is for the question you want the evidence for.</p>";
+
+  $("card").classList.add("on");
+  $("card-close").addEventListener("click", closeSiteCard);
+  $("card-ask").addEventListener("click", () => {
+    closeSiteCard();
+    askAboutSite(site, {lat: site.lat, lng: site.lon});
+  });
+  loadSiteNews(site);
+}
+
+function closeSiteCard(){
+  cardSubject = null;
+  $("card").classList.remove("on");
+}
+
+function loadSiteNews(site){
+  const subject = site.name || (site.what + " " + (site.street || ""));
+  return fillNews(site, subject, state.place || "");
+}
 
 function askAboutSite(props, lngLat){
   const where = props.street || props.name || (state.place || "this area");

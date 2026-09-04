@@ -14,7 +14,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import civic
+from backend import civic, civic_sources
 from backend.main import app
 
 
@@ -1274,3 +1274,35 @@ def test_a_permalink_this_replica_did_answer_is_served_from_cache(client, monkey
 
 def test_a_link_that_is_not_ours_is_still_a_404(client):
     assert client.get("/api/civic/answer/deadbeefdeadbeef").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# The fast lane: tap a thing on the map, no model involved
+# --------------------------------------------------------------------------
+
+def test_the_place_endpoint_returns_headlines_without_calling_the_model(
+        client, monkeypatch):
+    called = []
+    monkeypatch.setattr(civic, "synthesize",
+                        lambda *a, **k: called.append(1))
+    monkeypatch.setattr(civic_sources, "headlines", lambda subject, near="", limit=6: {
+        "items": [{"tier": "E", "title": "School board votes on the budget",
+                   "url": "https://www.mercurynews.com/story", "host": "mercurynews.com",
+                   "published": "2026-03-02", "snippet": "", "found_by": "google_news"}],
+        "ran": {"google_news": 1, "gdelt": "rate_limited"}})
+
+    r = client.get("/api/civic/place?subject=Lincoln Elementary&near=Oakland, CA")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"][0]["host"] == "mercurynews.com"
+    assert body["ran"]["gdelt"] == "rate_limited"
+    assert called == []                 # the fast lane never synthesizes
+
+
+def test_the_place_endpoint_needs_a_subject(client):
+    assert client.get("/api/civic/place?subject=%20%20").status_code == 400
+
+
+def test_the_place_endpoint_is_off_when_civic_is(client, monkeypatch):
+    monkeypatch.setenv("CIVIC_ENABLED", "0")
+    assert client.get("/api/civic/place?subject=Lincoln").status_code == 503
