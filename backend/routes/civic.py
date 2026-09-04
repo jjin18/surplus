@@ -11,11 +11,30 @@ the place, cached for 24h by sha256(question|location). The Anthropic key
 lives only here, server-side -- the browser never sees it, which is the whole
 reason this route exists instead of the prototype's direct fetch to the API.
 
-The synthesis itself (prompt, evidence hierarchy, URL grounding) lives in
-backend/civic.py; this module is the HTTP skin over it.
+Civic is a bolt-on, not part of the product, so it is fenced off from the rest
+of surplus rather than trusted to behave:
+
+  * It shares the process with the CRM. A synthesis call blocks a threadpool
+    thread for 15-25s, and the pool (~40 threads, WEB_CONCURRENCY=1 by
+    default) is the same one every sync CRM route runs on. `_SLOTS` caps how
+    many of those threads Civic may ever hold ; past the cap it sheds load
+    with a 503 instead of queueing behind them.
+  * It shares ANTHROPIC_API_KEY and EXA_API_KEY with drafting and prospecting,
+    so a busy day here is spend and rate-limit pressure there. `_DAILY_CAP`
+    bounds the number of answers it will synthesize per day.
+  * CIVIC_ENABLED=0 turns the whole surface off -- page included -- without a
+    deploy, if it ever does become someone else's problem.
+  * It touches no database, no session, no user. The only thing it imports
+    from the app is the per-IP rate limiter, and tests pin that.
+
+The synthesis itself (prompt, evidence ladder, URL grounding) lives in
+backend/civic.py; this module is the HTTP skin and the fence around it.
 """
 from __future__ import annotations
 
+import os
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,10 +52,63 @@ pages_router = APIRouter(include_in_schema=False)
 _UI_DIR = Path(__file__).resolve().parent.parent / "civic_ui"
 _UI_HTML = _UI_DIR / "index.html"
 
-# 10/min/IP: a query costs ~$0.05-0.15 in search + tokens, so this is a cost
+# 10/min/IP: a query costs real money in search and tokens, so this is a cost
 # gate as much as an abuse gate. Its own tag, so it doesn't share a window
 # with signup or checkout.
 _ASK_LIMIT = per_ip_rate_limit(limit=10, window_s=60, tag="civic_ask")
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(0, int((os.environ.get(name) or "").strip() or default))
+    except ValueError:
+        return default
+
+
+def enabled() -> bool:
+    """CIVIC_ENABLED=0 (or false/off/no) takes the surface down, page included.
+
+    Read per request on purpose: turning Civic off is an env change and a
+    restart, not a redeploy, and it must not need one at all if the process
+    can be signalled another way later.
+    """
+    raw = (os.environ.get("CIVIC_ENABLED") or "").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+# At most this many synthesis calls in flight, ever. Two of ~40 shared threads
+# is enough to serve a small launch city and small enough that the CRM cannot
+# notice. Everything past it is shed immediately -- a queued request would hold
+# a thread while it waited, which is the exact harm this prevents.
+_MAX_CONCURRENCY = _int_env("CIVIC_MAX_CONCURRENCY", 2)
+_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENCY or 1)
+
+# Uncached answers per process per UTC day. The keys are shared with the rest
+# of the app, so this is the ceiling on what Civic can spend of them.
+_DAILY_CAP = _int_env("CIVIC_DAILY_ANSWERS", 250)
+_day_lock = threading.Lock()
+_day = ""
+_day_count = 0
+
+
+def _take_daily_slot() -> bool:
+    """Count one answer against today's budget. False when the day is spent."""
+    global _day, _day_count
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with _day_lock:
+        if today != _day:
+            _day, _day_count = today, 0
+        if _DAILY_CAP and _day_count >= _DAILY_CAP:
+            return False
+        _day_count += 1
+        return True
+
+
+def _reset_daily_budget() -> None:
+    """Test seam. Nothing in the request path calls this."""
+    global _day, _day_count
+    with _day_lock:
+        _day, _day_count = "", 0
 
 
 class AskIn(BaseModel):
@@ -58,12 +130,17 @@ class AskOut(BaseModel):
 @router.post("/ask", response_model=AskOut, dependencies=[Depends(_ASK_LIMIT)])
 def ask(payload: AskIn) -> AskOut:
     """One question in, one evidence-ranked answer out."""
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+
     question = (payload.question or "").strip()
     location = (payload.location or "").strip()
     if not question:
         raise HTTPException(400, {"code": "empty_question",
                                   "message": "Ask a question first."})
 
+    # A cache hit costs nothing and holds no slot : serve it before the fence.
     key = civic.cache_key(question, location)
     hit = civic.cache_get(key)
     if hit:
@@ -80,6 +157,27 @@ def ask(payload: AskIn) -> AskOut:
                         "no ANTHROPIC_API_KEY."),
         })
 
+    # Non-blocking : a request that waits for a slot is a held thread, which is
+    # the harm this cap exists to prevent. Shed it instead and let the caller
+    # retry. Taken before the daily budget so a shed request costs no quota.
+    if not _SLOTS.acquire(blocking=False):
+        print("  [civic] busy : all synthesis slots in use")
+        raise HTTPException(503, {
+            "code": "busy",
+            "message": "Civic is answering as many questions as it can at once. Try again in a moment.",
+        }, headers={"Retry-After": "20"})
+
+    if not _take_daily_slot():
+        # The shared keys are the reason this cap exists : better a bounded
+        # surface than a surprise bill and a rate-limited CRM.
+        _SLOTS.release()
+        print(f"  [civic] daily cap reached ({_DAILY_CAP} answers)")
+        raise HTTPException(429, {
+            "code": "daily_cap",
+            "message": ("Civic has answered as many questions as it can today. "
+                        "Try again tomorrow."),
+        }, headers={"Retry-After": "3600"})
+
     try:
         answer, notes = civic.synthesize(
             question, location, lat=payload.lat, lon=payload.lon,
@@ -95,6 +193,8 @@ def ask(payload: AskIn) -> AskOut:
             # instead of a dead end.
             "raw": exc.raw[:4000],
         }) from exc
+    finally:
+        _SLOTS.release()
 
     print(
         f"  [civic] answered q={question[:80]!r} loc={location!r} "
@@ -115,9 +215,13 @@ def ask(payload: AskIn) -> AskOut:
 def get_answer(answer_id: str) -> AskOut:
     """The answer behind a permalink, while it is still in cache.
 
-    A miss is a 404 and the page re-asks the question : answers are cheap to
-    reproduce and nothing here is worth a database.
+    Cache-only : it costs nothing and holds no slot. A miss is a 404 and the
+    page re-asks the question, because answers are cheap to reproduce and
+    nothing here is worth a database.
     """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
     hit = civic.cache_get(answer_id.strip().lower())
     if not hit:
         raise HTTPException(404, {"code": "expired",
@@ -136,10 +240,14 @@ def _page():
 if _UI_HTML.is_file():
     @pages_router.get("/civic")
     def civic_page():
-        """The map. Pan the globe, drop a pin, ask."""
+        """The map. Spin the globe, drop a pin, ask."""
+        if not enabled():
+            raise HTTPException(404, "Not found")
         return _page()
 
     @pages_router.get("/civic/r/{answer_id}")
     def civic_permalink(answer_id: str):
         """A shared answer. Same page; the client fetches the id on load."""
+        if not enabled():
+            raise HTTPException(404, "Not found")
         return _page()

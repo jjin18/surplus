@@ -258,10 +258,30 @@ from the publisher, so a Reddit thread cannot be cited as official data and a
 think tank cannot be cited as peer-reviewed; tier F is never support for a
 claim; there is exactly one two-minute action.
 
+**Isolation — what stops it affecting the CRM.** Civic is a bolt-on, so it is
+fenced rather than trusted:
+
+- **No shared state.** No DB, no session, no user, no models. The only app
+  module it imports is `rate_limit`; `tests/test_civic.py` asserts that by
+  parsing the imports, so the surface cannot quietly grow into the product.
+- **Mounted defensively.** `main.py` wraps the include in try/except: a
+  failure inside Civic logs `[civic] not mounted` and the app boots anyway.
+- **Capped threads.** A synthesis holds a threadpool thread for 15-25s and
+  that pool is the CRM's (`WEB_CONCURRENCY=1` by default). At most
+  `CIVIC_MAX_CONCURRENCY` (2) run at once; past that a request is shed with a
+  503, never queued — queueing is what would hold the threads.
+- **Bounded request time.** 75s per model call, and the second search only
+  runs if the first finished inside 45s.
+- **Capped spend.** `CIVIC_DAILY_ANSWERS` (250) uncached answers per process
+  per UTC day is the ceiling on what Civic can take of the shared Anthropic /
+  Exa keys and their rate limits. Cache hits don't count.
+- **Off switch.** `CIVIC_ENABLED=0` returns 404 for the page and 503 for the
+  API — an env change, not a deploy.
+
 Env: `ANTHROPIC_API_KEY` (required — without it `/api/civic/ask` returns 503
 and says why), `EXA_API_KEY` (optional, switches on the retrieval path),
 `CIVIC_MODEL` (default `claude-sonnet-5`), `CIVIC_MAX_SEARCHES` (default 8,
-only used on the `web_search` fallback).
+only used on the `web_search` fallback), plus the four caps above.
 
 ## 6. The updates → draft → Book flow (end to end)
 

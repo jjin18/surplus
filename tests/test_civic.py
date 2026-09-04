@@ -558,3 +558,127 @@ def test_empty_retrieval_falls_back_to_the_models_own_search():
     answer, notes = civic.synthesize("Why?", "", create=create, retrieve=retrieve)
     assert notes["sources"] == "web_search"
     assert len(answer["evidence"]) == 3
+
+
+# --------------------------------------------------------------------------
+# The fence : Civic shares a process, a threadpool and two API keys with the
+# CRM, so what it may take of them is capped and tested.
+# --------------------------------------------------------------------------
+
+from backend.routes import civic as civic_routes  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_budget():
+    civic_routes._reset_daily_budget()
+    yield
+    civic_routes._reset_daily_budget()
+
+
+def test_civic_imports_nothing_from_the_crm():
+    """The only app module Civic may import is the per-IP rate limiter.
+
+    This is the guarantee that a Civic change cannot break the CRM: no models,
+    no db session, no auth, no agents. If this test fails, the surface stopped
+    being standalone.
+    """
+    import ast
+    import pathlib
+
+    allowed = {"civic", "civic_sources", "rate_limit"}
+    root = pathlib.Path(__file__).resolve().parent.parent / "backend"
+    for path in (root / "civic.py", root / "civic_sources.py", root / "routes" / "civic.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            # `from . import x` / `from ..thing import y` -- the relative ones
+            # are the only way to reach the rest of the app.
+            if isinstance(node, ast.ImportFrom) and node.level:
+                reached = {node.module} if node.module else {a.name for a in node.names}
+                stray = {m for m in reached if m and m not in allowed}
+                assert not stray, f"{path.name} imports {stray} from the app"
+
+
+def test_only_two_syntheses_run_at_once(client, monkeypatch):
+    """Past the cap the request is shed, not queued.
+
+    A queued request holds a threadpool thread, and that pool is the CRM's.
+    """
+    _stub_synthesis(monkeypatch)
+    held = [civic_routes._SLOTS.acquire(blocking=False)
+            for _ in range(civic_routes._MAX_CONCURRENCY)]
+    try:
+        assert all(held)
+        r = client.post("/api/civic/ask", json={"question": "Why is rent up?"})
+        assert r.status_code == 503
+        assert r.json()["detail"]["code"] == "busy"
+        assert r.headers["Retry-After"] == "20"
+    finally:
+        for _ in held:
+            civic_routes._SLOTS.release()
+
+
+def test_a_slot_is_returned_after_a_failed_synthesis(client, monkeypatch):
+    monkeypatch.setattr(civic, "available", lambda: True)
+
+    def boom(question, location="", **kw):
+        raise civic.CivicError("nope", code="upstream_error")
+
+    monkeypatch.setattr(civic, "synthesize", boom)
+    for i in range(3):
+        assert client.post("/api/civic/ask",
+                           json={"question": f"Question {i}?"}).status_code == 422
+    # Every slot is free again : a run of failures cannot wedge the surface.
+    free = [civic_routes._SLOTS.acquire(blocking=False)
+            for _ in range(civic_routes._MAX_CONCURRENCY)]
+    for _ in [f for f in free if f]:
+        civic_routes._SLOTS.release()
+    assert all(free)
+
+
+def test_the_daily_budget_caps_what_civic_spends_of_the_shared_keys(client, monkeypatch):
+    calls = _stub_synthesis(monkeypatch)
+    monkeypatch.setattr(civic_routes, "_DAILY_CAP", 2)
+    codes = [client.post("/api/civic/ask", json={"question": f"Question {i}?"}).status_code
+             for i in range(3)]
+    assert codes == [200, 200, 429]
+    assert len(calls) == 2
+
+
+def test_a_cached_answer_is_free_of_the_daily_budget(client, monkeypatch):
+    _stub_synthesis(monkeypatch)
+    monkeypatch.setattr(civic_routes, "_DAILY_CAP", 1)
+    payload = {"question": "Why is rent up?", "location": "Oakland, CA"}
+    assert client.post("/api/civic/ask", json=payload).status_code == 200
+    again = client.post("/api/civic/ask", json=payload)
+    assert again.status_code == 200 and again.json()["cached"] is True
+
+
+def test_civic_enabled_0_takes_the_whole_surface_down(client, monkeypatch):
+    _stub_synthesis(monkeypatch)
+    monkeypatch.setenv("CIVIC_ENABLED", "0")
+    assert client.get("/civic").status_code == 404
+    assert client.get("/civic/r/abc123").status_code == 404
+    r = client.post("/api/civic/ask", json={"question": "Why is rent up?"})
+    assert r.status_code == 503
+    assert r.json()["detail"]["code"] == "disabled"
+
+
+def test_the_rest_of_the_app_still_serves_when_civic_is_off(client, monkeypatch):
+    monkeypatch.setenv("CIVIC_ENABLED", "0")
+    assert client.get("/api/health").status_code == 200
+
+
+def test_a_shed_request_does_not_spend_the_daily_budget(client, monkeypatch):
+    _stub_synthesis(monkeypatch)
+    monkeypatch.setattr(civic_routes, "_DAILY_CAP", 1)
+    held = [civic_routes._SLOTS.acquire(blocking=False)
+            for _ in range(civic_routes._MAX_CONCURRENCY)]
+    try:
+        assert client.post("/api/civic/ask",
+                           json={"question": "Shed me?"}).status_code == 503
+    finally:
+        for _ in [h for h in held if h]:
+            civic_routes._SLOTS.release()
+    # The one answer in today's budget is still there.
+    assert client.post("/api/civic/ask",
+                       json={"question": "Why is rent up?"}).status_code == 200

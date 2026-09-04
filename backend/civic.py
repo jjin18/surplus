@@ -75,9 +75,15 @@ MAX_TOKENS = 4000
 # ceiling, not a target ; most answers settle in 4-6.
 _DEFAULT_MAX_USES = 8
 
-# One query is 15-25s of search + synthesis. The SDK default (10 min) is too
-# generous to be a useful failure signal, the app default too tight.
-REQUEST_TIMEOUT_S = 150.0
+# One query is 15-25s of search + synthesis. The SDK default (10 minutes) is
+# not a useful failure signal, and this surface shares its threadpool with the
+# CRM : a call that has not come back in 75s is holding a thread someone else
+# needs, so give up and say so.
+REQUEST_TIMEOUT_S = 75.0
+
+# Only search again if the first pass left time for it. Bounds one request at
+# roughly RETRY_DEADLINE_S + REQUEST_TIMEOUT_S instead of twice the timeout.
+RETRY_DEADLINE_S = 45.0
 
 # Answers must span at least this many tiers or we search again, harder.
 MIN_TIERS = 3
@@ -600,6 +606,11 @@ def synthesize(
     sources_found = 0
 
     for harder in (False, True):
+        if harder and time.monotonic() - started > RETRY_DEADLINE_S:
+            # The first pass was slow enough that a second would cost more
+            # than the better answer is worth. Ship what we have.
+            print("  [civic] first pass was slow; skipping the second search")
+            break
         sources_block, allowed = "", set()
         if retrieving:
             results = retrieve(question, location, harder=harder)
