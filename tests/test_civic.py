@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import pathlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1678,3 +1679,104 @@ def test_the_layer_filter_is_dropped_as_a_last_resort(monkeypatch):
     ])
     civic_geo.census_geographies(37.8, -122.2)
     assert [s["layers"] for s in sent] == ["all", "all", None]
+
+
+# --------------------------------------------------------------------------
+# A district you can shade, not just trace
+# --------------------------------------------------------------------------
+
+def _ways(*lines):
+    return {"elements": [{"type": "relation", "members": [
+        {"type": "way", "role": "outer",
+         "geometry": [{"lon": x, "lat": y} for x, y in line]}
+        for line in lines]}]}
+
+
+def _overpass(monkeypatch, payload):
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return payload
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, data=None, headers=None): return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+
+
+def test_scattered_ways_are_stitched_into_a_polygon(monkeypatch):
+    # Overpass returns a boundary as an unordered pile of ways, in any
+    # direction. Only a closed ring can be shaded.
+    _overpass(monkeypatch, _ways(
+        [(0, 0), (1, 0)],            # bottom
+        [(1, 1), (0, 1)],            # top, pointing the other way
+        [(1, 0), (1, 1)],            # right
+        [(0, 1), (0, 0)],            # left
+    ))
+    shape = civic_geo.outline(77)
+    assert shape["type"] == "MultiPolygon"
+    ring = shape["coordinates"][0][0]
+    assert ring[0] == ring[-1]                       # closed
+    assert len(ring) >= 5
+
+
+def test_a_half_received_boundary_stays_a_line(monkeypatch):
+    # Closing this would invent an edge that does not exist.
+    _overpass(monkeypatch, _ways([(0, 0), (1, 0)], [(5, 5), (6, 6)]))
+    shape = civic_geo.outline(77)
+    assert shape["type"] == "MultiLineString"
+
+
+def test_two_separate_rings_both_survive(monkeypatch):
+    _overpass(monkeypatch, _ways(
+        [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)],
+        [(5, 5), (6, 5), (6, 6), (5, 6), (5, 5)],
+    ))
+    shape = civic_geo.outline(77)
+    assert shape["type"] == "MultiPolygon"
+    assert len(shape["coordinates"]) == 2
+
+
+def test_a_closed_enclave_does_not_stand_in_for_a_broken_outer_ring(monkeypatch):
+    # The small ring closes ; the district's own edge did not arrive whole.
+    # Filling in the enclave would be a confident drawing of the wrong area,
+    # so the whole thing falls back to lines.
+    _overpass(monkeypatch, _ways(
+        [(9.0, 9.0), (9.1, 9.0), (9.1, 9.1), (9.0, 9.1), (9.0, 9.0)],
+        [(x / 10, 0) for x in range(40)],
+        [(4, y / 10) for y in range(40)],
+    ))
+    shape = civic_geo.outline(77)
+    assert shape["type"] == "MultiLineString"
+
+
+# --- the page itself ------------------------------------------------------
+# The UI is one file, so a few of its promises are worth pinning: the lens
+# has to paint the map, sit in a single row, and stop preaching.
+
+def _page() -> str:
+    return (pathlib.Path(__file__).resolve().parents[1]
+            / "backend" / "civic_ui" / "index.html").read_text()
+
+
+def test_the_chosen_lens_fills_the_district_in_its_own_colour():
+    page = _page()
+    assert '{id: "layer-fill", type: "fill", source: "layer"' in page
+    assert '"fill-color": ["get", "color"]' in page
+
+
+def test_the_lens_rail_is_one_row():
+    page = _page()
+    rail = page.split(".rail{", 1)[1].split("}", 1)[0]
+    assert "flex-wrap:nowrap" in rail
+    assert "overflow-x:auto" in rail          # 8 lenses still fit on a laptop
+
+
+def test_the_page_does_not_preach_its_own_method():
+    assert "Social posts last" not in _page()

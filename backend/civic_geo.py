@@ -306,8 +306,49 @@ def outline_by_name(name: str) -> dict:
     return outline(found[0].get("id"))
 
 
+def _rings(lines: list[list]) -> list[list]:
+    """Stitch a relation's way members into closed rings.
+
+    Overpass hands back a boundary as an unordered pile of ways, which draws
+    as a line and cannot be filled. Chaining them by shared endpoints turns
+    the pile into polygons -- which is what lets the map shade the district
+    you are inside rather than merely trace it.
+    """
+    pool = [list(line) for line in lines if len(line) > 1]
+    rings: list[list] = []
+    while pool:
+        ring = pool.pop()
+        joined = True
+        while joined and ring[0] != ring[-1]:
+            joined = False
+            for i, other in enumerate(pool):
+                if other[0] == ring[-1]:
+                    ring += other[1:]
+                elif other[-1] == ring[-1]:
+                    ring += other[-2::-1]
+                elif other[-1] == ring[0]:
+                    ring = other[:-1] + ring
+                elif other[0] == ring[0]:
+                    ring = other[:0:-1] + ring
+                else:
+                    continue
+                pool.pop(i)
+                joined = True
+                break
+        # An unclosed chain is a boundary we only half received ; drawing it
+        # as a polygon would invent an edge that is not there.
+        if ring[0] == ring[-1] and len(ring) >= 4:
+            rings.append(ring)
+    return rings
+
+
 def outline(relation_id: int) -> dict:
-    """One boundary's geometry, as GeoJSON, for drawing on the map."""
+    """One boundary's geometry, as GeoJSON, for shading on the map.
+
+    A MultiPolygon when the ways close into rings, and a MultiLineString when
+    they do not -- a half-received boundary is drawn as the line it is rather
+    than filled in as though we had all of it.
+    """
     import httpx
     query = f"[out:json][timeout:25];rel({int(relation_id)});out geom;"
     with httpx.Client(timeout=TIMEOUT_S + 10) as client:
@@ -315,7 +356,7 @@ def outline(relation_id: int) -> dict:
                            headers={"user-agent": USER_AGENT})
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}")
-    rings = []
+    lines = []
     for element in resp.json().get("elements") or []:
         for member in element.get("members") or []:
             if member.get("type") != "way" or member.get("role") == "inner":
@@ -323,10 +364,19 @@ def outline(relation_id: int) -> dict:
             line = [[p["lon"], p["lat"]] for p in member.get("geometry") or []
                     if "lat" in p and "lon" in p]
             if len(line) > 1:
-                rings.append(line)
-    if not rings:
+                lines.append(line)
+    if not lines:
         return {}
-    return {"type": "MultiLineString", "coordinates": rings}
+    rings = _rings(lines)
+    # Rings that close are only trustworthy as the district's shape if they
+    # account for most of what we received. A boundary whose outer ring came
+    # in broken but whose one-block enclave closed would otherwise be filled
+    # in as the enclave -- a confident drawing of the wrong area.
+    closed = sum(len(ring) for ring in rings)
+    total = sum(len(line) for line in lines)
+    if rings and closed * 2 > total:
+        return {"type": "MultiPolygon", "coordinates": [[ring] for ring in rings]}
+    return {"type": "MultiLineString", "coordinates": lines}
 
 
 # ---------------------------------------------------------------------------
