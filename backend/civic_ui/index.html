@@ -104,6 +104,9 @@
   .status li.done::before{content:"✓ ";color:#5FD3A0}
   .status li.on::before{content:"→ "}
   .status li::before{content:"· "}
+  .status-note{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);
+    margin:10px 0 0;border-top:1px solid var(--glass-rule);padding-top:8px}
+  .status-note b{color:var(--on-glass);font-weight:600}
 
   .error{display:none;margin-top:12px;padding:10px 12px;border-left:3px solid var(--red);
     background:rgba(166,61,47,.14);font-family:var(--sans);font-size:13px;color:var(--on-glass);border-radius:0 8px 8px 0}
@@ -258,15 +261,9 @@
     </div>
 
     <div class="status" id="status">
-      <h4>Searching, strongest sources first</h4>
-      <ol>
-        <li>Working out what you asked, and where</li>
-        <li>Searching government data and public records</li>
-        <li>Searching studies and research reports</li>
-        <li>Reading expert analysis and news coverage</li>
-        <li>Checking what people nearby are saying</li>
-        <li>Sorting it: what's settled, what's still argued about</li>
-      </ol>
+      <h4 id="status-head">Searching, strongest sources first</h4>
+      <ol id="status-steps"></ol>
+      <p class="status-note" id="status-note"></p>
     </div>
 
     <div class="error" id="error"></div>
@@ -537,38 +534,54 @@ async function forwardGeocode(text){
 // ---------------------------------------------------------------------------
 // Asking
 // ---------------------------------------------------------------------------
-let stepTimers = [];
-
-function setStep(i){
-  const items = $("status").querySelectorAll("li");
-  items.forEach((li, j) => { li.className = j < i ? "done" : j === i ? "on" : ""; });
-}
+// The steps are what the server says it is doing, not a timer. A question
+// takes 15-40s and the old checklist ran out after 16, so it sat on the last
+// line looking stuck while the work carried on.
+const STEP_TEXT = {
+  started: "Working out what you asked, and where",
+  retrieving: "Searching all six kinds of source at once",
+  retrieved: "Read the sources that came back",
+  searching: "Searching the web",
+  writing: "Writing the answer",
+  headline: "Sorting it: what's settled, what's still argued about",
+  searching_again: "Thin so far — searching again for official data and research"
+};
 
 function startProgress(){
   $("status").classList.add("on");
-  setStep(0);
-  stepTimers = [1, 2, 3, 4, 5].map(i => setTimeout(() => setStep(i), 3200 * i));
+  $("status-steps").innerHTML = "";
+  $("status-note").textContent = "";
+  step("started");
+}
+
+// Mark every earlier line done and add this one as current.
+function step(name, detail){
+  const list = $("status-steps");
+  if (!list) return;
+  [...list.children].forEach(li => { li.className = "done"; });
+  const li = document.createElement("li");
+  li.className = "on";
+  li.textContent = detail ? STEP_TEXT[name] + " — " + detail : (STEP_TEXT[name] || name);
+  list.appendChild(li);
 }
 
 function stopProgress(){
-  stepTimers.forEach(clearTimeout);
-  stepTimers = [];
   $("status").classList.remove("on");
 }
 
-function showError(message, raw){
+function showError(message, raw, label){
   const box = $("error");
   box.innerHTML = "<div>" + esc(message) + "</div>";
   if (raw) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = "Show what we found";
+    btn.textContent = label || "Show what we found";
     const pre = document.createElement("pre");
     pre.textContent = raw;
     pre.hidden = true;
     btn.addEventListener("click", () => {
       pre.hidden = !pre.hidden;
-      btn.textContent = pre.hidden ? "Show what we found" : "Hide it";
+      btn.textContent = pre.hidden ? (label || "Show what we found") : "Hide it";
     });
     box.append(btn, pre);
   }
@@ -590,20 +603,12 @@ async function ask(){
   if (state.pin) { body.lat = state.pin.lat; body.lon = state.pin.lon; }
 
   try {
-    const res = await fetch("/api/civic/ask", {
+    const res = await fetch("/api/civic/ask/stream", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const detail = (data && data.detail) || {};
-      const msg = detail.message || "The search could not be completed.";
-      showError(res.status === 429
-        ? "That's a lot of questions at once. Wait a minute, then ask again."
-        : msg, detail.raw || "");
-      return;
-    }
-    setStep(6);
-    render(data);
+    if (!res.ok) { await showHttpError(res); return; }
+    if (!res.body) { await askWithoutStreaming(body); return; }
+    await readStream(res.body);
   } catch (e) {
     showError("Couldn't reach the server: " + e.message);
   } finally {
@@ -611,6 +616,74 @@ async function ask(){
     state.busy = false;
     $("go").disabled = false;
   }
+}
+
+async function showHttpError(res){
+  const data = await res.json().catch(() => ({}));
+  const detail = (data && data.detail) || {};
+  showError(res.status === 429
+    ? (detail.message || "That's a lot of questions at once. Wait a minute, then ask again.")
+    : (detail.message || "The search could not be completed."), detail.raw || "",
+    detail.code === "not_json" ? "Show what we found" : "Show the technical detail");
+}
+
+// Server-sent events over fetch: one `event:` line and one `data:` line per
+// block, blank line between.
+async function readStream(stream){
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      handleEvent(block);
+    }
+  }
+}
+
+function handleEvent(block){
+  let name = "", raw = "";
+  block.split("\n").forEach(line => {
+    if (line.startsWith("event: ")) name = line.slice(7);
+    else if (line.startsWith("data: ")) raw = line.slice(6);
+  });
+  if (!name) return;                       // heartbeat comment
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch (e) { return; }
+
+  if (name === "answer") { render(data); return; }
+  if (name === "error") {
+    showError(data.message || "The search could not be completed.", data.raw || "",
+              data.code === "not_json" ? "Show what we found" : "Show the technical detail");
+    return;
+  }
+  if (name === "retrieved") {
+    step("retrieved", data.count + " sources across " + (data.tiers || []).join(", "));
+    return;
+  }
+  if (name === "searching") { step("searching", "search " + data.n); return; }
+  if (name === "headline") {
+    // The headline is the first thing the model writes, so it lands well
+    // before the rest. Show it : the wait stops feeling like nothing.
+    step("headline");
+    $("status-note").innerHTML = "<b>" + esc(data.text) + "</b>";
+    return;
+  }
+  step(name);
+}
+
+// One retry path, for a proxy that eats event streams.
+async function askWithoutStreaming(body){
+  const res = await fetch("/api/civic/ask", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+  });
+  if (!res.ok) { await showHttpError(res); return; }
+  render(await res.json());
 }
 
 // ---------------------------------------------------------------------------

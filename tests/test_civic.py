@@ -682,3 +682,316 @@ def test_a_shed_request_does_not_spend_the_daily_budget(client, monkeypatch):
     # The one answer in today's budget is still there.
     assert client.post("/api/civic/ask",
                        json={"question": "Why is rent up?"}).status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Streaming : the same answer, but the page can say what is happening
+# --------------------------------------------------------------------------
+
+def _events(response_text):
+    """Parse an SSE body into [(event, data), ...]."""
+    out = []
+    for block in response_text.split("\n\n"):
+        name, data = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: "):
+                data = json.loads(line[6:])
+        if name:
+            out.append((name, data))
+    return out
+
+
+def test_the_stream_reports_progress_and_then_the_answer(client, monkeypatch):
+    answer = civic.validate(_answer_payload(), _allowed(GOOD_URL, STUDY_URL, NEWS_URL))[0]
+
+    def fake(question, location="", *, on_event=None, **kw):
+        on_event("started")
+        on_event("retrieved", count=24, tiers=["A", "B", "E"])
+        on_event("headline", text=answer["headline"])
+        return answer, {"evidence_dropped": 0, "actions_dropped": 0,
+                        "mechanisms_dropped": 0, "latency_ms": 10,
+                        "sources": "exa", "sources_found": 24, "retried": False}
+
+    monkeypatch.setattr(civic, "available", lambda: True)
+    monkeypatch.setattr(civic, "synthesize", fake)
+
+    r = client.post("/api/civic/ask/stream", json={"question": "Why is rent up?"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    events = _events(r.text)
+    names = [name for name, _ in events]
+    assert names == ["started", "retrieved", "headline", "answer"]
+    # The headline arrives before the answer : that is the whole point.
+    assert events[2][1]["text"] == answer["headline"]
+    assert events[-1][1]["answer"]["tiers"] == ["A", "B", "E"]
+    assert events[-1][1]["cached"] is False
+
+
+def test_the_stream_serves_a_cached_answer_immediately(client, monkeypatch):
+    calls = _stub_synthesis(monkeypatch)
+    payload = {"question": "Why is rent up?", "location": "Oakland, CA"}
+    client.post("/api/civic/ask", json=payload)
+    r = client.post("/api/civic/ask/stream", json=payload)
+    events = _events(r.text)
+    assert [name for name, _ in events] == ["answer"]
+    assert events[0][1]["cached"] is True
+    assert len(calls) == 1
+
+
+def test_the_stream_ends_with_an_error_event_not_a_dead_connection(client, monkeypatch):
+    monkeypatch.setattr(civic, "available", lambda: True)
+
+    def boom(question, location="", *, on_event=None, **kw):
+        on_event("started")
+        raise civic.CivicError("prose, not JSON", raw="what we found", code="not_json")
+
+    monkeypatch.setattr(civic, "synthesize", boom)
+    r = client.post("/api/civic/ask/stream", json={"question": "Why is rent up?"})
+    events = _events(r.text)
+    assert [name for name, _ in events] == ["started", "error"]
+    assert events[-1][1]["raw"] == "what we found"
+
+
+def test_the_stream_releases_its_slot_when_synthesis_fails(client, monkeypatch):
+    monkeypatch.setattr(civic, "available", lambda: True)
+
+    def boom(question, location="", *, on_event=None, **kw):
+        raise civic.CivicError("nope", code="upstream_error")
+
+    monkeypatch.setattr(civic, "synthesize", boom)
+    client.post("/api/civic/ask/stream", json={"question": "Why is rent up?"})
+    free = [civic_routes._SLOTS.acquire(blocking=False)
+            for _ in range(civic_routes._MAX_CONCURRENCY)]
+    for _ in [f for f in free if f]:
+        civic_routes._SLOTS.release()
+    assert all(free)
+
+
+def test_the_stream_obeys_the_same_fence(client, monkeypatch):
+    _stub_synthesis(monkeypatch)
+    held = [civic_routes._SLOTS.acquire(blocking=False)
+            for _ in range(civic_routes._MAX_CONCURRENCY)]
+    try:
+        r = client.post("/api/civic/ask/stream", json={"question": "Why is rent up?"})
+        assert r.status_code == 503 and r.json()["detail"]["code"] == "busy"
+    finally:
+        for _ in [h for h in held if h]:
+            civic_routes._SLOTS.release()
+
+    monkeypatch.setenv("CIVIC_ENABLED", "0")
+    off = client.post("/api/civic/ask/stream", json={"question": "Why is rent up?"})
+    assert off.status_code == 503 and off.json()["detail"]["code"] == "disabled"
+
+
+# --------------------------------------------------------------------------
+# The streaming call itself : the part that talks to the SDK
+# --------------------------------------------------------------------------
+
+class _Block:
+    def __init__(self, type_): self.type = type_
+
+
+class _Event:
+    def __init__(self, type_, **kw):
+        self.type = type_
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+class _Delta:
+    def __init__(self, text): self.text = text
+
+
+class _FakeStream:
+    def __init__(self, events, final):
+        self._events, self._final = events, final
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def __iter__(self): return iter(self._events)
+    def get_final_message(self): return self._final
+
+
+class _FakeClient:
+    def __init__(self, events, final):
+        self._events, self._final = events, final
+        self.kwargs = None
+
+    def with_options(self, **kw): return self
+
+    @property
+    def messages(self): return self
+
+    def stream(self, **kwargs):
+        self.kwargs = kwargs
+        return _FakeStream(self._events, self._final)
+
+    def create(self, **kwargs):
+        self.kwargs = kwargs
+        return self._final
+
+
+def test_the_streaming_call_reports_searches_writing_and_the_headline(monkeypatch):
+    payload = _answer_payload()
+    body = json.dumps(payload)
+    events = [
+        _Event("content_block_start", content_block=_Block("server_tool_use")),
+        _Event("content_block_start", content_block=_Block("web_search_tool_result")),
+        _Event("content_block_start", content_block=_Block("server_tool_use")),
+        _Event("content_block_start", content_block=_Block("text")),
+        # The headline is the first key, so it completes early in the write.
+        _Event("content_block_delta", delta=_Delta(body[:120])),
+        _Event("content_block_delta", delta=_Delta(body[120:])),
+    ]
+    final = _Response([_search_block(GOOD_URL), _text_block(payload)])
+    fake = _FakeClient(events, final)
+    monkeypatch.setattr(civic, "_client", lambda: fake)
+
+    seen = []
+    response = civic._create([{"role": "user", "content": "x"}],
+                             on_event=lambda name, **f: seen.append((name, f)))
+
+    assert response is final
+    names = [n for n, _ in seen]
+    assert names.count("searching") == 2
+    assert "writing" in names
+    assert ("headline", {"text": payload["headline"]}) in seen
+
+
+def test_without_a_callback_the_call_does_not_stream(monkeypatch):
+    final = _Response([_text_block(_answer_payload())])
+    fake = _FakeClient([], final)
+    monkeypatch.setattr(civic, "_client", lambda: fake)
+    assert civic._create([{"role": "user", "content": "x"}]) is final
+    assert "tools" in fake.kwargs          # web_search mode by default
+
+
+def test_retrieval_mode_sends_no_tools(monkeypatch):
+    final = _Response([_text_block(_answer_payload())])
+    fake = _FakeClient([], final)
+    monkeypatch.setattr(civic, "_client", lambda: fake)
+    civic._create([{"role": "user", "content": "x"}], retrieval=True)
+    assert "tools" not in fake.kwargs
+
+
+def test_effort_rides_in_extra_body_only_when_configured(monkeypatch):
+    final = _Response([_text_block(_answer_payload())])
+    fake = _FakeClient([], final)
+    monkeypatch.setattr(civic, "_client", lambda: fake)
+
+    civic._create([{"role": "user", "content": "x"}])
+    assert "extra_body" not in fake.kwargs          # unset by default
+
+    monkeypatch.setattr(civic, "EFFORT", "low")
+    civic._create([{"role": "user", "content": "x"}])
+    assert fake.kwargs["extra_body"] == {"output_config": {"effort": "low"}}
+
+
+@pytest.mark.parametrize("partial,expected", [
+    ('{"headline": "Rents rose because supply stalled."', "Rents rose because supply stalled."),
+    ('{"headline": "A \\"quoted\\" claim", "summary"', 'A "quoted" claim'),
+    ('{"headl', ""),
+    ('{"headline": "half writ', ""),
+])
+def test_peek_headline_reads_a_half_written_answer(partial, expected):
+    assert civic._peek_headline(partial) == expected
+
+
+# --------------------------------------------------------------------------
+# When every question fails, the surface has to be able to say why
+# --------------------------------------------------------------------------
+
+class _ModelGone(Exception):
+    status_code = 404
+
+    def __str__(self):
+        return "model: claude-sonnet-5 not_found_error"
+
+
+def test_an_unusable_model_falls_back_to_the_one_the_app_already_runs(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+    monkeypatch.setattr(civic, "MODEL", "claude-sonnet-5")
+    seen = []
+
+    def create(messages):
+        seen.append(civic.active_model())
+        if civic.active_model() != civic.FALLBACK_MODEL:
+            raise _ModelGone()
+        return _Response([_search_block(GOOD_URL, STUDY_URL, NEWS_URL),
+                          _text_block(_answer_payload())])
+
+    answer, _ = civic.synthesize("Why is rent up?", "", create=create)
+    assert seen == ["claude-sonnet-5", civic.FALLBACK_MODEL]
+    assert len(answer["evidence"]) == 3
+
+
+def test_a_failure_that_is_not_about_the_model_is_not_retried(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+    calls = []
+
+    def create(messages):
+        calls.append(1)
+        raise RuntimeError("connection reset by peer")
+
+    with pytest.raises(civic.CivicError) as exc:
+        civic.synthesize("Why?", "", create=create)
+    assert len(calls) == 1
+    assert exc.value.code == "upstream_error"
+    # The technical cause travels in `raw`, so the page shows a plain sentence
+    # and keeps the detail behind "show what we found".
+    assert "RuntimeError" in exc.value.raw
+    assert str(exc.value) == "The search could not be completed."
+
+
+def test_the_last_failure_is_remembered_for_selftest(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+
+    def create(messages):
+        raise RuntimeError("connection reset by peer")
+
+    with pytest.raises(civic.CivicError):
+        civic.synthesize("Why?", "", create=create)
+    assert civic.LAST_ERROR["type"] == "RuntimeError"
+    assert "connection reset" in civic.LAST_ERROR["message"]
+    assert civic.LAST_ERROR["mode"] in ("exa", "web_search")
+
+
+def test_selftest_reports_configuration_and_the_last_failure(client, monkeypatch):
+    civic.LAST_ERROR.clear()
+    civic.LAST_ERROR.update({"type": "NotFoundError", "message": "model: nope",
+                             "status": 404, "model": "nope", "mode": "web_search"})
+    monkeypatch.setenv("EXA_API_KEY", "")
+    r = client.get("/api/civic/selftest")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["sources"] == "web_search"
+    assert body["model_in_use"] == civic.active_model()
+    assert body["last_error"]["type"] == "NotFoundError"
+    assert "key" not in json.dumps(body).lower().replace("anthropic_key", "").replace("exa_key", "")
+    civic.LAST_ERROR.clear()
+
+
+class _ToolNotEnabled(Exception):
+    status_code = 400
+
+    def __str__(self):
+        return "tools.0: web_search_20260209 is not available to this account"
+
+
+def test_a_missing_web_search_entitlement_says_what_to_do(monkeypatch):
+    monkeypatch.setattr(civic, "_model_override", "")
+
+    def create(messages):
+        raise _ToolNotEnabled()
+
+    with pytest.raises(civic.CivicError) as exc:
+        civic.synthesize("Why is rent up?", "", create=create)
+    assert exc.value.code == "no_search_backend"
+    assert "EXA_API_KEY" in str(exc.value)
+    # Never the workaround of answering from memory: an unsourced answer is
+    # the failure this product exists to prevent.
+    assert "web_search tool" in str(exc.value)

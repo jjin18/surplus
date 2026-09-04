@@ -245,6 +245,25 @@ a deploy that only has the Anthropic key. Empty retrieval (dead key, quota,
 outage) falls back to `web_search` for that question rather than answering
 with nothing to cite.
 
+Latency, and what is done about it. A question is 15-40s: searches, then a
+JSON answer written a token at a time. `POST /api/civic/ask/stream` reports the
+work as server-sent events — each search, the moment writing starts, and the
+**headline as soon as it exists** (it is the first key in the JSON, so it lands
+seconds into the write). The page reads that instead of running a timer.
+`POST /api/civic/ask` stays as the non-streaming path and the fallback for a
+proxy that eats event streams. On the `web_search` fallback each search is a
+serial round-trip, so it is capped at 5 and a second pass needs the answer to
+be thinner (`MIN_TIERS_FALLBACK`) than it does in Exa mode.
+
+`GET /api/civic/selftest` answers "why is every question failing" without the
+deploy logs: how the surface is configured, which model is actually in use,
+and the last upstream failure (type, status, truncated message — no keys, no
+question text). Two failures are self-healing or self-explaining: a model this
+account cannot use falls back to the one `agents/llm.py` already runs in
+production, and a missing web_search entitlement with no `EXA_API_KEY` says so
+in the answer instead of quietly answering from memory — an unsourced answer
+being precisely what this surface exists to prevent.
+
 Flow: `POST /api/civic/ask {question, location, lat, lon}` → retrieve →
 one Claude call → strip fences → schema-validate → **drop any evidence or
 action whose URL is not in the source set** → if the answer spans fewer than
@@ -280,8 +299,10 @@ fenced rather than trusted:
 
 Env: `ANTHROPIC_API_KEY` (required — without it `/api/civic/ask` returns 503
 and says why), `EXA_API_KEY` (optional, switches on the retrieval path),
-`CIVIC_MODEL` (default `claude-sonnet-5`), `CIVIC_MAX_SEARCHES` (default 8,
-only used on the `web_search` fallback), plus the four caps above.
+`CIVIC_MODEL` (default `claude-sonnet-5`, falling back to `claude-sonnet-4-6`
+if the account cannot use it), `CIVIC_MAX_SEARCHES` (default 5, only used on
+the `web_search` fallback), `CIVIC_EFFORT` (unset; `low` trades depth for
+speed), plus the four caps above.
 
 ## 6. The updates → draft → Book flow (end to end)
 

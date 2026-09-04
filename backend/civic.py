@@ -67,13 +67,26 @@ TIER_LABEL: dict[str, str] = {
 # supports the current web_search tool. Haiku 4.5 400s on that tool version.
 MODEL = (os.environ.get("CIVIC_MODEL") or "").strip() or "claude-sonnet-5"
 
-# 4000, not the prototype's 1000 : a full answer is ~12 evidence items plus
-# mechanisms and actions, and a truncated response is unparseable JSON.
-MAX_TOKENS = 4000
+# The model backend/agents/llm.py has been running in production for months.
+# If the configured model is not available to this account, every question
+# fails with the same unhelpful message, so fall back to the known-good one
+# once and remember it for the life of the process.
+FALLBACK_MODEL = "claude-sonnet-4-6"
+_model_override = ""
 
-# The model is told to work A -> F, so it needs several searches. 8 is the
-# ceiling, not a target ; most answers settle in 4-6.
-_DEFAULT_MAX_USES = 8
+
+def active_model() -> str:
+    return _model_override or MODEL
+
+# Output tokens are the single biggest slice of wall-clock : every one is
+# decoded serially and nothing renders until the JSON closes. 3000 fits a full
+# answer (the shape rules below keep it there) without paying for slack.
+MAX_TOKENS = 3000
+
+# Only used on the web_search fallback, where each search is a serial
+# round-trip : search, read results, decide the next one. Five covers the
+# ladder ; every extra one is ~3-5s of latency for a thinner rung.
+_DEFAULT_MAX_USES = 5
 
 # One query is 15-25s of search + synthesis. The SDK default (10 minutes) is
 # not a useful failure signal, and this surface shares its threadpool with the
@@ -87,6 +100,17 @@ RETRY_DEADLINE_S = 45.0
 
 # Answers must span at least this many tiers or we search again, harder.
 MIN_TIERS = 3
+
+# What a second pass costs depends on how we search. With Exa it is one more
+# model call ; on the web_search fallback it is another whole tool loop, which
+# can double the wait, so the bar for paying that is higher.
+MIN_TIERS_FALLBACK = 2
+
+# Effort for the synthesis call (low | medium | high). Unset means "don't send
+# it" : the pinned anthropic==0.42.0 rejects output_config as a named argument,
+# so it rides in extra_body, and an unrecognised field is not worth the risk by
+# default. Set CIVIC_EFFORT=low to trade some depth for a faster answer.
+EFFORT = (os.environ.get("CIVIC_EFFORT") or "").strip().lower()
 
 # Spec constraints on a well-formed answer.
 MAX_MECHANISMS = 6
@@ -130,6 +154,59 @@ def _client() -> "anthropic.Anthropic":
     if _CLIENT is None:
         _CLIENT = anthropic.Anthropic(api_key=_api_key(), max_retries=1)
     return _CLIENT
+
+
+# The last upstream failure, for GET /api/civic/selftest. One dict, no
+# history : it answers "why is every question failing right now", and the
+# answer is nearly always the same for all of them.
+LAST_ERROR: dict = {}
+
+
+def _remember_failure(exc: Exception, *, mode: str) -> dict:
+    detail = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "type": type(exc).__name__,
+        "message": str(exc)[:400],
+        "status": getattr(exc, "status_code", None),
+        "model": active_model(),
+        "mode": mode,
+    }
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause:
+        detail["cause"] = f"{type(cause).__name__}: {str(cause)[:200]}"
+    LAST_ERROR.clear()
+    LAST_ERROR.update(detail)
+    return detail
+
+
+def _is_tool_problem(exc: Exception) -> bool:
+    """Whether the failure is "this account cannot use the web_search tool".
+
+    Worth telling apart, because it has a specific remedy (enable web search
+    for the org, or set EXA_API_KEY) and because the tempting workaround --
+    dropping the tool and letting the model answer from memory -- would
+    produce exactly the unsourced confident answer this product exists to
+    prevent. So we name it and stop.
+    """
+    status = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    if status not in (400, 403, 404):
+        return False
+    return "web_search" in text or "tool" in text
+
+
+def _is_model_problem(exc: Exception) -> bool:
+    """Whether this failure reads like "that model is not available to you".
+
+    Deliberately loose: the cost of a wrong guess is one extra call on the
+    model the rest of the app already uses, and the cost of missing it is
+    every question failing forever.
+    """
+    status = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    if status in (400, 403, 404) and "model" in text:
+        return True
+    return "model_not_found" in text or "not_found_error" in text
 
 
 class CivicError(RuntimeError):
@@ -242,9 +319,11 @@ Reply with ONLY a JSON object -- no prose around it, no markdown fences:
 
 {_SCHEMA_BLOCK}
 
-Shape: 3-6 mechanisms. 5-12 evidence items across at least three tiers.
-Actions sorted by effort (1 is about two minutes, 2 about an hour, 3 an
-evening), exactly one at effort 1 and at most one at effort 3."""
+Shape, and keep to it -- every extra sentence is time the reader spends
+watching a spinner: 3-5 mechanisms. 5-9 evidence items across at least three
+tiers, one sentence each. At most 3 disputed items and 3 live decisions. Two
+or three actions, sorted by effort (1 is about two minutes, 2 about an hour, 3
+an evening), exactly one at effort 1 and at most one at effort 3."""
 
 
 def user_message(
@@ -546,12 +625,10 @@ def _host(url: str) -> str:
 # The call
 # ---------------------------------------------------------------------------
 
-def _create(messages: list[dict], today: Optional[date] = None, *,
-            retrieval: bool = False):
-    """One Messages call. With `retrieval`, the search results are already in
-    the prompt, so the model gets no tools and makes no extra round-trips."""
+def _request_kwargs(messages: list[dict], today: Optional[date],
+                    retrieval: bool) -> dict:
     kwargs = {
-        "model": MODEL,
+        "model": active_model(),
         "max_tokens": MAX_TOKENS,
         "system": [{
             "type": "text",
@@ -564,7 +641,92 @@ def _create(messages: list[dict], today: Optional[date] = None, *,
     }
     if not retrieval:
         kwargs["tools"] = [_web_search_tool()]
-    return _client().with_options(timeout=REQUEST_TIMEOUT_S).messages.create(**kwargs)
+    if EFFORT in ("low", "medium", "high"):
+        # extra_body, not a named argument : the pinned SDK does not know
+        # output_config yet. Unset by default -- see EFFORT above.
+        kwargs["extra_body"] = {"output_config": {"effort": EFFORT}}
+    return kwargs
+
+
+def _create(messages: list[dict], today: Optional[date] = None, *,
+            retrieval: bool = False, on_event=None):
+    """One Messages call. With `retrieval`, the search results are already in
+    the prompt, so the model gets no tools and makes no extra round-trips.
+
+    `on_event(name, **fields)` turns the call into a live feed: each search the
+    model runs, the moment it starts writing, and the headline as soon as it
+    has been written. The headline is the first key in the JSON, so it lands
+    seconds into the write rather than at the end of it -- which is the whole
+    difference between a page that is working and a page that looks stuck.
+    """
+    client = _client().with_options(timeout=REQUEST_TIMEOUT_S)
+    kwargs = _request_kwargs(messages, today, retrieval)
+    if on_event is None:
+        return client.messages.create(**kwargs)
+
+    searches, text, announced = 0, [], False
+    with client.messages.stream(**kwargs) as stream:
+        for event in stream:
+            kind = getattr(event, "type", "")
+            if kind == "content_block_start":
+                block_type = getattr(getattr(event, "content_block", None), "type", "")
+                if block_type == "server_tool_use":
+                    searches += 1
+                    on_event("searching", n=searches)
+                elif block_type == "text":
+                    on_event("writing")
+            elif kind == "content_block_delta" and not announced:
+                delta = getattr(getattr(event, "delta", None), "text", "") or ""
+                if delta:
+                    text.append(delta)
+                    headline = _peek_headline("".join(text))
+                    if headline:
+                        announced = True
+                        on_event("headline", text=headline)
+        return stream.get_final_message()
+
+
+_HEADLINE_RE = re.compile(r'"headline"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _peek_headline(partial: str) -> str:
+    """The headline out of a half-written JSON object, or "" if it isn't
+    finished yet. Used only to show something true while the rest is written."""
+    match = _HEADLINE_RE.search(partial)
+    if not match:
+        return ""
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except json.JSONDecodeError:
+        return ""
+
+
+def _enough_tiers(answer: dict, retrieving: bool) -> bool:
+    """Whether this answer is good enough to stop, given what a retry costs."""
+    floor = MIN_TIERS if retrieving else MIN_TIERS_FALLBACK
+    return len(answer["tiers"]) >= floor
+
+
+def _call_with_model_fallback(create, msg, retrieving: bool):
+    """Make the call ; if the model itself is the problem, switch once.
+
+    A wrong CIVIC_MODEL is invisible from the outside -- every question just
+    says the search could not be completed -- so rather than fail forever on
+    a model this account cannot use, drop to the one the rest of the app runs
+    on and say so in the log.
+    """
+    global _model_override
+    try:
+        return create([{"role": "user", "content": msg}])
+    except Exception as exc:  # noqa: BLE001
+        if not _is_model_problem(exc) or active_model() == FALLBACK_MODEL:
+            raise
+        _remember_failure(exc, mode="exa" if retrieving else "web_search")
+        print(f"  [civic] {active_model()} is not usable here "
+              f"({type(exc).__name__}); falling back to {FALLBACK_MODEL} "
+              f"for the life of this process")
+        _model_override = FALLBACK_MODEL
+        return create([{"role": "user", "content": msg}])
 
 
 def synthesize(
@@ -576,6 +738,7 @@ def synthesize(
     create=None,
     retrieve=None,
     today: Optional[date] = None,
+    on_event=None,
 ) -> tuple[dict, dict]:
     """Answer one question. Returns (answer, meta).
 
@@ -594,12 +757,24 @@ def synthesize(
     if not question:
         raise CivicError("Ask a question first.", code="empty_question")
 
+    # `on_event(name, **fields)` is how the page hears what is happening. It
+    # is optional and never load-bearing : a failed callback must not cost an
+    # answer that is already paid for.
+    def emit(name, **fields):
+        if not on_event:
+            return
+        try:
+            on_event(name, **fields)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [civic] progress callback failed: {type(exc).__name__}: {exc}")
+
     retrieving = retrieve is not None or civic_sources.available()
     retrieve = retrieve or civic_sources.gather
     if create is None:
         def create(messages, _retrieval=None):
             return _create(messages, today,
-                           retrieval=retrieving if _retrieval is None else _retrieval)
+                           retrieval=retrieving if _retrieval is None else _retrieval,
+                           on_event=emit if on_event else None)
 
     started = time.monotonic()
     attempts, last_error = [], None
@@ -611,8 +786,10 @@ def synthesize(
             # than the better answer is worth. Ship what we have.
             print("  [civic] first pass was slow; skipping the second search")
             break
+        emit("searching_again" if harder else "started")
         sources_block, allowed = "", set()
         if retrieving:
+            emit("retrieving")
             results = retrieve(question, location, harder=harder)
             sources_found = max(sources_found, len(results))
             if not results and not harder:
@@ -624,18 +801,38 @@ def synthesize(
             else:
                 sources_block = civic_sources.as_prompt_block(results)
                 allowed = {u for u in (normalise_url(r["url"]) for r in results) if u}
+                emit("retrieved", count=len(results),
+                     tiers=sorted({r["tier"] for r in results}))
 
         msg = user_message(question, location, lat=lat, lon=lon,
                            harder=harder, sources=sources_block)
         try:
-            response = create([{"role": "user", "content": msg}])
+            response = _call_with_model_fallback(create, msg, retrieving)
         except CivicError:
             raise
         except Exception as exc:  # noqa: BLE001 : surface the cause, don't crash
-            cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
-            detail = f"{type(exc).__name__}: {exc}" + (f" (cause: {cause})" if cause else "")
-            raise CivicError(f"The search could not be completed. {detail}",
-                             code="upstream_error") from exc
+            detail = _remember_failure(exc, mode="exa" if retrieving else "web_search")
+            print(f"  [civic] upstream failure {detail['type']} "
+                  f"status={detail.get('status')} model={detail['model']}: "
+                  f"{detail['message'][:200]}")
+            if _is_tool_problem(exc) and not retrieving:
+                raise CivicError(
+                    "There is nothing to search with: this Anthropic account "
+                    "cannot use the web_search tool, and no EXA_API_KEY is "
+                    "set. Enable web search for the account, or add an Exa "
+                    "key, and the question will work.",
+                    code="no_search_backend",
+                    raw=f"{detail['type']} (status {detail.get('status')}): "
+                        f"{detail['message']}",
+                ) from exc
+            raise CivicError(
+                "The search could not be completed.",
+                code="upstream_error",
+                # The technical cause goes in `raw`, where the page shows it
+                # under "show what we found" instead of in the headline.
+                raw=f"{detail['type']} (status {detail.get('status')}) calling "
+                    f"{detail['model']}: {detail['message']}",
+            ) from exc
 
         content = getattr(response, "content", None) or []
         # Whichever way the sources were found, a citation counts only if its
@@ -660,7 +857,7 @@ def synthesize(
         # ARE the answer, and searching harder for "politics?" finds nothing.
         if answer["headline"] == VAGUE_HEADLINE:
             break
-        if len(answer["tiers"]) >= MIN_TIERS:
+        if _enough_tiers(answer, retrieving):
             break
 
     if not attempts:
@@ -718,3 +915,7 @@ def cache_put(key: str, value: dict, *, now: Optional[float] = None) -> None:
 
 def cache_clear() -> None:
     _CACHE.clear()
+
+
+def cache_size() -> int:
+    return len(_CACHE)
