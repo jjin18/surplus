@@ -72,10 +72,12 @@ def ask(payload: AskIn) -> AskOut:
 
     if not civic.available():
         # Deliberately explicit: the failure is configuration, not the question.
+        # ANTHROPIC_API_KEY is the same key the rest of the app uses; EXA_API_KEY
+        # is optional and only changes how the sources are found.
         raise HTTPException(503, {
             "code": "unconfigured",
-            "message": ("Search is not configured on this deployment "
-                        "(ANTHROPIC_API_KEY is missing)."),
+            "message": ("Search isn't set up on this deployment: the server has "
+                        "no ANTHROPIC_API_KEY."),
         })
 
     try:
@@ -96,9 +98,11 @@ def ask(payload: AskIn) -> AskOut:
 
     print(
         f"  [civic] answered q={question[:80]!r} loc={location!r} "
+        f"via={notes.get('sources')} found={notes.get('sources_found')} "
         f"tiers={''.join(answer['tiers']) or '-'} "
         f"evidence={len(answer['evidence'])} "
         f"dropped={notes['evidence_dropped']}/{notes['actions_dropped']} "
+        f"retiered={notes.get('tiers_corrected')} "
         f"retried={notes.get('retried')} {notes['latency_ms']}ms"
     )
 

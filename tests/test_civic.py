@@ -21,9 +21,9 @@ from backend.main import app
 # Fixtures / builders
 # --------------------------------------------------------------------------
 
-GOOD_URL = "https://www.census.gov/data/rent"
-STUDY_URL = "https://academic.example.edu/paper"
-NEWS_URL = "https://news.example.com/story"
+GOOD_URL = "https://www.census.gov/data/rent"               # a government host: tier A
+STUDY_URL = "https://www.aeaweb.org/articles/rent-supply"   # a journal: tier B by host
+NEWS_URL = "https://news.example.com/story"                 # no signal in the host: tier as claimed
 INVENTED = "https://totally-made-up.example.org/never-searched"
 
 
@@ -132,13 +132,43 @@ def test_validate_drops_evidence_whose_url_was_never_searched():
     assert notes["evidence_dropped"] == 2
 
 
-def test_validate_drops_evidence_with_an_unknown_tier():
+def test_validate_puts_a_nonsense_tier_where_the_publisher_says():
     payload = _answer_payload(evidence=[
-        {"tier": "G", "claim": "Off the ladder", "source": "?", "url": GOOD_URL},
+        {"tier": "G", "claim": "Off the ladder", "source": "Census", "url": GOOD_URL},
     ])
-    answer, _ = civic.validate(payload, _allowed(GOOD_URL))
-    assert answer["evidence"] == []
-    assert answer["tiers"] == []
+    answer, notes = civic.validate(payload, _allowed(GOOD_URL))
+    assert answer["tiers"] == ["A"]          # census.gov is official data
+    assert notes["tiers_corrected"] == 1
+
+
+def test_validate_demotes_a_reddit_thread_cited_as_official_data():
+    payload = _answer_payload(evidence=[
+        {"tier": "A", "claim": "Everyone says rents doubled", "source": "r/oakland",
+         "url": "https://www.reddit.com/r/oakland/comments/abc"},
+    ])
+    answer, notes = civic.validate(payload, _allowed("https://reddit.com/r/oakland/comments/abc"))
+    # The claim survives, but only as a social signal -- which the ladder
+    # renders as "what people are worried about", never as support.
+    assert answer["tiers"] == ["F"]
+    assert notes["tiers_corrected"] == 1
+
+
+def test_validate_caps_a_think_tank_claiming_to_be_peer_reviewed():
+    payload = _answer_payload(evidence=[
+        {"tier": "B", "claim": "Supply cuts rents", "source": "Brookings",
+         "url": "https://www.brookings.edu/articles/supply"},
+    ])
+    answer, _ = civic.validate(payload, _allowed("https://brookings.edu/articles/supply"))
+    assert answer["tiers"] == ["C"]
+
+
+def test_validate_trusts_a_university_host_that_claims_something_weaker():
+    payload = _answer_payload(evidence=[
+        {"tier": "E", "claim": "The university paper covered the vote",
+         "source": "Campus paper", "url": "https://news.stanford.edu/story"},
+    ])
+    answer, _ = civic.validate(payload, _allowed("https://news.stanford.edu/story"))
+    assert answer["tiers"] == ["E"]
 
 
 def test_validate_reports_the_tiers_reached_in_ladder_order():
@@ -429,7 +459,8 @@ def test_the_map_page_is_served_on_civic_and_on_a_permalink(client):
         r = client.get(path)
         assert r.status_code == 200, path
         assert "text/html" in r.headers["content-type"]
-        assert "evidence hierarchy" in r.text
+        assert "The evidence, strongest first" in r.text
+        assert "/api/civic/ask" in r.text
 
 
 def test_a_broken_retry_does_not_erase_a_usable_first_answer():
@@ -449,3 +480,81 @@ def test_a_broken_retry_does_not_erase_a_usable_first_answer():
     answer, _ = civic.synthesize("Why?", "", create=create)
     assert len(seen) == 2
     assert answer["tiers"] == ["E"]
+
+
+# --------------------------------------------------------------------------
+# Retrieval mode (EXA_API_KEY set) : we search, the model synthesizes
+# --------------------------------------------------------------------------
+
+def _results(*urls):
+    return [{"tier": "A", "found_by": "A", "title": "t", "url": u,
+             "host": "h", "published": "", "snippet": "s"} for u in urls]
+
+
+def test_retrieval_puts_the_sources_in_the_prompt_and_asks_for_no_tools():
+    seen = []
+
+    def retrieve(question, location, *, harder=False):
+        seen.append((question, location, harder))
+        return _results(GOOD_URL, STUDY_URL, NEWS_URL)
+
+    sent = []
+
+    def create(messages):
+        sent.append(messages[0]["content"])
+        return _Response([_text_block(_answer_payload())])   # no search blocks
+
+    answer, notes = civic.synthesize("Why is rent up?", "Oakland, CA",
+                                     create=create, retrieve=retrieve)
+    assert seen == [("Why is rent up?", "Oakland, CA", False)]
+    assert "Search results you may use" in sent[0]
+    assert GOOD_URL in sent[0]
+    # Grounding now comes from what we retrieved, not from tool-result blocks.
+    assert len(answer["evidence"]) == 3
+    assert notes["sources"] == "exa"
+    assert notes["sources_found"] == 3
+
+
+def test_retrieval_drops_a_citation_we_never_retrieved():
+    def retrieve(question, location, *, harder=False):
+        return _results(GOOD_URL)
+
+    def create(messages):
+        return _Response([_text_block(_answer_payload(evidence=[
+            {"tier": "A", "claim": "Real", "source": "Census", "url": GOOD_URL},
+            {"tier": "A", "claim": "Invented", "source": "Census", "url": INVENTED},
+        ]))])
+
+    answer, _ = civic.synthesize("Why?", "", create=create, retrieve=retrieve)
+    assert [e["claim"] for e in answer["evidence"]] == ["Real"]
+
+
+def test_retrieval_retries_by_searching_harder():
+    calls = []
+
+    def retrieve(question, location, *, harder=False):
+        calls.append(harder)
+        return _results(NEWS_URL) if not harder else _results(GOOD_URL, STUDY_URL, NEWS_URL)
+
+    def create(messages):
+        payload = _answer_payload() if calls[-1] else _answer_payload(evidence=[
+            {"tier": "E", "claim": "Only journalism", "source": "Paper", "url": NEWS_URL}])
+        return _Response([_text_block(payload)])
+
+    answer, notes = civic.synthesize("Why?", "", create=create, retrieve=retrieve)
+    assert calls == [False, True]
+    assert answer["tiers"] == ["A", "B", "E"]
+    assert notes["retried"] is True
+
+
+def test_empty_retrieval_falls_back_to_the_models_own_search():
+    def retrieve(question, location, *, harder=False):
+        return []           # bad key, quota, outage
+
+    def create(messages):
+        return _Response([_search_block(GOOD_URL, STUDY_URL, NEWS_URL),
+                          _text_block(_answer_payload())])
+
+    answer, notes = civic.synthesize("Why?", "", create=create, retrieve=retrieve)
+    assert notes["sources"] == "web_search"
+    assert len(answer["evidence"]) == 3

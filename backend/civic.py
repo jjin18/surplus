@@ -38,6 +38,8 @@ from datetime import date
 from typing import Any, Iterable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
+from . import civic_sources
+
 try:
     import anthropic
     _SDK_AVAILABLE = True
@@ -60,9 +62,10 @@ TIER_LABEL: dict[str, str] = {
     "F": "Social signal",
 }
 
-# Sonnet 4.6 is the model the rest of the app uses with web_search
-# (backend/agents/llm.py) : Haiku 4.5 400s on the newer tool version.
-MODEL = (os.environ.get("CIVIC_MODEL") or "").strip() or "claude-sonnet-4-6"
+# Sonnet 5 : same family the rest of the app uses for search work, one
+# generation on from the 4.6 the prototype named -- cheaper per token and it
+# supports the current web_search tool. Haiku 4.5 400s on that tool version.
+MODEL = (os.environ.get("CIVIC_MODEL") or "").strip() or "claude-sonnet-5"
 
 # 4000, not the prototype's 1000 : a full answer is ~12 evidence items plus
 # mechanisms and actions, and a truncated response is unparseable JSON.
@@ -145,65 +148,97 @@ A  Official data           census, agency statistics, election results, court an
 B  Peer-reviewed research  causal studies, meta-analyses, working papers
 C  Institutional research  think tanks, universities, legislative research offices
 D  Expert analysis         named domain experts, professional bodies
-E  Journalism              established outlets; the primary source for "what is happening now"
+E  Journalism              established outlets; the best source for "what is happening right now"
 F  Social signal           X, Reddit, forums
 """.strip()
 
 _SCHEMA_BLOCK = """{
- "headline": "one plain sentence answering the question as directly as the evidence allows",
+ "headline": "one sentence that answers the question directly",
  "summary": "2-4 sentences: what is happening, to whom, since when",
- "mechanisms": [{"mechanism":"one causal driver in plain words","confidence":"high|medium|low","because":"one sentence on why you believe it"}],
- "evidence": [{"tier":"A|B|C|D|E|F","claim":"a specific finding, with the number if there is one","source":"publisher or author","url":"https://..."}],
- "disputed": ["a claim where credible sources disagree, and what each side says"],
- "live_decisions": ["a specific vote, hearing, comment period, proposal or election that is open or upcoming, with a date if known"],
- "actions": [{"effort":1,"what":"a concrete action","why":"what it changes","url":"https://... or empty"}],
- "caveat": "one honest sentence about what this evidence cannot tell us",
- "rewrites": ["only when the question is too vague to answer: three sharper questions the resident could ask instead"]
+ "mechanisms": [{"mechanism":"one cause, in plain words","confidence":"high|medium|low","because":"one sentence on why you believe it"}],
+ "evidence": [{"tier":"A|B|C|D|E|F","claim":"one specific finding, with the number if there is one","source":"who published it","url":"https://..."}],
+ "disputed": ["one claim credible sources disagree about, and what each side says"],
+ "live_decisions": ["one vote, hearing, comment period or election that is open or coming, with the date if you know it"],
+ "actions": [{"effort":1,"what":"something the reader can actually do","why":"what it changes","url":"https://... or empty"}],
+ "caveat": "one sentence on what this evidence cannot tell you",
+ "rewrites": ["only if the question is too vague to answer: three sharper questions to ask instead"]
 }"""
 
+# How the answer should read. A resident asked this question because something
+# happened to them, not because they wanted a policy briefing.
+_STYLE_RULES = """Write for the person who asked, not for a policy analyst:
+- Short sentences. One idea each.
+- Everyday words. If a technical term is unavoidable, define it in the same
+  sentence -- "the assessment ratio (the share of your home's value that gets
+  taxed)".
+- Spell out an acronym the first time you use it.
+- Give the number and the year together: "up 15% since 2023", never "up
+  significantly in recent years".
+- Say who did the thing. "The county reassessed every home", not "a
+  reassessment was undertaken".
+- No hedging stacks ("it may potentially be somewhat"), no throat-clearing
+  ("it is important to note"), no summary of what you are about to say."""
 
-def system_prompt(today: Optional[date] = None) -> str:
-    """The role, the hierarchy, and the rules that are not negotiable."""
+
+def system_prompt(today: Optional[date] = None, *, retrieval: bool = False) -> str:
+    """The role, the ladder, and the rules that are not negotiable.
+
+    `retrieval=True` is the mode where we did the searching (Exa) and hand the
+    results over; otherwise the model searches for itself with `web_search`.
+    """
     today = today or date.today()
+    if retrieval:
+        sourcing = """You will be given a numbered list of search results: every source you are
+allowed to use. Read them and answer from them.
+- Cite only URLs from that list, copied exactly. Never write a URL that is
+  not in it.
+- Never state a number that is not in one of those results.
+- If the results do not answer the question, say so. A thin answer that is
+  true beats a full one that is invented."""
+    else:
+        sourcing = """Search the web before you answer, working down the ladder from A to F.
+- Cite only URLs you actually saw in a search result, copied exactly.
+- Never state a number you did not find, and never write a URL you did not
+  see."""
+
     return f"""You are a civic evidence-synthesis engine. Today is {today:%B %-d, %Y}.
 
-A resident asks why something is happening where they live. Your job is to
-synthesize what is already known -- official data, research, institutions,
-journalism -- rather than to discover political truth from the internet.
+Someone wants to know why something is happening where they live. Your job is
+to gather what is already known -- official data, research, institutions,
+journalism -- and lay it out honestly, ranked by how it was produced.
 
-Work through this evidence hierarchy IN ORDER, searching for something at
-every level:
+Rank every source on this ladder:
 
 {_HIERARCHY_TABLE}
 
-Hard rules:
-- Search the web. Every claim you report must come from a search result you
-  actually saw in this conversation. Never state a statistic you did not find,
-  and never write a URL you did not see.
-- Tier A and tier B items can carry a number on their own. C, D and E are
-  supporting. Tier F is NEVER evidence that a claim is true -- it is only
-  evidence that people are worried about something, so it may only describe
-  what people are asking or arguing about.
-- If nothing at tier A or B supports your headline, phrase the headline as
-  uncertain ("likely", "the available evidence suggests") rather than flat.
-- Search at tiers A and B for the place named, and at the state / national
-  level when the local record is thin. An empty tier is an honest answer;
-  a filled-in one you did not find is not.
-- On a contested topic, put both sides in `disputed` and keep the headline
-  non-partisan. Rank sources by how they were produced, never by who agrees
-  with them.
-- If the question is too vague to answer (e.g. "politics?"), set headline to
-  "{VAGUE_HEADLINE}", leave the other lists empty, and put three sharper
-  questions in `rewrites`.
+{sourcing}
 
-Respond with ONLY a JSON object -- no prose, no markdown fences:
+Rules about the ladder:
+- Tiers A and B can carry a number on their own. C, D and E support a claim
+  but do not settle it.
+- Tier F is never evidence that something is true. It is only evidence that
+  people are talking about it, so use it only to describe what people are
+  asking or arguing about.
+- If nothing at tier A or B supports your headline, hedge the headline --
+  "likely", "the available evidence suggests" -- rather than stating it flat.
+- An empty tier is a real answer. Leave it empty rather than filling it with
+  something weaker.
+- On a contested topic, put both sides in `disputed` and keep the headline
+  neutral. Rank sources by how they were produced, never by who agrees with
+  them.
+- If the question is too vague to answer (for example "politics?"), set
+  headline to "{VAGUE_HEADLINE}", leave the lists empty, and put three
+  sharper questions in `rewrites`.
+
+{_STYLE_RULES}
+
+Reply with ONLY a JSON object -- no prose around it, no markdown fences:
 
 {_SCHEMA_BLOCK}
 
-Shape: 3-6 mechanisms. 5-12 evidence items spanning at least three tiers.
+Shape: 3-6 mechanisms. 5-12 evidence items across at least three tiers.
 Actions sorted by effort (1 is about two minutes, 2 about an hour, 3 an
-evening), exactly one at effort 1, at most one at effort 3. Include a tier F
-item only if you actually found the discussion."""
+evening), exactly one at effort 1 and at most one at effort 3."""
 
 
 def user_message(
@@ -213,27 +248,30 @@ def user_message(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     harder: bool = False,
+    sources: str = "",
 ) -> str:
-    """The question, the place, and (on a retry) the nudge to dig deeper."""
+    """The question, the place, the search results, and the retry nudge."""
     question = (question or "").strip()
     location = (location or "").strip()
-    if location:
+    if location and lat is not None and lon is not None:
+        place = f"{location} (pin dropped at {lat:.5f}, {lon:.5f})"
+    elif location:
         place = location
     elif lat is not None and lon is not None:
         place = f"the point at latitude {lat:.5f}, longitude {lon:.5f}"
     else:
         place = ("not given -- infer it from the question, or answer at the "
                  "national level and say so in the summary")
-    if location and lat is not None and lon is not None:
-        place = f"{location} (pin dropped at {lat:.5f}, {lon:.5f})"
 
     msg = f'Question: "{question}"\nLocation: {place}.'
     if harder:
         msg += (
-            "\n\nA first pass came back thin. Search harder at tiers A and B "
-            "specifically: name the agency, the statistical series, the bill "
-            "or docket number, the study authors. Then answer."
+            "\n\nThe first pass came back thin. Look harder at tiers A and B: "
+            "name the agency, the statistical series, the bill or docket "
+            "number, the study and its authors. Then answer."
         )
+    if sources:
+        msg += f"\n\nSearch results you may use:\n\n{sources}"
     return msg
 
 
@@ -366,7 +404,8 @@ def validate(payload: dict, allowed_urls: set[str]) -> tuple[dict, dict]:
     Returns (answer, notes). `notes` counts what was dropped so the route can
     log validation failures without them being invisible in the UI.
     """
-    notes = {"evidence_dropped": 0, "actions_dropped": 0, "mechanisms_dropped": 0}
+    notes = {"evidence_dropped": 0, "actions_dropped": 0, "mechanisms_dropped": 0,
+             "tiers_corrected": 0}
 
     headline = _clean_str(payload.get("headline"), 240)
     if not headline:
@@ -400,17 +439,27 @@ def validate(payload: dict, allowed_urls: set[str]) -> tuple[dict, dict]:
         if not isinstance(item, dict):
             notes["evidence_dropped"] += 1
             continue
-        tier = _clean_str(item.get("tier"), 2).upper()
+        claimed_tier = _clean_str(item.get("tier"), 2).upper()
         claim = _clean_str(item.get("claim"), 500)
-        url = normalise_url(item.get("url"))
-        if tier not in TIER_ORDER or not claim or not url or url not in allowed_urls:
+        raw_url = _clean_str(item.get("url"), 500)
+        url = normalise_url(raw_url)
+        if not claim or not url or url not in allowed_urls:
             notes["evidence_dropped"] += 1
             continue
+        # The rung is a fact about the publisher, so read it off the host and
+        # fall back to the model only where the host says nothing (most
+        # journalism). This is what stops a Reddit thread being cited as
+        # official data, and what promotes a census.gov page the model
+        # mislabelled as news.
+        tier = civic_sources.classify(
+            raw_url, claimed_tier if claimed_tier in TIER_ORDER else "E")
+        if tier != claimed_tier:
+            notes["tiers_corrected"] += 1
         evidence.append({
             "tier": tier,
             "claim": claim,
             "source": _clean_str(item.get("source"), 120) or _host(url),
-            "url": _clean_str(item.get("url"), 500),
+            "url": raw_url,
         })
         if len(evidence) >= MAX_EVIDENCE:
             break
@@ -491,20 +540,25 @@ def _host(url: str) -> str:
 # The call
 # ---------------------------------------------------------------------------
 
-def _create(messages: list[dict], today: Optional[date] = None):
-    return _client().with_options(timeout=REQUEST_TIMEOUT_S).messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        system=[{
+def _create(messages: list[dict], today: Optional[date] = None, *,
+            retrieval: bool = False):
+    """One Messages call. With `retrieval`, the search results are already in
+    the prompt, so the model gets no tools and makes no extra round-trips."""
+    kwargs = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "system": [{
             "type": "text",
-            "text": system_prompt(today),
-            # The system prompt is identical on every query and long enough to
-            # be worth caching : the retry pass reads it straight from cache.
+            "text": system_prompt(today, retrieval=retrieval),
+            # Identical on every query and long enough to be worth caching :
+            # the retry pass reads it straight from cache.
             "cache_control": {"type": "ephemeral"},
         }],
-        tools=[_web_search_tool()],
-        messages=messages,
-    )
+        "messages": messages,
+    }
+    if not retrieval:
+        kwargs["tools"] = [_web_search_tool()]
+    return _client().with_options(timeout=REQUEST_TIMEOUT_S).messages.create(**kwargs)
 
 
 def synthesize(
@@ -514,25 +568,54 @@ def synthesize(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     create=None,
+    retrieve=None,
     today: Optional[date] = None,
 ) -> tuple[dict, dict]:
     """Answer one question. Returns (answer, meta).
 
-    Two things can trigger the single retry: the model wrote prose instead of
-    JSON, or the answer spans fewer than three tiers (a thin search, not a
-    thin world). Anything past that is honest failure -- an empty rung is
-    information, and pretending otherwise is the thing this product is against.
+    Two ways to find the sources, decided by whether EXA_API_KEY is set:
+    we search the ladder ourselves in parallel and hand the results over
+    (cheaper, faster, and the tiers are known before the model reads them),
+    or the model searches for itself with Claude's web_search tool.
+
+    Two things trigger the single retry: the model wrote prose instead of
+    JSON, or the answer spans fewer than three tiers -- a thin search, not
+    necessarily a thin world. Anything past that is honest failure: an empty
+    rung is information, and pretending otherwise is what this product exists
+    to avoid.
     """
     question = (question or "").strip()
     if not question:
         raise CivicError("Ask a question first.", code="empty_question")
-    create = create or (lambda messages: _create(messages, today))
+
+    retrieving = retrieve is not None or civic_sources.available()
+    retrieve = retrieve or civic_sources.gather
+    if create is None:
+        def create(messages, _retrieval=None):
+            return _create(messages, today,
+                           retrieval=retrieving if _retrieval is None else _retrieval)
 
     started = time.monotonic()
     attempts, last_error = [], None
+    sources_found = 0
 
     for harder in (False, True):
-        msg = user_message(question, location, lat=lat, lon=lon, harder=harder)
+        sources_block, allowed = "", set()
+        if retrieving:
+            results = retrieve(question, location, harder=harder)
+            sources_found = max(sources_found, len(results))
+            if not results and not harder:
+                # Exa is configured but came back empty (bad key, quota, an
+                # outage). Fall through to the model's own search rather than
+                # answering with nothing to cite.
+                print("  [civic] retrieval returned nothing; using web_search")
+                retrieving = False
+            else:
+                sources_block = civic_sources.as_prompt_block(results)
+                allowed = {u for u in (normalise_url(r["url"]) for r in results) if u}
+
+        msg = user_message(question, location, lat=lat, lon=lon,
+                           harder=harder, sources=sources_block)
         try:
             response = create([{"role": "user", "content": msg}])
         except CivicError:
@@ -544,9 +627,11 @@ def synthesize(
                              code="upstream_error") from exc
 
         content = getattr(response, "content", None) or []
-        text = response_text(content)
+        # Whichever way the sources were found, a citation counts only if its
+        # URL is in this set.
+        allowed |= search_urls(content)
         try:
-            answer, notes = validate(extract_json(text), search_urls(content))
+            answer, notes = validate(extract_json(response_text(content)), allowed)
         except CivicError as exc:
             last_error = exc
             if harder:
@@ -558,11 +643,10 @@ def synthesize(
             continue
 
         notes["retried"] = harder
-        notes["latency_ms"] = int((time.monotonic() - started) * 1000)
         attempts.append((answer, notes))
 
-        # A vague question is answered, not retried : the rewrite chips ARE
-        # the answer, and searching harder for "politics?" finds nothing.
+        # A vague question is answered, not retried : the rewrite suggestions
+        # ARE the answer, and searching harder for "politics?" finds nothing.
         if answer["headline"] == VAGUE_HEADLINE:
             break
         if len(answer["tiers"]) >= MIN_TIERS:
@@ -575,6 +659,8 @@ def synthesize(
     answer, notes = max(attempts, key=lambda pair: (len(pair[0]["tiers"]),
                                                     len(pair[0]["evidence"])))
     notes["attempts"] = len(attempts)
+    notes["sources"] = "exa" if retrieving else "web_search"
+    notes["sources_found"] = sources_found
     notes["latency_ms"] = int((time.monotonic() - started) * 1000)
     return answer, notes
 

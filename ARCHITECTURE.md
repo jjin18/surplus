@@ -214,35 +214,54 @@ extraction/matching), `exa.py` (Exa search), `jsonx` use.
 
 ## 5b. Civic policy search (`/civic`) — standalone surface
 
-A separate product living in the same process, sharing nothing but the app and
-the Anthropic key. A resident drops a pin on a 3D satellite map, asks why
-something is happening there, and gets an answer ranked by how its evidence was
-produced.
+A separate product living in the same process, sharing nothing with the CRM
+but the process and the two API keys it already has. A resident drops a pin on
+a 3D satellite map, asks why something is happening there, and gets an answer
+whose sources are ranked by how they were produced.
 
 Files:
-- `backend/civic.py` — the engine: prompt, the evidence hierarchy, URL
-  grounding, schema coercion, the 24h answer cache. No FastAPI, no DB.
+- `backend/civic.py` — the engine: prompt, the evidence ladder, URL grounding,
+  schema coercion, the 24h answer cache. No FastAPI, no DB.
+- `backend/civic_sources.py` — retrieval: six Exa searches (one per rung) run
+  in parallel, deduplicated, snippet-capped, and tier-classified by host.
 - `backend/routes/civic.py` — HTTP: rate limit (10/min/IP), cache lookup,
   permalinks, the page.
 - `backend/civic_ui/index.html` — the whole client, one file. MapLibre GL from
   a CDN over keyless tiles (Esri World Imagery + AWS terrarium terrain) and
-  Nominatim for geocoding, so a fresh deploy needs nothing but the API key. If
-  WebGL or the library is missing, the page degrades to a typed-location form.
+  Nominatim for geocoding, so the map needs no key of its own. If WebGL or the
+  library is missing, the page degrades to a typed-location form.
 
-Flow: `POST /api/civic/ask {question, location, lat, lon}` → one Claude call
-with `web_search` → strip fences → schema-validate → **drop any evidence or
-action whose URL did not appear in a `web_search_tool_result` block** → if the
-answer spans fewer than three tiers, search once more with "harder at tiers A
-and B" and keep whichever pass reached further. Answers are cached by
-`sha256(question|location)` for 24h and shared as `/civic/r/{id}`.
+Two ways to find sources, chosen by whether `EXA_API_KEY` is set:
+
+| | Exa (preferred) | Claude `web_search` (fallback) |
+|---|---|---|
+| Who searches | we do, six queries at once | the model, one query per round-trip |
+| Model round-trips | one | one per search plus the answer |
+| Text the model reads | capped per result (700 chars) | whole pages, as returned |
+| Tier of a source | known before the model sees it | inferred from the URL afterwards |
+
+Exa is the cheaper and faster path; the fallback keeps the surface working on
+a deploy that only has the Anthropic key. Empty retrieval (dead key, quota,
+outage) falls back to `web_search` for that question rather than answering
+with nothing to cite.
+
+Flow: `POST /api/civic/ask {question, location, lat, lon}` → retrieve →
+one Claude call → strip fences → schema-validate → **drop any evidence or
+action whose URL is not in the source set** → if the answer spans fewer than
+three tiers, search once more (harder at tiers A and B) and keep whichever
+pass reached further. Answers are cached by `sha256(question|location)` for
+24h and shared as `/civic/r/{id}`.
 
 The rules that must not drift into being suggestions live in `validate()`, not
-in the prompt: an ungrounded URL is a fabricated citation, tier F is never
-evidence for a claim, and there is exactly one two-minute action.
+in the prompt: a citation the search never returned is dropped; the tier comes
+from the publisher, so a Reddit thread cannot be cited as official data and a
+think tank cannot be cited as peer-reviewed; tier F is never support for a
+claim; there is exactly one two-minute action.
 
 Env: `ANTHROPIC_API_KEY` (required — without it `/api/civic/ask` returns 503
-and says why), `CIVIC_MODEL` (default `claude-sonnet-4-6`),
-`CIVIC_MAX_SEARCHES` (default 8).
+and says why), `EXA_API_KEY` (optional, switches on the retrieval path),
+`CIVIC_MODEL` (default `claude-sonnet-5`), `CIVIC_MAX_SEARCHES` (default 8,
+only used on the `web_search` fallback).
 
 ## 6. The updates → draft → Book flow (end to end)
 
