@@ -825,7 +825,8 @@ async function loadStack(lat, lon){
 function renderRail(){
   const rail = $("rail");
   if (!stack.layers.length) {
-    rail.innerHTML = '<span class="empty">Click the map to see which districts you are in.</span>';
+    rail.innerHTML = '<span class="empty">' +
+      (sourceTrouble() || "Click the map to see which districts you are in.") + "</span>";
     return;
   }
   rail.innerHTML = stack.layers.map(l =>
@@ -833,8 +834,21 @@ function renderRail(){
     esc(l.color) + '" ' +
     'aria-pressed="' + (l.key === activeLayer) + '">' +
     '<span class="dot"></span>' + esc(l.label) + "</button>").join("");
+  const trouble = sourceTrouble();
+  if (trouble) rail.innerHTML += '<span class="empty">' + trouble + "</span>";
   [...rail.querySelectorAll("button")].forEach(b =>
     b.addEventListener("click", () => selectLayer(b.dataset.key)));
+}
+
+// A short rail is either a thin place or a broken source, and the reader
+// should not have to guess which. The stack says which source failed and
+// with what, so say it.
+function sourceTrouble(){
+  const sources = (stack && stack.sources) || {};
+  const broken = Object.keys(sources).filter(k => typeof sources[k] !== "number");
+  if (!broken.length) return "";
+  const names = {census: "US Census districts", openstreetmap: "OpenStreetMap boundaries"};
+  return broken.map(k => esc((names[k] || k) + " unavailable (" + sources[k] + ")")).join(" · ");
 }
 
 function selectLayer(key){
