@@ -37,7 +37,23 @@ CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
 # district comes from the body that drew it rather than from a name guess.
 TIGER_URL = ("https://tigerweb.geo.census.gov/arcgis/rest/services"
              "/TIGERweb/tigerWMS_Current/MapServer")
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Overpass is run by volunteers and the main instance refuses connections
+# whenever it is busy, which on this surface meant losing the council district,
+# the land under the pin and every OpenStreetMap outline at once. The public
+# mirrors run the same API over the same data, so a refusal is a reason to ask
+# the next one rather than to tell the reader nothing is there.
+OVERPASS_URLS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+)
+OVERPASS_URL = OVERPASS_URLS[0]          # kept for callers that name one host
+# A busy Overpass hangs rather than refusing, so the per-mirror wait is short:
+# giving one overloaded host 12 seconds is 12 seconds not spent asking a host
+# that would have answered. The budget caps the whole chain.
+OVERPASS_TIMEOUT_S = 9.0
+OVERPASS_BUDGET_S = 22.0
 TIMEOUT_S = 12.0
 
 # The Census geocoder is routinely slower than any other source here -- ten to
@@ -209,6 +225,44 @@ _TIGER_KEYS = {
 _CACHE: dict = {}
 
 
+# Which mirror answered last. A host that just worked is the best guess at the
+# host that will work next, and it costs nothing to remember.
+_OVERPASS_FIRST = 0
+
+
+def overpass(query: str, timeout_s: float = OVERPASS_TIMEOUT_S) -> dict:
+    """Run one Overpass query, trying the mirrors until one answers.
+
+    Starts from whichever mirror last worked, so a long-running process stops
+    paying the failed connection to a busy host on every call.
+    """
+    global _OVERPASS_FIRST
+    import httpx
+    started = time.monotonic()
+    order = [(_OVERPASS_FIRST + i) % len(OVERPASS_URLS)
+             for i in range(len(OVERPASS_URLS))]
+    last: Optional[Exception] = None
+    for index in order:
+        if last is not None and time.monotonic() - started > OVERPASS_BUDGET_S:
+            break
+        url = OVERPASS_URLS[index]
+        try:
+            with httpx.Client(timeout=timeout_s) as client:
+                resp = client.post(url, data={"data": query},
+                                   headers={"user-agent": USER_AGENT})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            body = resp.json()
+        except Exception as exc:  # noqa: BLE001 : the next mirror may be up
+            last = exc
+            print(f"  [civic.overpass] {url.split('/')[2]} failed: "
+                  f"{type(exc).__name__}: {str(exc)[:120]}")
+            continue
+        _OVERPASS_FIRST = index
+        return body
+    raise last or RuntimeError("no overpass mirror answered")
+
+
 def _cached(key: str, produce):
     now = time.time()
     hit = _CACHE.get(key)
@@ -284,17 +338,11 @@ def osm_areas(lat: float, lon: float) -> list[dict]:
     Carries relation ids, which is what lets the map outline a district
     rather than merely name it.
     """
-    import httpx
     query = (f"[out:json][timeout:20];is_in({lat:.6f},{lon:.6f})->.a;"
              f"rel(pivot.a);out tags;"
              f"(way(around:25,{lat:.6f},{lon:.6f})[\"landuse\"];"
              f" way(around:25,{lat:.6f},{lon:.6f})[\"building\"];);out tags 3;")
-    with httpx.Client(timeout=TIMEOUT_S) as client:
-        resp = client.post(OVERPASS_URL, data={"data": query},
-                           headers={"user-agent": USER_AGENT})
-    if resp.status_code >= 400:
-        raise RuntimeError(f"HTTP {resp.status_code}")
-    return resp.json().get("elements") or []
+    return overpass(query).get("elements") or []
 
 
 def tiger_layer_ids() -> list[tuple[int, str]]:
@@ -402,10 +450,10 @@ _FIPS = {
 
 
 def _person(name: str, role: str, party: str = "", url: str = "",
-            source: str = "", since: str = "") -> dict:
+            source: str = "", since: str = "", pid: int = 0) -> dict:
     return {"name": " ".join((name or "").split())[:120], "role": role,
             "party": (party or "").strip()[:40], "url": (url or "")[:300],
-            "source": source, "since": (since or "")[:10]}
+            "source": source, "since": (since or "")[:10], "id": int(pid or 0)}
 
 
 def congress_members(geoid: str) -> list[dict]:
@@ -439,7 +487,8 @@ def congress_members(geoid: str) -> list[dict]:
                 people.append(_person(
                     who.get("name") or "", role.get("title_long") or role.get("title") or "",
                     role.get("party") or "", who.get("link") or "",
-                    "govtrack", (role.get("startdate") or "")))
+                    "govtrack", (role.get("startdate") or ""),
+                    who.get("id") or 0))
     return people
 
 
@@ -511,6 +560,61 @@ def officials(lat: float, lon: float, congress_geoid: str = "") -> dict:
     return _cached(f"who:{lat:.4f},{lon:.4f},{congress_geoid}", build)
 
 
+VOTES_URL = "https://www.govtrack.us/api/v2/vote_voter"
+
+
+def recent_votes(person_id: int, limit: int = 5) -> list[dict]:
+    """How this member has voted lately, most recent first.
+
+    The roll call is the record. "Voted Yea on H.R. 1" is a fact with a date
+    and a link on it ; "cares about housing" is not, and this surface does not
+    deal in the second kind.
+    """
+    person_id = int(person_id or 0)
+    if person_id <= 0:
+        return []
+    import httpx
+    with httpx.Client(timeout=TIMEOUT_S) as client:
+        resp = client.get(VOTES_URL,
+                          params={"person": person_id, "order_by": "-created",
+                                  "limit": max(1, min(int(limit), 10))},
+                          headers={"user-agent": USER_AGENT,
+                                   "accept": "application/json"})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}")
+    out = []
+    for record in resp.json().get("objects") or []:
+        vote = record.get("vote") or {}
+        question = (vote.get("question") or "").strip()
+        if not question:
+            continue
+        link = vote.get("link") or ""
+        out.append({"how": (record.get("option") or {}).get("value") or "",
+                    "what": question[:200],
+                    "result": (vote.get("result") or "")[:80],
+                    "date": (vote.get("created") or "")[:10],
+                    "url": link[:300]})
+    return out
+
+
+def activity(layer_key: str, person_id: int = 0) -> dict:
+    """What the body behind this lens has actually done lately.
+
+    Only where a public roll call exists. A lens with no vote record says
+    nothing rather than filling the space with something that reads like a
+    record and is not one.
+    """
+    def build():
+        if layer_key != "congress":
+            return {"votes": [], "source": ""}
+        try:
+            return {"votes": recent_votes(person_id), "source": "govtrack"}
+        except Exception as exc:  # noqa: BLE001 : no record is not an error
+            return {"votes": [], "source": "", "error": type(exc).__name__}
+
+    return _cached(f"acts:{layer_key}:{person_id}", build)
+
+
 def outline_by_name(name: str) -> dict:
     """Find a boundary by name and return its geometry.
 
@@ -526,14 +630,8 @@ def outline_by_name(name: str) -> dict:
     # about contain neither.
     if not name or any(c in name for c in ('"', "\\", "\n", "\r", "\x00")):
         return {}
-    import httpx
     query = (f'[out:json][timeout:25];rel["boundary"]["name"="{name}"];out ids 1;')
-    with httpx.Client(timeout=TIMEOUT_S) as client:
-        resp = client.post(OVERPASS_URL, data={"data": query},
-                           headers={"user-agent": USER_AGENT})
-    if resp.status_code >= 400:
-        raise RuntimeError(f"HTTP {resp.status_code}")
-    found = resp.json().get("elements") or []
+    found = overpass(query).get("elements") or []
     if not found:
         return {}
     return outline(found[0].get("id"))
@@ -582,15 +680,10 @@ def outline(relation_id: int) -> dict:
     they do not -- a half-received boundary is drawn as the line it is rather
     than filled in as though we had all of it.
     """
-    import httpx
     query = f"[out:json][timeout:25];rel({int(relation_id)});out geom;"
-    with httpx.Client(timeout=TIMEOUT_S + 10) as client:
-        resp = client.post(OVERPASS_URL, data={"data": query},
-                           headers={"user-agent": USER_AGENT})
-    if resp.status_code >= 400:
-        raise RuntimeError(f"HTTP {resp.status_code}")
     lines = []
-    for element in resp.json().get("elements") or []:
+    # Geometry is the big response ; give each mirror longer for it.
+    for element in overpass(query, OVERPASS_TIMEOUT_S + 9).get("elements") or []:
         for member in element.get("members") or []:
             if member.get("type") != "way" or member.get("role") == "inner":
                 continue

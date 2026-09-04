@@ -497,6 +497,20 @@ def officials(lat: float, lon: float, congress: str = "") -> dict:
         return {"by_layer": {}, "sources": {"error": type(exc).__name__}}
 
 
+@router.get("/activity", dependencies=[Depends(_GEO_LIMIT)])
+def activity(layer: str = "", person: int = 0) -> dict:
+    """What the body behind this lens has actually done lately.
+
+    A roll call is a fact with a date and a link on it. It is the only thing
+    on this card that answers "what is this district doing" without anyone
+    having to characterise it.
+    """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    return civic_geo.activity(layer[:40], person)
+
+
 # How a drawn boundary was arrived at, worst case first. The map says which
 # one it is, because a shape the reader cannot tell apart from a surveyed one
 # is a shape they will trust more than it deserves.

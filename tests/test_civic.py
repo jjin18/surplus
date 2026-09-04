@@ -1985,12 +1985,16 @@ def test_every_census_lens_has_a_tigerweb_layer_to_ask(monkeypatch):
     assert named <= set(civic_geo._TIGER_KEYS)
 
 
-def test_the_layer_card_leads_with_who_holds_the_seat():
+def test_the_layer_card_carries_no_boilerplate_about_the_kind_of_body():
+    # "Federal tax law, Medicare, housing vouchers" is true of the U.S. House
+    # in every district in the country, so it tells a reader who dropped a pin
+    # nothing. The card carries the seat, the record and the coverage instead.
     page = _page()
-    seats = page.index("Who holds this seat")
-    assert seats < page.index("What it decides")      # the seat comes first
-    assert "<details class=\"decides\">" in page      # and the chamber folds away
     assert "/api/civic/officials?lat=" in page
+    assert "Who holds this seat" in page
+    assert "What it decides" not in page
+    assert "Look this up yourself" not in page
+    assert "card-acts" in page                        # the votes go here
 
 
 def test_an_estimated_outline_is_drawn_differently_from_a_surveyed_one():
@@ -1998,3 +2002,100 @@ def test_an_estimated_outline_is_drawn_differently_from_a_surveyed_one():
     fill = page.split('{id: "layer-fill"', 1)[1].split("}}", 1)[0]
     assert '["get", "exact"]' in fill                 # faint when not exact
     assert "line-dasharray" in page                   # and dashed
+
+
+def test_a_members_recent_roll_calls_come_back_with_dates_and_links(monkeypatch):
+    _http(monkeypatch, lambda url, params: _Reply({"objects": [
+        {"option": {"value": "Yea"},
+         "vote": {"question": "On Passage: H.R. 1", "result": "Passed",
+                  "created": "2026-02-14T19:03:00Z",
+                  "link": "https://www.govtrack.us/congress/votes/1"}},
+        {"option": {"value": "Nay"}, "vote": {"question": ""}},   # no question, dropped
+    ]}))
+    votes = civic_geo.recent_votes(400001)
+    assert len(votes) == 1
+    assert votes[0] == {"how": "Yea", "what": "On Passage: H.R. 1",
+                        "result": "Passed", "date": "2026-02-14",
+                        "url": "https://www.govtrack.us/congress/votes/1"}
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_a_member_with_no_id_is_not_asked_for_votes(monkeypatch, bad):
+    _http(monkeypatch, lambda url, params: (_ for _ in ()).throw(AssertionError("called")))
+    assert civic_geo.recent_votes(bad) == []
+
+
+def test_a_lens_with_no_roll_call_says_nothing_rather_than_something_else(monkeypatch):
+    _http(monkeypatch, lambda url, params: (_ for _ in ()).throw(AssertionError("called")))
+    assert civic_geo.activity("school", 400001) == {"votes": [], "source": ""}
+
+
+def test_a_broken_vote_feed_is_an_empty_record_not_a_failed_card(monkeypatch):
+    _http(monkeypatch, lambda url, params: _Reply({}, status=500))
+    got = civic_geo.activity("congress", 400001)
+    assert got["votes"] == [] and got["error"] == "RuntimeError"
+
+
+# --- Overpass is one volunteer host away from taking the rail with it -------
+
+def _overpass_hosts(monkeypatch, outcome):
+    """outcome(host) -> a payload dict, or an exception to raise."""
+    seen = []
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+        def post(self, url, data=None, headers=None):
+            host = url.split("/")[2]
+            seen.append(host)
+            result = outcome(host)
+            if isinstance(result, Exception):
+                raise result
+            return _Reply(result)
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    civic_geo._OVERPASS_FIRST = 0
+    civic_geo._CACHE.clear()
+    return seen
+
+
+def test_a_refused_overpass_host_moves_on_to_the_next_mirror(monkeypatch):
+    seen = _overpass_hosts(monkeypatch, lambda host: (
+        ConnectionError("refused") if "overpass-api.de" in host else {"elements": [1]}))
+    assert civic_geo.overpass("x") == {"elements": [1]}
+    assert len(seen) == 2 and seen[0] == "overpass-api.de"
+
+
+def test_a_hung_overpass_host_moves_on_too(monkeypatch):
+    # The live failure was a read timeout, not a refusal: a busy Overpass
+    # hangs rather than saying no.
+    seen = _overpass_hosts(monkeypatch, lambda host: (
+        TimeoutError("read timeout") if "overpass-api.de" in host else {"elements": []}))
+    civic_geo.overpass("x")
+    assert len(seen) == 2
+
+
+def test_the_mirror_that_answered_is_the_one_asked_first_next_time(monkeypatch):
+    seen = _overpass_hosts(monkeypatch, lambda host: (
+        ConnectionError("refused") if "overpass-api.de" in host else {"elements": []}))
+    civic_geo.overpass("x")
+    civic_geo.overpass("x")
+    assert seen[2] == seen[1]            # straight to the host that worked
+    assert len(seen) == 3                # the dead host is not re-tried
+
+
+def test_every_mirror_down_is_reported_as_the_last_failure(monkeypatch):
+    _overpass_hosts(monkeypatch, lambda host: ConnectionError("refused"))
+    with pytest.raises(ConnectionError):
+        civic_geo.overpass("x")
+
+
+def test_the_mirror_chain_is_capped_so_the_rail_still_loads(monkeypatch):
+    # Four hosts hanging for the full per-mirror wait is a card that never
+    # arrives, so the budget stops the chain part way.
+    assert (civic_geo.OVERPASS_TIMEOUT_S * len(civic_geo.OVERPASS_URLS)
+            > civic_geo.OVERPASS_BUDGET_S)
+    assert civic_geo.OVERPASS_BUDGET_S <= 30

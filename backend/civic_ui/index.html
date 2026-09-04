@@ -202,6 +202,19 @@
   .seats .who a{text-decoration:none}
   .seats .who a:hover{text-decoration:underline}
   .seats .none{font-size:12px;color:var(--on-glass-2);margin-top:6px}
+  /* The record: how they actually voted, with the date and the roll call. */
+  .card-acts{margin-top:14px;font-family:var(--sans)}
+  .card-acts .act{display:flex;gap:8px;align-items:baseline;margin-top:8px;font-size:12.5px;
+    line-height:1.4}
+  .card-acts .how{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:5px;padding:2px 6px;flex:none;background:rgba(238,241,238,.10);
+    color:var(--on-glass-2)}
+  .card-acts .how.yea{background:rgba(95,211,160,.16);color:#8FE3BE}
+  .card-acts .how.nay{background:rgba(214,109,109,.16);color:#E39A9A}
+  .card-acts .what{color:var(--on-glass)}
+  .card-acts .when{display:block;font-size:11px;color:var(--on-glass-2);margin-top:1px}
+  .card-acts a{text-decoration:none}
+  .card-acts a:hover{text-decoration:underline}
   /* An outline the map estimated says so, next to the outline. */
   .estimate{margin-top:10px;font-family:var(--sans);font-size:11.5px;line-height:1.45;
     color:var(--amber);background:rgba(185,121,26,.10);border:1px solid rgba(185,121,26,.35);
@@ -945,22 +958,16 @@ function showLayerCard(layer){
     '<div class="seats" id="card-seats"><div class="facts-head">Who holds this seat</div>' +
     '<div class="none">Checking the roster\u2026</div></div>' +
     '<div class="estimate" id="card-estimate" hidden></div>' +
-    '<details class="decides"><summary>What it decides</summary><ul>' +
-    layer.decides.map(d => "<li>" + esc(d) + "</li>").join("") + "</ul>" +
-    '<div class="elected">' + esc(layer.elected) + "</div></details>" +
+
     // The body's own site, and the one thing worth looking up on it. A tax
     // question ends at the assessor's record for your parcel ; no synthesis
     // replaces the reader clicking through to it.
-    (layer.lookup
-      ? '<div class="lookup"><div class="facts-head">Look this up yourself</div>' +
-        "<p>" + esc(layer.lookup) + "</p>" +
-        (layer.website ? "<p>" + link(layer.website, "Official site ↗") + "</p>" : "") +
-        "</div>"
+    (layer.website
+      ? '<div class="lookup">' + link(layer.website, "Official site \u2197") + "</div>"
       : "") +
-    '<div class="card-news" id="card-news"><div class="loading">Looking for recent coverage…</div></div>' +
-    '<button type="button" class="btn card-ask" id="card-ask">What\u2019s changing here?</button>' +
-    '<p class="card-note">Boundaries from the US Census and OpenStreetMap. ' +
-    "The button asks the evidence-ranked question about this body ; the box below is for your own.</p>";
+    '<div class="card-acts" id="card-acts"></div>' +
+    '<div class="card-news" id="card-news"><div class="loading">Looking for what changed\u2026</div></div>' +
+    '<button type="button" class="btn card-ask" id="card-ask">Search the full evidence</button>';
   $("card").classList.add("on");
   requestAnimationFrame(markCardOverflow);
   $("card-close").addEventListener("click", closeSiteCard);
@@ -1000,12 +1007,41 @@ const NO_ROSTER = {
   state_lower: "State legislator rosters need an OpenStates key on this deploy.",
 };
 
+// How the person in the seat has voted lately. Not "cares about housing" --
+// "Voted Yea on H.R. 1, passed, 14 Feb", with the roll call behind it.
+function fillActs(layer, people){
+  const who = people.find(p => p.id) || {};
+  if (!who.id) return;
+  fetch("/api/civic/activity?layer=" + encodeURIComponent(layer.key) +
+        "&person=" + who.id)
+    .then(r => r.ok ? r.json() : {votes: []})
+    .catch(() => ({votes: []}))
+    .then(data => {
+      const box = $("card-acts");
+      if (cardSubject !== layer || !box || !(data.votes || []).length) return;
+      box.innerHTML = '<div class="facts-head">How ' + esc(who.name.split(" ").pop()) +
+        " voted lately</div>" +
+        data.votes.slice(0, 5).map(v => {
+          const how = (v.how || "").toLowerCase();
+          const tone = how.startsWith("yea") || how.startsWith("aye") ? " yea"
+                     : how.startsWith("nay") || how.startsWith("no") ? " nay" : "";
+          return '<div class="act"><span class="how' + tone + '">' +
+            esc(v.how || "—") + '</span><div><span class="what">' +
+            (v.url ? link(v.url, v.what) : esc(v.what)) + "</span>" +
+            '<span class="when">' + esc([v.result, v.date].filter(Boolean).join(" \u00b7 ")) +
+            "</span></div></div>";
+        }).join("");
+      markCardOverflow();
+    });
+}
+
 function fillSeats(layer){
   loadSeats().then(data => {
     if (cardSubject !== layer || !$("card-seats")) return;
     const people = (data.by_layer || {})[layer.key] || [];
     const box = $("card-seats");
     if (people.length) {
+      fillActs(layer, people);
       box.innerHTML = '<div class="facts-head">Who holds this seat</div>' +
         people.slice(0, 4).map(p =>
           '<div class="who"><div><b>' +
