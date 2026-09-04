@@ -270,6 +270,27 @@ from memory when its searches came back empty. Both now raise — the reader
 gets "the search itself failed, here is why", never an unsourced answer wearing
 the ladder's authority.
 
+**The map is a lens on a stack of governments.** Every address sits inside
+seven or eight of them at once — congressional district, two state legislative
+districts, county, city, council district, school district, land use — each
+with its own election, its own money and its own powers, and residents
+experience them as one blur. `backend/civic_geo.py` names that stack for a
+point from two keyless sources (the US Census Geocoder for the districts
+nobody can name from memory; OpenStreetMap's `is_in` for the council district
+and the relation ids an outline needs), and carries **what each layer actually
+decides** — the part a resident cannot look up. Picking a lens in the rail
+paints that boundary in its colour, scopes the map's pins to the things that
+layer governs, and asks its question in its own vocabulary: a school board
+question is about budgets, boundaries and closures; a state-senate question is
+about preemption and the funding formula. `GET /api/civic/jurisdictions`
+returns the stack, `GET /api/civic/outline` the geometry (by OSM relation, or
+by name for the Census-named districts that arrive without a shape).
+
+Deliberately absent: the legal zoning code. OpenStreetMap knows how land is
+*used*, not what an ordinance permits, so the land-use layer says so plainly
+and the question asks the city for the code. A per-city parcel API is what
+would close that, one launch city at a time.
+
 **Two speeds, because two different questions.** Tapping something on the map
 is answered in about a second and never reaches the model: `whatsHere()` asks
 OpenStreetMap which boundaries the point falls inside (`is_in`) and what stands
