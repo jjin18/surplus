@@ -360,6 +360,16 @@ What the answer is FOR -- the causal chain:
 - If a legislative record is among the sources, cite it. A bill, docket or
   agenda link is worth more than a news story about that bill, and it is the
   thing the reader can actually act on.
+- On a zoning, permit or land-use question, cite the ORDINANCE. If a municipal
+  code page is among the sources (Municode, American Legal, eCode360 and the
+  like), name the section -- "§17.13.040 caps height at 45 feet" -- rather than
+  describing the rule in general terms. Never state a section number that is
+  not in the sources.
+- Two actions beat any amount of explanation, so prefer them when they fit:
+  for anything about a tax bill, looking up the parcel in the county
+  assessor's record ; for anything about what may be built, searching the
+  city's permit and planning portal for the address. Link the official site
+  when one is among the sources.
 
 Rules about the ladder:
 - Tiers A and B can carry a number on their own. C, D and E support a claim

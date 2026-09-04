@@ -508,3 +508,26 @@ def test_tag_reads_attributes_and_cdata():
     block = '<source url="https://x.com">Mercury News</source>'
     assert cs._tag(block, "source") == "Mercury News"
     assert cs._tag("<title><![CDATA[Housing plan]]></title>", "title") == "Housing plan"
+
+
+# --------------------------------------------------------------------------
+# An ordinance is primary law, not somebody's website
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("url", [
+    "https://library.municode.com/ca/oakland/codes/planning_code",
+    "https://codelibrary.amlegal.com/codes/sanfrancisco/latest/sf_planning",
+    "https://ecode360.com/12345678",
+    "https://www.legislation.gov.uk/ukpga/2024/1",
+])
+def test_a_municipal_code_page_is_official_data(url):
+    # The code section itself outranks any reporting about it, so it belongs
+    # on the top rung even when the model claimed something weaker.
+    assert cs.classify(url, "E") == "A"
+
+
+def test_the_code_hosts_have_their_own_rung_in_the_exa_plan():
+    code_step = [s for s in cs.TIER_PLAN if "municipal code" in s["query"]]
+    assert len(code_step) == 1
+    assert code_step[0]["tier"] == "A"
+    assert "library.municode.com" in code_step[0]["domains"]

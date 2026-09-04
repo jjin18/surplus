@@ -140,9 +140,26 @@ LAYERS: dict = {
             "How this land is used today, as mapped by OpenStreetMap",
             "The legal zoning code is the city's, and is not in this data",
         ],
-        "asks": "What zoning applies at {place}, what does it permit, and what "
-                "change to it is being proposed?",
+        "asks": "Which zoning district covers {place}, what does that section of "
+                "the municipal code permit — height, density, parking — and what "
+                "change to it is proposed?",
     },
+}
+
+# What to look up on each body's own site. The two that matter most are the
+# assessor's record (the actual number behind a tax bill) and the permit
+# portal (the actual application behind a building site) -- neither of which
+# any search will produce as reliably as the reader clicking through.
+LOOKUPS = {
+    "county": "Search your parcel in the assessor's record: the assessed value, "
+              "when it was last reassessed, and the exemptions on it",
+    "place": "Search the permit and planning portal for your address, and the "
+             "zoning designation the planning department publishes for it",
+    "council": "Find your council member's page and the agenda for the next meeting",
+    "school": "Find the board agenda and the budget documents for this year",
+    "state_upper": "Look up your senator and the bills they have authored this session",
+    "state_lower": "Look up your representative and the bills they have authored",
+    "congress": "Look up your representative's votes and the bills they sponsor",
 }
 
 # The order the map offers them in: closest to a resident's daily life first.
@@ -289,17 +306,26 @@ def _osm_layers(elements: list) -> dict:
         boundary = tags.get("boundary") or ""
         level = tags.get("admin_level") or ""
 
+        # The body's own site, straight off the boundary relation. This is
+        # what turns "look it up on the assessor's site" from advice into a
+        # link: the county's official site is one hop from its record search,
+        # and no amount of searching finds it more reliably than the map does.
+        website = (tags.get("website") or tags.get("contact:website") or
+                   tags.get("url") or "").strip()
+        if website and not website.startswith("http"):
+            website = "https://" + website
+
         if boundary == "political" and name and "council" not in found:
             found["council"] = {"name": name, "source": "openstreetmap",
                                 "detail": (tags.get("political_division") or
                                            "political district").replace("_", " "),
-                                "relation": element.get("id")}
+                                "relation": element.get("id"), "website": website}
         elif boundary == "administrative" and name:
             slot = {"8": "place", "6": "county", "4": "state"}.get(str(level))
             if slot and slot not in found:
                 found[slot] = {"name": name, "source": "openstreetmap",
                                "detail": f"admin level {level}",
-                               "relation": element.get("id")}
+                               "relation": element.get("id"), "website": website}
         elif tags.get("landuse") and "landuse" not in found:
             found["landuse"] = {
                 "name": str(tags["landuse"]).replace("_", " ").title(),
@@ -343,6 +369,10 @@ def stack(lat: float, lon: float) -> dict:
             found = census.get(layer_key) or osm.get(layer_key)
             if not found:
                 continue
+            # The Census names a body ; OpenStreetMap knows its website. Take
+            # the name from whichever is authoritative and the link from
+            # whichever has one.
+            website = found.get("website") or (osm.get(layer_key) or {}).get("website", "")
             layers.append({
                 "key": layer_key,
                 "label": spec["label"],
@@ -354,6 +384,9 @@ def stack(lat: float, lon: float) -> dict:
                 "source": found.get("source", ""),
                 "relation": found.get("relation"),
                 "geoid": found.get("geoid", ""),
+                "website": website,
+                # What a reader should look up on that site for this layer.
+                "lookup": LOOKUPS.get(layer_key, ""),
             })
         results["layers"] = layers
         return results

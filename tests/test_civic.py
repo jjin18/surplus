@@ -1439,3 +1439,39 @@ def test_outline_by_name_refuses_anything_that_could_escape_the_query(bad):
     # The name goes inside an Overpass query string, so it is checked before
     # it gets there rather than escaped afterwards.
     assert civic_geo.outline_by_name(bad) == {}
+
+
+# --------------------------------------------------------------------------
+# The two lookups no synthesis replaces
+# --------------------------------------------------------------------------
+
+def test_each_layer_says_what_to_look_up_on_its_own_site(monkeypatch):
+    by_key = {l["key"]: l for l in _stack(monkeypatch)["layers"]}
+    assert "assessor" in by_key["county"]["lookup"]
+    assert "permit" in by_key["place"]["lookup"]
+    assert "agenda" in by_key["council"]["lookup"]
+    assert "board agenda" in by_key["school"]["lookup"]
+
+
+def test_a_body_s_official_site_comes_off_the_boundary_relation(monkeypatch):
+    osm = [{"type": "relation", "id": 12,
+            "tags": {"boundary": "administrative", "admin_level": "8",
+                     "name": "Oakland", "website": "oaklandca.gov"}}]
+    by_key = {l["key"]: l for l in _stack(monkeypatch, osm=osm)["layers"]}
+    # Named by the Census, linked by OpenStreetMap, and the scheme is added.
+    assert by_key["place"]["name"] == "Oakland"
+    assert by_key["place"]["website"] == "https://oaklandca.gov"
+
+
+def test_the_zoning_question_asks_for_the_section_not_the_vibe(monkeypatch):
+    landuse = next(l for l in _stack(monkeypatch)["layers"] if l["key"] == "landuse")
+    question = civic_geo.question_for(landuse, "1418 Ninth Street")
+    assert "municipal code" in question
+    assert "height, density, parking" in question
+
+
+def test_the_prompt_tells_the_model_to_cite_the_ordinance():
+    prompt = civic.system_prompt(retrieval=True)
+    assert "cite the ORDINANCE" in prompt
+    assert "17.13.040" in prompt          # the shape of a section citation
+    assert "assessor" in prompt and "permit" in prompt

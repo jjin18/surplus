@@ -286,10 +286,20 @@ about preemption and the funding formula. `GET /api/civic/jurisdictions`
 returns the stack, `GET /api/civic/outline` the geometry (by OSM relation, or
 by name for the Census-named districts that arrive without a shape).
 
-Deliberately absent: the legal zoning code. OpenStreetMap knows how land is
-*used*, not what an ordinance permits, so the land-use layer says so plainly
-and the question asks the city for the code. A per-city parcel API is what
-would close that, one launch city at a time.
+The legal zoning code is not in OpenStreetMap, which knows how land is *used*
+rather than what an ordinance permits — so the land-use layer says so, and two
+things close most of the gap without a per-city parcel integration. First,
+**the ordinance is treated as primary law**: municipal-code hosts (Municode,
+American Legal, eCode360, Sterling, legislation.gov.uk) classify as tier A,
+Exa gets a rung pinned to those domains, and the prompt requires a section
+citation — "§17.13.040 caps height at 45 feet" — rather than a description of
+the rule. Second, **each layer carries its own site and the one thing worth
+looking up on it** (`website` off the boundary relation, `LOOKUPS` per layer):
+a tax question ends at the assessor's record for your parcel and a
+what-may-be-built question ends at the city's permit portal, and no synthesis
+replaces the reader clicking through. A per-city parcel API would add
+lot-level zoning designations and permit history on tap — worth it for a
+launch city, not required for the answer to be right.
 
 **Two speeds, because two different questions.** Tapping something on the map
 is answered in about a second and never reaches the model: `whatsHere()` asks
