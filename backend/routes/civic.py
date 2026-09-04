@@ -32,16 +32,19 @@ backend/civic.py; this module is the HTTP skin and the fence around it.
 """
 from __future__ import annotations
 
+import json
 import os
+import queue
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import civic
+from .. import civic, civic_sources
 from ..rate_limit import per_ip_rate_limit
 
 router = APIRouter(prefix="/api/civic", tags=["civic"])
@@ -211,6 +214,146 @@ def ask(payload: AskIn) -> AskOut:
     return AskOut(id=key, cached=False, **record)
 
 
+# --------------------------------------------------------------------------
+# The same answer, streamed
+# --------------------------------------------------------------------------
+#
+# A question takes 15-40s : several searches and then a JSON answer written a
+# token at a time, with nothing to show until it closes. On the plain POST that
+# is a blank wait, and the page's checklist can only guess at what is
+# happening. Here the work reports itself -- each search, the moment writing
+# starts, the headline as soon as it exists (it is the first key in the JSON),
+# then the whole answer. Same fence, same cache, same synthesis : only the
+# waiting is different.
+
+_HEARTBEAT_S = 10.0
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _stream_response(gen):
+    return StreamingResponse(gen, media_type="text/event-stream", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, private",
+        # Cloudflare and nginx both buffer event streams without this, which
+        # would defeat the entire point.
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
+
+@router.post("/ask/stream", dependencies=[Depends(_ASK_LIMIT)])
+def ask_stream(payload: AskIn):
+    """Ask, and watch it happen. Server-sent events, one JSON object each."""
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    question = (payload.question or "").strip()
+    location = (payload.location or "").strip()
+    if not question:
+        raise HTTPException(400, {"code": "empty_question",
+                                  "message": "Ask a question first."})
+
+    key = civic.cache_key(question, location)
+    hit = civic.cache_get(key)
+    if hit:
+        print(f"  [civic] cache hit {key} tiers={''.join(hit['answer']['tiers']) or '-'}")
+
+        def cached():
+            yield _sse("answer", {"id": key, "cached": True, **hit})
+        return _stream_response(cached())
+
+    if not civic.available():
+        raise HTTPException(503, {
+            "code": "unconfigured",
+            "message": ("Search isn't set up on this deployment: the server has "
+                        "no ANTHROPIC_API_KEY."),
+        })
+    if not _SLOTS.acquire(blocking=False):
+        print("  [civic] busy : all synthesis slots in use")
+        raise HTTPException(503, {
+            "code": "busy",
+            "message": "Civic is answering as many questions as it can at once. Try again in a moment.",
+        }, headers={"Retry-After": "20"})
+    if not _take_daily_slot():
+        _SLOTS.release()
+        print(f"  [civic] daily cap reached ({_DAILY_CAP} answers)")
+        raise HTTPException(429, {
+            "code": "daily_cap",
+            "message": ("Civic has answered as many questions as it can today. "
+                        "Try again tomorrow."),
+        }, headers={"Retry-After": "3600"})
+
+    events: "queue.Queue" = queue.Queue()
+
+    def work():
+        """Synthesize on a worker thread, posting progress into the queue.
+
+        It runs to completion even if the reader hangs up : the answer is paid
+        for either way, and finishing means the next person asking the same
+        question gets it from cache.
+        """
+        # The sentinel goes last, always : the outer finally is what closes
+        # the stream, and anything queued after it would never be read.
+        try:
+            try:
+                answer, notes = civic.synthesize(
+                    question, location, lat=payload.lat, lon=payload.lon,
+                    on_event=lambda name, **fields: events.put((name, fields)),
+                )
+            except civic.CivicError as exc:
+                print(f"  [civic] failed code={exc.code} q={question[:80]!r} loc={location!r}")
+                events.put(("error", {"code": exc.code, "message": str(exc),
+                                      "raw": exc.raw[:4000]}))
+                return
+            except Exception as exc:  # noqa: BLE001 : a stream must always end
+                print(f"  [civic] stream crashed: {type(exc).__name__}: {exc}")
+                events.put(("error", {"code": "synthesis_failed",
+                                      "message": "The search could not be completed."}))
+                return
+            finally:
+                # Free the slot the moment the model call is done, not when the
+                # reader finishes reading.
+                _SLOTS.release()
+
+            record = {"question": question, "location": location, "answer": answer}
+            civic.cache_put(key, record)
+            print(
+                f"  [civic] answered q={question[:80]!r} loc={location!r} "
+                f"via={notes.get('sources')} found={notes.get('sources_found')} "
+                f"tiers={''.join(answer['tiers']) or '-'} "
+                f"evidence={len(answer['evidence'])} "
+                f"dropped={notes['evidence_dropped']}/{notes['actions_dropped']} "
+                f"retiered={notes.get('tiers_corrected')} "
+                f"retried={notes.get('retried')} {notes['latency_ms']}ms"
+            )
+            events.put(("answer", {"id": key, "cached": False, **record}))
+        finally:
+            events.put((None, None))
+
+    threading.Thread(target=work, daemon=True, name="civic-ask").start()
+
+    def drain():
+        last = time.monotonic()
+        while True:
+            try:
+                name, fields = events.get(timeout=1.0)
+            except queue.Empty:
+                if time.monotonic() - last > _HEARTBEAT_S:
+                    last = time.monotonic()
+                    yield ": still working\n\n"   # keeps proxies from closing us
+                continue
+            if name is None:
+                # The worker signalled it is done ; anything it queued before
+                # this (the answer, an error) has already been yielded.
+                break
+            last = time.monotonic()
+            yield _sse(name, fields)
+
+    return _stream_response(drain())
+
+
 @router.get("/answer/{answer_id}", response_model=AskOut)
 def get_answer(answer_id: str) -> AskOut:
     """The answer behind a permalink, while it is still in cache.
@@ -227,6 +370,34 @@ def get_answer(answer_id: str) -> AskOut:
         raise HTTPException(404, {"code": "expired",
                                   "message": "That answer has expired. Ask it again."})
     return AskOut(id=answer_id, cached=True, **hit)
+
+
+@router.get("/selftest")
+def selftest() -> dict:
+    """Why is every question failing? Read this instead of the Railway logs.
+
+    Costs nothing and calls nothing upstream : it reports how the surface is
+    configured and what the last upstream failure actually was. No key
+    material, no question text -- the error string only, truncated.
+    """
+    return {
+        "enabled": enabled(),
+        "anthropic_key": bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
+        "anthropic_sdk": civic.available() or bool(
+            (os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
+        "exa_key": civic_sources.available(),
+        "sources": "exa" if civic_sources.available() else "web_search",
+        "model_configured": civic.MODEL,
+        "model_in_use": civic.active_model(),
+        "max_tokens": civic.MAX_TOKENS,
+        "effort": civic.EFFORT or None,
+        "answers_today": _day_count,
+        "daily_cap": _DAILY_CAP,
+        "max_concurrency": _MAX_CONCURRENCY,
+        "cached_answers": civic.cache_size(),
+        # {} when nothing has failed since boot.
+        "last_error": dict(civic.LAST_ERROR),
+    }
 
 
 def _page():
