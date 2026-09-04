@@ -2099,3 +2099,39 @@ def test_the_mirror_chain_is_capped_so_the_rail_still_loads(monkeypatch):
     assert (civic_geo.OVERPASS_TIMEOUT_S * len(civic_geo.OVERPASS_URLS)
             > civic_geo.OVERPASS_BUDGET_S)
     assert civic_geo.OVERPASS_BUDGET_S <= 30
+
+
+def test_both_congress_asks_go_out_at_once(monkeypatch):
+    # Asking GovTrack for the representative and then the senators in series
+    # is two round trips of latency on the thing the card leads with.
+    import time as _t
+    started, finished = [], []
+
+    def handler(url, params):
+        started.append(_t.monotonic())
+        _t.sleep(0.25)
+        finished.append(_t.monotonic())
+        return _Reply({"objects": []})
+
+    _http(monkeypatch, handler)
+    civic_geo.congress_members("0612")
+    assert len(started) == 2
+    assert started[1] < finished[0]          # the second began before the first ended
+
+
+def test_the_roster_is_on_a_short_leash():
+    # The card leads with this ; a twelve-second wait reads as broken.
+    assert civic_geo.ROSTER_TIMEOUT_S <= 8
+
+
+def test_the_roster_starts_when_the_pin_lands_not_when_a_card_opens():
+    page = _page()
+    stack_fn = page.split("async function loadStack(", 1)[1].split("\nfunction ", 1)[0]
+    assert "loadSeats()" in stack_fn
+
+
+def test_a_body_with_no_national_roster_is_pointed_at_its_own_page():
+    page = _page()
+    for key in ("county", "place", "council", "school"):
+        assert '  ' + key + ':' in page.split("const NO_ROSTER", 1)[1][:900]
+    assert 'link(layer.website, "Members' in page

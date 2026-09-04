@@ -892,6 +892,7 @@ async function loadStack(lat, lon){
   }
   renderRail();
   if (stack.layers.length) {
+    loadSeats();
     const keep = stack.layers.some(l => l.key === activeLayer);
     selectLayer(keep ? activeLayer : stack.layers[0].key);
   }
@@ -1002,10 +1003,23 @@ function loadSeats(){
 // "nobody holds the seat" are very different claims and the card makes only
 // the first one.
 const NO_ROSTER = {
-  congress: "No current roster for this district right now.",
-  state_upper: "State legislator rosters need an OpenStates key on this deploy.",
-  state_lower: "State legislator rosters need an OpenStates key on this deploy.",
+  congress: "GovTrack did not answer for this district just now.",
+  state_upper: "State rosters need an OpenStates key on this deploy.",
+  state_lower: "State rosters need an OpenStates key on this deploy.",
+  county: "Counties publish their board themselves \u2014 no national roster covers them.",
+  place: "Cities publish their mayor and council themselves.",
+  council: "Council seats are published by the city, not by any national roster.",
+  school: "School boards are published by the district itself.",
+  landuse: "Land use is a code, not a seat \u2014 nobody is elected to it.",
 };
+
+// A body with no national roster still has its own page listing its members,
+// and the card knows the URL. Naming where to look beats a dead end.
+function noRoster(layer){
+  const why = NO_ROSTER[layer.key] || "No public roster names this seat by location.";
+  return '<div class="none">' + esc(why) +
+    (layer.website ? " " + link(layer.website, "Members \u2197") : "") + "</div>";
+}
 
 // How the person in the seat has voted lately. Not "cares about housing" --
 // "Voted Yea on H.R. 1, passed, 14 Feb", with the roll call behind it.
@@ -1052,9 +1066,7 @@ function fillSeats(layer){
           "</div>").join("");
     } else {
       box.innerHTML = '<div class="facts-head">Who holds this seat</div>' +
-        '<div class="none">' +
-        esc(NO_ROSTER[layer.key] || "No public roster names this seat by location.") +
-        "</div>";
+        noRoster(layer);
     }
     markCardOverflow();
   });

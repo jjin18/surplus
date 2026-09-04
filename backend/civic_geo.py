@@ -431,6 +431,9 @@ def _tiger_query(layer_id: int, geoid: str) -> dict:
 # publish the seat itself rather than commentary about it.
 
 GOVTRACK_URL = "https://www.govtrack.us/api/v2/role"
+# The card leads with this, so it is the thing the reader is waiting on. A
+# roster that takes twelve seconds is a card that reads as broken.
+ROSTER_TIMEOUT_S = 8.0
 OPENSTATES_PEOPLE_URL = "https://v3.openstates.org/people.geo"
 
 # The Census keys states by FIPS code ; every roster keys them by postal
@@ -474,15 +477,20 @@ def congress_members(geoid: str) -> list[dict]:
     people: list[dict] = []
     asks = [{"role_type": "representative", "district": district},
             {"role_type": "senator"}]
-    with httpx.Client(timeout=TIMEOUT_S) as client:
-        for ask in asks:
-            params = dict(ask, current="true", state=state, limit=3)
+
+    def fetch(ask):
+        params = dict(ask, current="true", state=state, limit=3)
+        with httpx.Client(timeout=ROSTER_TIMEOUT_S) as client:
             resp = client.get(GOVTRACK_URL, params=params,
                               headers={"user-agent": USER_AGENT,
                                        "accept": "application/json"})
-            if resp.status_code >= 400:
-                raise RuntimeError(f"HTTP {resp.status_code}")
-            for role in resp.json().get("objects") or []:
+        if resp.status_code >= 400:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        return resp.json().get("objects") or []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for objects in list(pool.map(fetch, asks)):
+            for role in objects:
                 who = role.get("person") or {}
                 people.append(_person(
                     who.get("name") or "", role.get("title_long") or role.get("title") or "",
@@ -505,7 +513,7 @@ def state_legislators(lat: float, lon: float) -> dict:
     if not key:
         raise RuntimeError("no OPENSTATES_API_KEY")
     import httpx
-    with httpx.Client(timeout=TIMEOUT_S) as client:
+    with httpx.Client(timeout=ROSTER_TIMEOUT_S) as client:
         resp = client.get(OPENSTATES_PEOPLE_URL,
                           params={"lat": f"{lat:.6f}", "lng": f"{lon:.6f}"},
                           headers={"x-api-key": key, "user-agent": USER_AGENT,
