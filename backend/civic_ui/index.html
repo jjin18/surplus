@@ -43,6 +43,12 @@
   #map{position:fixed;inset:0;background:#0B1116}
   #map canvas{outline:none}
   .maplibregl-ctrl-attrib{font-family:var(--sans);font-size:11px}
+  /* The lens row owns the bottom of the screen ; the scale bar and the
+     attribution sit above it rather than behind it. */
+  .maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left{margin-bottom:70px}
+  @media (max-width:900px){
+    .maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left{margin-bottom:104px}
+  }
   .vignette{position:fixed;inset:0;pointer-events:none;
     background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(6,10,13,.55) 100%)}
 
@@ -53,15 +59,12 @@
     color:var(--on-glass);background:var(--glass);border:1px solid var(--glass-rule);
     padding:8px 14px;border-radius:999px;backdrop-filter:blur(14px);pointer-events:auto}
   .brand small{font-weight:400;color:var(--on-glass-2);font-size:13px;margin-left:8px}
-  .creed{font-family:var(--sans);font-size:13px;color:var(--on-glass-2);background:var(--glass);
-    border:1px solid var(--glass-rule);padding:8px 14px;border-radius:999px;
-    backdrop-filter:blur(14px);pointer-events:auto;white-space:nowrap}
 
   /* ---------- the console ---------- */
   /* One column down the left: the lens, what it governs, then your question.
      Nothing floats over anything else -- the old card and console fought for
      the same corner. */
-  .rail-col{position:fixed;left:20px;top:76px;bottom:20px;width:min(400px,calc(100vw - 40px));
+  .rail-col{position:fixed;left:20px;top:76px;bottom:78px;width:min(400px,calc(100vw - 40px));
     z-index:6;display:flex;flex-direction:column;gap:10px;pointer-events:none}
   .rail-col > *{pointer-events:auto}
   .console{background:var(--glass-2);border:1px solid var(--glass-rule);border-radius:18px;
@@ -91,7 +94,8 @@
   .hint kbd{font-family:var(--sans);font-size:11px;border:1px solid var(--glass-rule);
     border-radius:4px;padding:1px 5px;background:rgba(238,241,238,.08)}
   textarea#q{font-family:var(--sans);font-size:19px;font-weight:600;letter-spacing:-.01em;
-    width:100%;min-height:64px;padding:10px 12px;line-height:1.3;resize:none;color:var(--on-glass);
+    width:100%;min-height:64px;max-height:34vh;padding:10px 12px;line-height:1.3;resize:none;
+    overflow:auto;color:var(--on-glass);
     background:rgba(238,241,238,.06);border:1px solid var(--glass-rule);border-radius:12px}
   textarea#q::placeholder{color:#7C8B86;font-weight:600}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
@@ -103,19 +107,35 @@
   .btn:hover{filter:brightness(1.08)}
   .btn:disabled{opacity:.55;cursor:default;filter:none}
   .btn.ghost{background:rgba(238,241,238,.06);border-color:var(--glass-rule);color:var(--on-glass)}
-  /* The lens picker. Every layer is a government you vote for. */
-  .rail{display:flex;flex-wrap:wrap;gap:6px;padding:2px;flex:none}
-  .rail button{font-family:var(--sans);font-size:11.5px;font-weight:600;white-space:nowrap;
-    color:var(--on-glass-2);background:var(--glass-2);border:1px solid var(--glass-rule);
-    border-radius:999px;padding:6px 11px;cursor:pointer;backdrop-filter:blur(14px);
-    display:flex;align-items:center;gap:6px}
-  .rail button:hover{color:var(--on-glass)}
+  /* The lens picker: one row along the bottom, like a dial you turn. Each
+     lens is a government you vote for, and picking one washes the map in
+     that lens's colour so you can see the shape of it. */
+  .rail{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:7;
+    display:flex;flex-wrap:nowrap;gap:5px;padding:5px;overflow-x:auto;
+    max-width:min(1180px,calc(100vw - 40px));scrollbar-width:none;
+    background:var(--glass-2);border:1px solid var(--glass-rule);border-radius:999px;
+    backdrop-filter:blur(18px);box-shadow:0 18px 46px rgba(0,0,0,.45)}
+  .rail::-webkit-scrollbar{display:none}
+  .rail:empty{display:none}
+  .rail button{font-family:var(--sans);font-size:12px;font-weight:600;white-space:nowrap;
+    color:var(--on-glass-2);background:transparent;border:1px solid transparent;
+    border-radius:999px;padding:7px 12px;cursor:pointer;flex:none;
+    display:flex;align-items:center;gap:6px;transition:background .18s,color .18s}
+  .rail button:hover{color:var(--on-glass);background:rgba(238,241,238,.07)}
   .rail button .dot{width:8px;height:8px;border-radius:50%;background:var(--layer,#888);
     flex:none}
   .rail button[aria-pressed="true"]{color:#0B1116;background:var(--layer,#5FD3A0);
     border-color:var(--layer,#5FD3A0)}
-  .rail button[aria-pressed="true"] .dot{background:rgba(11,17,22,.5)}
-  .rail .empty{color:var(--on-glass-2);font-family:var(--sans);font-size:12px;padding:7px 4px}
+  .rail button[aria-pressed="true"] .dot{background:rgba(11,17,22,.45)}
+  .rail .empty{color:var(--on-glass-2);font-family:var(--sans);font-size:12px;
+    padding:7px 10px;white-space:nowrap}
+  /* Why the row is short, kept off the row itself so the lenses stay a row. */
+  .rail-note{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:7;
+    font-family:var(--sans);font-size:11.5px;color:var(--amber);text-align:center;
+    max-width:min(1180px,calc(100vw - 40px));pointer-events:none;margin:0;
+    background:var(--glass);border:1px solid var(--glass-rule);border-radius:999px;
+    padding:5px 12px;backdrop-filter:blur(14px)}
+  .rail-note:empty{display:none}
 
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
   .chips button{font-family:var(--sans);font-size:13px;background:transparent;color:var(--on-glass-2);
@@ -163,7 +183,10 @@
   /* ---------- tap a pin: facts now, question later ---------- */
   .card{display:none;background:var(--glass-2);border:1px solid var(--glass-rule);
     border-radius:16px;backdrop-filter:blur(18px);color:var(--on-glass);padding:14px;
-    box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:auto;flex:1 1 auto;min-height:0}
+    box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:auto;flex:1 1 auto;min-height:0;
+    scrollbar-width:thin;scrollbar-color:rgba(238,241,238,.22) transparent}
+  .card.more{-webkit-mask-image:linear-gradient(#000 calc(100% - 26px),transparent);
+    mask-image:linear-gradient(#000 calc(100% - 26px),transparent)}
   .card.on{display:block}
   .card-head{display:flex;gap:10px;align-items:flex-start;font-family:var(--sans)}
   .card-head .ico{font-size:20px;line-height:1.2}
@@ -268,12 +291,14 @@
   /* ---------- small screens: console becomes a sheet, panel full width ---------- */
   @media (max-width:900px){
     :root{--panel-w:100vw}
-    .rail-col{left:10px;right:10px;top:auto;bottom:10px;width:auto;max-height:82vh}
+    .rail-col{left:10px;right:10px;top:auto;bottom:72px;width:auto;max-height:74vh}
+    .rail{left:10px;right:10px;bottom:12px;transform:none;max-width:none;
+      justify-content:flex-start}
+    .rail-note{bottom:70px;max-width:calc(100vw - 20px)}
     .console{max-height:min(46vh,420px)}
     .mapctl{right:10px;top:100px;gap:6px}
     .card{max-height:34vh}
     .mapctl button{padding:7px 10px;font-size:12px}
-    .creed{display:none}
     .place .sheet-toggle{display:inline-block}
     .panel-inner{padding:20px 18px 80px}
     .panel-bar{padding:12px 18px}
@@ -297,7 +322,6 @@
 
 <div class="topbar">
   <div class="brand">Civic <small>policy search</small></div>
-  <div class="creed">Strongest evidence first. Social posts last.</div>
 </div>
 
 <div class="mapctl">
@@ -306,8 +330,10 @@
   <button id="globe" type="button">Back to globe</button>
 </div>
 
-<div class="rail-col">
+<p class="rail-note" id="rail-note" aria-live="polite"></p>
 <nav class="rail" id="rail" aria-label="Which government to look through"></nav>
+
+<div class="rail-col">
 <aside class="card" id="card" aria-live="polite" aria-label="About this place"></aside>
 
 <section class="console" aria-label="Ask about a place">
@@ -429,11 +455,16 @@ const STYLE = {
      paint: {"raster-saturation": -.12, "raster-contrast": .05}},
     {id: "labels", type: "raster", source: "places", paint: {"raster-opacity": .85}},
     // The jurisdiction the pin fell inside, drawn from its real boundary.
-    {id: "boundary-fill", type: "fill", source: "boundary",
-     paint: {"fill-color": "#1E6B4A", "fill-opacity": .10}},
+    // The place you searched for, kept as a hairline so the lens wash below
+    // is the only colour claiming an area.
     {id: "boundary-line", type: "line", source: "boundary",
-     paint: {"line-color": "#5FD3A0", "line-width": 1.5, "line-blur": .6, "line-opacity": .5}},
-    // The district you are inside, for the lens you have chosen.
+     paint: {"line-color": "#8FBF9F", "line-width": 1, "line-opacity": .28,
+             "line-dasharray": [3, 3]}},
+    // The district you are inside, for the lens you have chosen: filled in
+    // its own colour, so switching lenses re-masks the map.
+    {id: "layer-fill", type: "fill", source: "layer",
+     paint: {"fill-color": ["get", "color"], "fill-opacity": .17,
+             "fill-antialias": true}},
     {id: "layer-glow", type: "line", source: "layer",
      paint: {"line-color": ["get", "color"], "line-width": 10, "line-blur": 8,
              "line-opacity": .35}},
@@ -823,10 +854,12 @@ async function loadStack(lat, lon){
 }
 
 function renderRail(){
-  const rail = $("rail");
+  const rail = $("rail"), trouble = sourceTrouble();
+  // The row is only ever lenses. Why it is short goes on the line above it.
+  $("rail-note").innerHTML = trouble;
   if (!stack.layers.length) {
     rail.innerHTML = '<span class="empty">' +
-      (sourceTrouble() || "Click the map to see which districts you are in.") + "</span>";
+      "Click the map to see which districts you are in." + "</span>";
     return;
   }
   rail.innerHTML = stack.layers.map(l =>
@@ -834,8 +867,6 @@ function renderRail(){
     esc(l.color) + '" ' +
     'aria-pressed="' + (l.key === activeLayer) + '">' +
     '<span class="dot"></span>' + esc(l.label) + "</button>").join("");
-  const trouble = sourceTrouble();
-  if (trouble) rail.innerHTML += '<span class="empty">' + trouble + "</span>";
   [...rail.querySelectorAll("button")].forEach(b =>
     b.addEventListener("click", () => selectLayer(b.dataset.key)));
 }
@@ -854,6 +885,10 @@ function sourceTrouble(){
 function selectLayer(key){
   activeLayer = key;
   renderRail();
+  const chip = $("rail").querySelector('[aria-pressed="true"]');
+  if (chip && chip.scrollIntoView) {
+    chip.scrollIntoView({block: "nearest", inline: "nearest", behavior: "smooth"});
+  }
   const layer = stack.layers.find(l => l.key === key);
   if (!layer) return;
   showLayerCard(layer);
@@ -890,10 +925,11 @@ function showLayerCard(layer){
     '<p class="card-note">Boundaries from the US Census and OpenStreetMap. ' +
     "The button asks the evidence-ranked question about this body ; the box below is for your own.</p>";
   $("card").classList.add("on");
+  requestAnimationFrame(markCardOverflow);
   $("card-close").addEventListener("click", closeSiteCard);
   $("card-ask").addEventListener("click", () => {
     const question = layerQuestion(layer, where);
-    $("q").value = question;
+    setQuestion(question);
     ask({question: question, brief: true});
   });
   fillNews(layer, layer.name, where);
@@ -957,6 +993,7 @@ async function fillNews(card, subject, near){
       $("card-news").innerHTML = '<div class="loading">Couldn\'t reach the news indexes.</div>';
     }
   }
+  markCardOverflow();          // the coverage just changed the card's height
 }
 
 // Clicking a site asks about that specific thing, in that specific street.
@@ -1023,6 +1060,7 @@ function openSiteCard(site){
     "The box on the left is for the question you want the evidence for.</p>";
 
   $("card").classList.add("on");
+  requestAnimationFrame(markCardOverflow);
   $("card-close").addEventListener("click", closeSiteCard);
   $("card-ask").addEventListener("click", () => {
     closeSiteCard();
@@ -1047,7 +1085,7 @@ function askAboutSite(props, lngLat){
   const name = props.name || props.what.toLowerCase();
   const ask_ = SITE_QUESTIONS[props.kind] || SITE_QUESTIONS.development;
   const question = ask_(name, where, place);
-  $("q").value = question;
+  setQuestion(question);
   clearTimeout(state.briefTimer);
   if (lngLat) dropPin(lngLat.lat, lngLat.lng, {fly: false});
   ask({question: question, brief: true});
@@ -1342,18 +1380,42 @@ function closePanel(){
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
+// Every question that lands in the box grows the box to fit it. A question
+// clipped mid-sentence is one you cannot check before you send it.
+function setQuestion(text){
+  const box = $("q");
+  box.value = text;
+  fitQuestion();
+}
+function fitQuestion(){
+  const box = $("q");
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight + 2, window.innerHeight * 0.34) + "px";
+}
+$("q").addEventListener("input", fitQuestion);
+
+// The card scrolls when the lens has more to say than the column is tall.
+// Fading the last line says so ; a line sliced in half says nothing.
+function markCardOverflow(){
+  const card = $("card");
+  const more = card.scrollHeight - card.clientHeight - card.scrollTop > 8;
+  card.classList.toggle("more", more);
+}
+$("card").addEventListener("scroll", markCardOverflow);
+window.addEventListener("resize", () => { fitQuestion(); markCardOverflow(); });
+
 $("go").addEventListener("click", () => ask());
 $("q").addEventListener("keydown", e => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask();
 });
 $("chips").addEventListener("click", e => {
   if (e.target.tagName !== "BUTTON") return;
-  $("q").value = e.target.textContent;
+  setQuestion(e.target.textContent);
   $("q").focus();
 });
 $("r-rewrites").addEventListener("click", e => {
   if (e.target.tagName !== "BUTTON") return;
-  $("q").value = e.target.textContent;
+  setQuestion(e.target.textContent);
   closePanel();
   ask();
 });
@@ -1443,7 +1505,7 @@ async function boot(){
       return;
     }
     const data = await res.json();
-    $("q").value = data.question || "";
+    setQuestion(data.question || "");
     $("loc").value = data.location || "";
 
     // The link is good but this server has never answered it — the other
