@@ -34,8 +34,8 @@ it is written.
 """
 from __future__ import annotations
 
+import html
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
@@ -66,9 +66,26 @@ def _api_key() -> str:
     return (os.environ.get("EXA_API_KEY") or "").strip()
 
 
+# Set when Exa answers 402 (out of credits) or 401 (bad key). Six parallel
+# queries that all fail the same way, on every question, is latency spent to
+# learn nothing.
+_exa_paused_until = 0.0
+EXA_PAUSE_S = 1800
+LAST_EXA_STATUS = ""
+
+
 def available() -> bool:
     """True when retrieval can run here (and `civic.py` should prefer it)."""
-    return bool(_api_key())
+    return bool(_api_key()) and time.time() >= _exa_paused_until
+
+
+def exa_status() -> str:
+    """"" when Exa has not failed, else the reason and how long it is paused."""
+    if not _api_key():
+        return "no key"
+    if time.time() < _exa_paused_until:
+        return f"{LAST_EXA_STATUS} (paused {int(_exa_paused_until - time.time())}s)"
+    return LAST_EXA_STATUS or "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +148,10 @@ def _fetch(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S,
             resp = client.get(url, params=params, headers=headers)
     if resp.status_code == 429:
         raise RateLimited("rate_limited (HTTP 429)")
+    if resp.status_code == 403:
+        # Reddit and friends block datacenter IPs outright. That is a fact
+        # about where we are hosted, not a bug to alarm about every question.
+        raise Blocked("blocked (HTTP 403)")
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:120]}")
     return resp
@@ -138,6 +159,10 @@ def _fetch(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S,
 
 class RateLimited(RuntimeError):
     """A free API asking us to come back later. Expected, not broken."""
+
+
+class Blocked(RuntimeError):
+    """A source that refuses this host. Structural, and not worth retrying."""
 
 
 def _get_json(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S) -> dict:
@@ -168,8 +193,34 @@ def _cached(key: str, produce: Callable[[], list]) -> list:
     return found
 
 
+def _strip_tags(text: str) -> str:
+    """Drop everything between angle brackets, in one linear pass.
+
+    Deliberately not a regex. `<[^>]+>` is the textbook incomplete tag filter
+    (it mishandles comments and quoted attributes), and the lazy alternatives
+    backtrack on hostile input -- and every string reaching this function came
+    off someone else's server. A scan cannot do either.
+    """
+    out, in_tag, quote = [], False, ""
+    for char in text:
+        if in_tag:
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif char in ("\"", "'"):
+                quote = char           # a > inside an attribute is not the end
+            elif char == ">":
+                in_tag = False
+        elif char == "<":
+            in_tag = True
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 def _clean(text: Optional[str], limit: int = SNIPPET_CHARS) -> str:
-    return " ".join(re.sub(r"<[^>]+>", " ", str(text or "")).split())[:limit]
+    raw = str(text or "")[:20_000]          # bound the work before doing any
+    return " ".join(html.unescape(_strip_tags(raw)).split())[:limit]
 
 
 def _result(tier: str, backend: str, title, url, snippet="", published="") -> Optional[dict]:
@@ -249,9 +300,25 @@ def _federal_register(question: str, place: str) -> list[dict]:
 
 
 def _data_gov(question: str, place: str) -> list[dict]:
-    """The US open-data catalogue : the dataset behind the number."""
-    data = _get_json("https://catalog.data.gov/api/3/action/package_search",
-                     {"q": f"{question} {place}".strip(), "rows": 4})
+    """The US open-data catalogue : the dataset behind the number.
+
+    Two paths, because the documented CKAN one (/api/3/action/...) now 404s
+    through data.gov's gateway with a non-CKAN error body. The legacy path
+    still answers ; try both before calling it down.
+    """
+    params = {"q": f"{question} {place}".strip(), "rows": 4}
+    data = None
+    for url in ("https://catalog.data.gov/api/action/package_search",
+                "https://catalog.data.gov/api/3/action/package_search"):
+        try:
+            data = _get_json(url, params)
+            break
+        except RateLimited:
+            raise
+        except Exception:
+            continue
+    if data is None:
+        raise RuntimeError("no data.gov endpoint answered")
     out = []
     for pkg in ((data.get("result") or {}).get("results") or []):
         slug = pkg.get("name") or ""
@@ -281,16 +348,40 @@ def _gdelt(question: str, place: str) -> list[dict]:
     return [r for r in out if r]
 
 
-_ITEM_RE = re.compile(r"<item>(.*?)</item>", re.S | re.I)
+def _items(feed: str) -> list:
+    """The <item> blocks of an RSS feed, found by scanning rather than matching.
+
+    String search is linear and cannot be made to backtrack ; a feed is
+    someone else's document and does not get to choose how long we spend on it.
+    """
+    blocks, cursor = [], 0
+    lowered = feed.lower()
+    while len(blocks) < 12:
+        start = lowered.find("<item>", cursor)
+        if start < 0:
+            break
+        end = lowered.find("</item>", start)
+        if end < 0:
+            break
+        blocks.append(feed[start + len("<item>"):end])
+        cursor = end + len("</item>")
+    return blocks
 
 
 def _tag(block: str, name: str) -> str:
-    match = re.search(rf"<{name}[^>]*>(.*?)</{name}>", block, re.S | re.I)
-    if not match:
+    """The text of one <tag> in an item block. Same scan, same reason."""
+    lowered = block.lower()
+    open_at = lowered.find("<" + name)
+    if open_at < 0:
         return ""
-    text = match.group(1)
-    text = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", text, flags=re.S)
-    return " ".join(text.split())
+    text_at = block.find(">", open_at)
+    close_at = lowered.find("</" + name, text_at if text_at > 0 else open_at)
+    if text_at < 0 or close_at < 0:
+        return ""
+    text = block[text_at + 1:close_at]
+    if "<![CDATA[" in text:
+        text = text.replace("<![CDATA[", "").replace("]]>", "")
+    return " ".join(html.unescape(text).split())
 
 
 def _google_news(question: str, place: str) -> list[dict]:
@@ -306,7 +397,7 @@ def _google_news(question: str, place: str) -> list[dict]:
                      {"q": f"{question} {place}".strip(), "hl": "en-US",
                       "gl": "US", "ceid": "US:en"})
     out = []
-    for block in _ITEM_RE.findall(body)[:8]:
+    for block in _items(body)[:8]:
         out.append(_result("E", "google_news", _tag(block, "title"),
                            _tag(block, "link"),
                            snippet=_tag(block, "source"),
@@ -315,15 +406,27 @@ def _google_news(question: str, place: str) -> list[dict]:
 
 
 def _hacker_news(question: str, place: str) -> list[dict]:
-    """Tier F. Never evidence of a claim -- evidence that people are arguing."""
+    """Tier F. Never evidence of a claim -- evidence that people are arguing.
+
+    The link is the DISCUSSION, not the article it points at. A newspaper
+    story that happened to be posted here is journalism and belongs on tier E
+    with its own link ; citing it from a forum thread would put real reporting
+    on the bottom rung and dress the thread up as the source.
+    """
     data = _get_json("https://hn.algolia.com/api/v1/search",
                      {"query": question, "tags": "story", "hitsPerPage": 4})
     out = []
     for hit in data.get("hits") or []:
-        url = hit.get("url") or (f"https://news.ycombinator.com/item?id={hit['objectID']}"
-                                 if hit.get("objectID") else "")
-        out.append(_result("F", "hacker_news", hit.get("title") or hit.get("story_title"),
-                           url, snippet=hit.get("story_text") or "",
+        object_id = hit.get("objectID")
+        if not object_id:
+            continue
+        linked = host_of(hit.get("url") or "")
+        points = hit.get("points") or 0
+        out.append(_result("F", "hacker_news",
+                           hit.get("title") or hit.get("story_title"),
+                           f"https://news.ycombinator.com/item?id={object_id}",
+                           snippet=f"{points} points, {hit.get('num_comments', 0)} comments"
+                                   + (f" — discussing {linked}" if linked else ""),
                            published=(hit.get("created_at") or "")[:10]))
     return [r for r in out if r]
 
@@ -551,6 +654,14 @@ def _post(body: dict) -> dict:
     with httpx.Client(timeout=TIMEOUT_S) as client:
         resp = client.post(EXA_SEARCH_URL, headers=headers, json=body)
     if resp.status_code >= 400:
+        global _exa_paused_until, LAST_EXA_STATUS
+        LAST_EXA_STATUS = f"HTTP {resp.status_code}"
+        if resp.status_code in (401, 402, 403):
+            # Out of credits or a dead key : nothing will change in the next
+            # few minutes, so stop paying six round-trips a question for it.
+            _exa_paused_until = time.time() + EXA_PAUSE_S
+            print(f"  [civic.exa] {LAST_EXA_STATUS} — pausing Exa for "
+                  f"{EXA_PAUSE_S}s and searching with the keyless backends")
         # Raised, not swallowed : a dead key or an exhausted quota must show up
         # as a failed backend in LAST_RUN and the selftest, because silently
         # returning nothing looks identical to "the world has nothing".
@@ -644,8 +755,11 @@ def gather(question: str, location: str = "", *, harder: bool = False,
             return found
         except RateLimited:
             # Expected from a free API under load, and not worth alarming
-            # about : the ladder is built from the other nine.
+            # about : the ladder is built from the others.
             outcomes[name] = "rate_limited"
+            return []
+        except Blocked:
+            outcomes[name] = "blocked"
             return []
         except Exception as exc:  # noqa: BLE001 : one backend down is not an outage
             outcomes[name] = f"{type(exc).__name__}: {str(exc)[:120]}"
@@ -690,6 +804,8 @@ def probe(question: str = "housing costs", place: str = "California") -> dict:
             }
         except RateLimited:
             report["backends"][name] = {"rate_limited": True}
+        except Blocked:
+            report["backends"][name] = {"blocked": True}
         except Exception as exc:  # noqa: BLE001
             report["backends"][name] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     if available():

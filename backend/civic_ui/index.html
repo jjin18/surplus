@@ -1101,18 +1101,31 @@ $("loc").addEventListener("change", async () => {
 // A shared answer opens on its permalink: fetch it, render it, and put the map
 // back over the place it is about.
 async function boot(){
-  const m = location.pathname.match(/^\/civic\/r\/([a-z0-9]+)$/i);
+  // Share tokens are base64url : the question, packed into the link.
+  const m = location.pathname.match(/^\/civic\/r\/([A-Za-z0-9_-]+)$/);
   if (!m) return;
   try {
     const res = await fetch("/api/civic/answer/" + m[1]);
     if (!res.ok) {
-      showError("This shared answer has expired. Ask the question again to rebuild it.");
+      const detail = ((await res.json().catch(() => ({}))).detail) || {};
+      showError(detail.message ||
+        "That link isn't one we recognise. Ask the question instead.");
       return;
     }
     const data = await res.json();
     $("q").value = data.question || "";
     $("loc").value = data.location || "";
-    render(data);
+
+    // The link is good but this server has never answered it — the other
+    // replica did, or a deploy cleared the cache. The question travelled in
+    // the link, so just ask it again.
+    if (data.rebuild) {
+      if (data.location) placeChips(data.location);
+      ask({question: data.question, brief: true});
+    } else {
+      render(data);
+    }
+
     if (data.location) {
       const hit = await forwardGeocode(data.location);
       if (hit) {

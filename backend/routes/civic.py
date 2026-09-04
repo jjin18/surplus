@@ -126,11 +126,17 @@ class AskIn(BaseModel):
 
 
 class AskOut(BaseModel):
+    # `id` is a share token: the question, packed. A permalink that carries
+    # its own question can be answered by either replica and survives a
+    # deploy, which a cache id could not.
     id: str
     question: str
     location: str
-    answer: dict
+    answer: dict | None = None
     cached: bool
+    # True when the link is good but this replica has no answer for it yet :
+    # the page re-asks rather than showing "expired".
+    rebuild: bool = False
 
 
 @router.post("/ask", response_model=AskOut, dependencies=[Depends(_ASK_LIMIT)])
@@ -148,10 +154,11 @@ def ask(payload: AskIn) -> AskOut:
 
     # A cache hit costs nothing and holds no slot : serve it before the fence.
     key = civic.cache_key(question, location)
+    token = civic.share_token(question, location, payload.brief)
     hit = civic.cache_get(key)
     if hit:
         print(f"  [civic] cache hit {key} tiers={''.join(hit['answer']['tiers']) or '-'}")
-        return AskOut(id=key, cached=True, **hit)
+        return AskOut(id=token, cached=True, **hit)
 
     if not civic.available():
         # Deliberately explicit: the failure is configuration, not the question.
@@ -215,7 +222,7 @@ def ask(payload: AskIn) -> AskOut:
 
     record = {"question": question, "location": location, "answer": answer}
     civic.cache_put(key, record)
-    return AskOut(id=key, cached=False, **record)
+    return AskOut(id=token, cached=False, **record)
 
 
 # --------------------------------------------------------------------------
@@ -260,12 +267,13 @@ def ask_stream(payload: AskIn):
                                   "message": "Ask a question first."})
 
     key = civic.cache_key(question, location)
+    token = civic.share_token(question, location, payload.brief)
     hit = civic.cache_get(key)
     if hit:
         print(f"  [civic] cache hit {key} tiers={''.join(hit['answer']['tiers']) or '-'}")
 
         def cached():
-            yield _sse("answer", {"id": key, "cached": True, **hit})
+            yield _sse("answer", {"id": token, "cached": True, **hit})
         return _stream_response(cached())
 
     if not civic.available():
@@ -333,7 +341,7 @@ def ask_stream(payload: AskIn):
                 f"retiered={notes.get('tiers_corrected')} "
                 f"retried={notes.get('retried')} {notes['latency_ms']}ms"
             )
-            events.put(("answer", {"id": key, "cached": False, **record}))
+            events.put(("answer", {"id": token, "cached": False, **record}))
         finally:
             events.put((None, None))
 
@@ -361,19 +369,36 @@ def ask_stream(payload: AskIn):
 
 @router.get("/answer/{answer_id}", response_model=AskOut)
 def get_answer(answer_id: str) -> AskOut:
-    """The answer behind a permalink, while it is still in cache.
+    """The answer behind a permalink.
 
-    Cache-only : it costs nothing and holds no slot. A miss is a 404 and the
-    page re-asks the question, because answers are cheap to reproduce and
-    nothing here is worth a database.
+    Free either way: a hit is served from this replica's cache, and a miss
+    hands the question back so the page can re-ask it through the normal
+    path -- with the fence, the rate limit and the progress stream. The link
+    only truly fails when it is not one of ours.
     """
     if not enabled():
         raise HTTPException(503, {"code": "disabled",
                                   "message": "Civic search is switched off here."})
-    hit = civic.cache_get(answer_id.strip().lower())
+
+    answer_id = answer_id.strip()
+    shared = civic.read_token(answer_id)
+    if shared:
+        hit = civic.cache_get(civic.cache_key(shared["question"], shared["location"]))
+        if hit:
+            return AskOut(id=answer_id, cached=True, **hit)
+        # The other replica answered this, or a deploy cleared the cache.
+        # The question is right here, so nothing is lost but the wait.
+        return AskOut(id=answer_id, cached=False, rebuild=True,
+                      question=shared["question"], location=shared["location"])
+
+    # Links made before permalinks carried their question : cache-only.
+    hit = civic.cache_get(answer_id.lower())
     if not hit:
-        raise HTTPException(404, {"code": "expired",
-                                  "message": "That answer has expired. Ask it again."})
+        raise HTTPException(404, {
+            "code": "expired",
+            "message": "That link is from an older version and its answer has "
+                       "expired. Ask the question again.",
+        })
     return AskOut(id=answer_id, cached=True, **hit)
 
 
@@ -396,8 +421,11 @@ def selftest(probe: int = 0) -> dict:
         "anthropic_key": bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
         "anthropic_sdk": civic.available() or bool(
             (os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
-        "exa_key": civic_sources.available(),
-        "sources": "exa" if civic_sources.available() else "web_search",
+        # `exa_key` was true while every Exa call 402'd, which read as "the
+        # fast path is on" when it was not. Report what Exa last did.
+        "exa_key": bool((os.environ.get("EXA_API_KEY") or "").strip()),
+        "exa_status": civic_sources.exa_status(),
+        "sources": "exa + keyless" if civic_sources.available() else "keyless",
         "model_configured": civic.MODEL,
         "model_in_use": civic.active_model(),
         "max_tokens": civic.MAX_TOKENS,

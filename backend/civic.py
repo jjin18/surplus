@@ -29,6 +29,7 @@ grounding check and the schema.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -36,6 +37,7 @@ import re
 import threading
 import time
 import uuid
+import zlib
 from collections import deque
 from datetime import date
 from typing import Any, Iterable, Optional
@@ -1057,6 +1059,60 @@ def synthesize(
 # Worth revisiting only when repeat traffic makes the miss rate matter.
 _CACHE: dict[str, tuple[float, dict]] = {}
 _CACHE_MAX = 500
+
+
+# ---------------------------------------------------------------------------
+# Shareable links
+# ---------------------------------------------------------------------------
+#
+# The answer cache is per process and production runs two replicas, so a
+# permalink backed by a cache id lands on the replica that has it about half
+# the time and says "expired" the rest -- seconds after the answer was made,
+# and always after a deploy. Rather than reach for a database the surface
+# deliberately does not have, the link carries the question: any replica can
+# serve it from cache when it has one and rebuild it when it does not.
+
+MAX_TOKEN_CHARS = 2000
+_MAX_TOKEN_BYTES = 4096
+
+
+def share_token(question: str, location: str = "", brief: bool = False) -> str:
+    """A permalink id that describes the question it answers."""
+    payload = {"q": (question or "").strip()[:500],
+               "l": (location or "").strip()[:160]}
+    if brief:
+        payload["b"] = 1
+    packed = zlib.compress(json.dumps(payload, separators=(",", ":")).encode(), 9)
+    return base64.urlsafe_b64encode(packed).decode().rstrip("=")
+
+
+def read_token(token: str) -> Optional[dict]:
+    """The question inside a permalink, or None if it isn't one of ours.
+
+    Everything here is attacker-supplied, so it is bounded twice: the encoded
+    form before decoding, and the decompressed form during it -- a few hundred
+    bytes of base64 must not be allowed to become a gigabyte of JSON.
+    """
+    token = (token or "").strip()
+    if not token or len(token) > MAX_TOKEN_CHARS:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+        stream = zlib.decompressobj()
+        body = stream.decompress(raw, _MAX_TOKEN_BYTES)
+        if stream.unconsumed_tail:
+            return None                    # bigger than any real question
+        payload = json.loads(body)
+    except Exception:                      # noqa: BLE001 : a bad link is not an error
+        return None
+    if not isinstance(payload, dict):
+        return None
+    question = _clean_str(payload.get("q"), 500)
+    if not question:
+        return None
+    return {"question": question,
+            "location": _clean_str(payload.get("l"), 160),
+            "brief": bool(payload.get("b"))}
 
 
 def cache_key(question: str, location: str = "") -> str:

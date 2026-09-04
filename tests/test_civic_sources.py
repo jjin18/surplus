@@ -395,3 +395,116 @@ def test_one_retry_then_rate_limited(monkeypatch):
     with pytest.raises(cs.RateLimited):
         cs._fetch("https://api.gdeltproject.org/x", {})
     assert len(attempts) == 2         # tried, backed off, tried once more
+
+
+# --------------------------------------------------------------------------
+# What the first live probe found
+# --------------------------------------------------------------------------
+
+def test_data_gov_falls_back_to_the_legacy_path_when_the_gateway_404s(monkeypatch):
+    tried = []
+
+    def fake(url, params, timeout=None):
+        tried.append(url)
+        if "api/action" in url:
+            return {"result": {"results": [{"title": "Rents", "name": "rents",
+                                            "notes": "Series."}]}}
+        raise RuntimeError("HTTP 404: gateway")
+
+    monkeypatch.setattr(cs, "_get_json", fake)
+    [item] = cs._data_gov("rent", "California")
+    assert item["url"].endswith("/dataset/rents")
+
+
+def test_data_gov_reports_down_when_neither_path_answers(monkeypatch):
+    monkeypatch.setattr(cs, "_get_json",
+                        lambda url, params, timeout=None: (_ for _ in ()).throw(
+                            RuntimeError("HTTP 404")))
+    with pytest.raises(RuntimeError):
+        cs._data_gov("rent", "California")
+
+
+def test_hacker_news_cites_the_thread_not_the_newspaper_it_links_to(monkeypatch):
+    _json(monkeypatch, {"hits": [{
+        "title": "Rents are up in Oakland",
+        "url": "https://www.mercurynews.com/business/story",   # journalism, tier E
+        "objectID": "4242", "points": 120, "num_comments": 87,
+        "created_at": "2026-01-05T00:00:00Z"}]})
+    [item] = cs._hacker_news("rent", "")
+    # Citing the article from here would put reporting on the bottom rung and
+    # dress the thread up as its source.
+    assert item["url"] == "https://news.ycombinator.com/item?id=4242"
+    assert item["tier"] == "F"
+    assert "mercurynews.com" in item["snippet"]
+
+
+def test_a_403_is_recorded_as_blocked_not_as_an_error():
+    def blocked(question, place): raise cs.Blocked("blocked (HTTP 403)")
+
+    cs._RESULT_CACHE.clear()
+    cs.gather("Why?", "Oakland", backends={"reddit": (blocked, True)})
+    assert cs.LAST_RUN["reddit"] == "blocked"
+
+
+def test_exa_pauses_itself_when_it_is_out_of_credits(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "k")
+    monkeypatch.setattr(cs, "_exa_paused_until", 0.0)
+
+    class _Resp:
+        status_code = 402
+        text = '{"error":"You have exceeded your credits limit."}'
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, headers=None, json=None): return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    assert cs.available()
+    with pytest.raises(RuntimeError):
+        cs._post({"query": "x"})
+    # Six parallel 402s per question buys nothing ; stop asking for a while.
+    assert not cs.available()
+    assert "402" in cs.exa_status()
+    monkeypatch.setattr(cs, "_exa_paused_until", 0.0)
+
+
+# --------------------------------------------------------------------------
+# Text off someone else's server: linear scans, never a backtracking regex
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,expected", [
+    ("<jats:p>We find a 2% effect.</jats:p>", "We find a 2% effect."),
+    ("<p>Nested <b>markup</b> here</p>", "Nested markup here"),
+    ("<!-- a comment --> visible", "visible"),
+    ('<a href="a>b">link</a> text', "link text"),      # quoted > in an attribute
+    ("Rent &amp; supply &lt;2%&gt;", "Rent & supply <2%>"),
+    ("", ""),
+])
+def test_clean_strips_markup_without_a_tag_regex(raw, expected):
+    assert cs._clean(raw) == expected
+
+
+def test_clean_bounds_the_work_before_doing_any():
+    # A hostile "feed" cannot buy more than a bounded scan.
+    assert len(cs._clean("<b>" * 50_000 + "x")) <= cs.SNIPPET_CHARS
+
+
+def test_items_scans_the_feed_and_stops():
+    feed = "<rss>" + "<item><title>t</title></item>" * 30 + "</rss>"
+    blocks = cs._items(feed)
+    assert len(blocks) == 12                    # capped, not unbounded
+    assert cs._tag(blocks[0], "title") == "t"
+
+
+def test_items_survives_an_unclosed_item():
+    assert cs._items("<item><title>t</title>") == []
+    assert cs._tag("<title>unterminated", "title") == ""
+
+
+def test_tag_reads_attributes_and_cdata():
+    block = '<source url="https://x.com">Mercury News</source>'
+    assert cs._tag(block, "source") == "Mercury News"
+    assert cs._tag("<title><![CDATA[Housing plan]]></title>", "title") == "Housing plan"
