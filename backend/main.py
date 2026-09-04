@@ -326,6 +326,16 @@ app.include_router(team_conflicts.router)   # conflict import (walls-first, audi
 
 # ── EVENTS side: the desktop event-ROI pipeline (www.surpluslayer.com) ───────
 app.include_router(internal_relay.router)  # token-gated Unipile relay (sandbox egress)
+# Civic policy search (/civic) is a bolt-on surface, not part of the product :
+# no DB, no auth, no shared state with the CRM beyond the API keys. Mount it
+# defensively so a failure inside it can never keep the app from booting -- the
+# CRM must not go down because a side project's import broke.
+try:
+    from .routes import civic as civic_routes
+    app.include_router(civic_routes.router)         # /api/civic/*
+    app.include_router(civic_routes.pages_router)   # /civic + /civic/r/{id}
+except Exception as _civic_exc:  # noqa: BLE001 : never fatal
+    print(f"  [civic] not mounted: {type(_civic_exc).__name__}: {_civic_exc}")
 
 
 # NB: previously had a verbose 500 exception handler here that leaked

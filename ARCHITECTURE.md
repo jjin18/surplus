@@ -159,6 +159,7 @@ threads (updates/gathering sweeps + the punctual follow-up dispatcher, §6c).
   (`jobs.run_detached`) and the UI polls `GET /scan/{id}/draft` until
   `ready`/`failed`.
 - `followups.py` — scheduled follow-up queue (Gmail-style). `billing.py` — Stripe. `admin.py` — token-gated ops. `webhooks.py` — Unipile / Bright Data / Stripe ingestion.
+- `civic.py` — Civic policy search (§5b). `/api/civic/ask` + `/api/civic/answer/{id}`, and the map page at `/civic`. No DB, no auth, no session : the only shared state is a 24h in-process answer cache.
 
 ### Agents / logic (`backend/agents/`)
 LLM + business logic. Infra: `llm.py` (Anthropic client + models), `agent_loop.py`
@@ -210,6 +211,77 @@ extraction/matching), `exa.py` (Exa search), `jsonx` use.
 - Apps: `App.jsx` (5-stage pipeline), `BookApp.jsx` (relationship CRM), `TriageApp.jsx` (inbound), `SharedIntake.jsx` (unified intake), `CaptureShared.jsx` (capture/in-person).
 - Shared: `lib/api.js` (all endpoints), `lib/labels.js` `lib/notify.js` `lib/analytics.js` `lib/resilience.jsx`; components `UpgradePaywall` `ContactsButton` `ContactsPage` `MatchingRadarGraph`; `surplusTheme.js` / `intakeFormConstants.js`.
 - Build: Vite multi-page (`vite.config.js`); BookApp kept in its own chunk for health-fingerprint tracking.
+
+## 5b. Civic policy search (`/civic`) — standalone surface
+
+A separate product living in the same process, sharing nothing with the CRM
+but the process and the two API keys it already has. A resident drops a pin on
+a 3D satellite map, asks why something is happening there, and gets an answer
+whose sources are ranked by how they were produced.
+
+Files:
+- `backend/civic.py` — the engine: prompt, the evidence ladder, URL grounding,
+  schema coercion, the 24h answer cache. No FastAPI, no DB.
+- `backend/civic_sources.py` — retrieval: six Exa searches (one per rung) run
+  in parallel, deduplicated, snippet-capped, and tier-classified by host.
+- `backend/routes/civic.py` — HTTP: rate limit (10/min/IP), cache lookup,
+  permalinks, the page.
+- `backend/civic_ui/index.html` — the whole client, one file. MapLibre GL from
+  a CDN over keyless tiles (Esri World Imagery + AWS terrarium terrain) and
+  Nominatim for geocoding, so the map needs no key of its own. If WebGL or the
+  library is missing, the page degrades to a typed-location form.
+
+Two ways to find sources, chosen by whether `EXA_API_KEY` is set:
+
+| | Exa (preferred) | Claude `web_search` (fallback) |
+|---|---|---|
+| Who searches | we do, six queries at once | the model, one query per round-trip |
+| Model round-trips | one | one per search plus the answer |
+| Text the model reads | capped per result (700 chars) | whole pages, as returned |
+| Tier of a source | known before the model sees it | inferred from the URL afterwards |
+
+Exa is the cheaper and faster path; the fallback keeps the surface working on
+a deploy that only has the Anthropic key. Empty retrieval (dead key, quota,
+outage) falls back to `web_search` for that question rather than answering
+with nothing to cite.
+
+Flow: `POST /api/civic/ask {question, location, lat, lon}` → retrieve →
+one Claude call → strip fences → schema-validate → **drop any evidence or
+action whose URL is not in the source set** → if the answer spans fewer than
+three tiers, search once more (harder at tiers A and B) and keep whichever
+pass reached further. Answers are cached by `sha256(question|location)` for
+24h and shared as `/civic/r/{id}`.
+
+The rules that must not drift into being suggestions live in `validate()`, not
+in the prompt: a citation the search never returned is dropped; the tier comes
+from the publisher, so a Reddit thread cannot be cited as official data and a
+think tank cannot be cited as peer-reviewed; tier F is never support for a
+claim; there is exactly one two-minute action.
+
+**Isolation — what stops it affecting the CRM.** Civic is a bolt-on, so it is
+fenced rather than trusted:
+
+- **No shared state.** No DB, no session, no user, no models. The only app
+  module it imports is `rate_limit`; `tests/test_civic.py` asserts that by
+  parsing the imports, so the surface cannot quietly grow into the product.
+- **Mounted defensively.** `main.py` wraps the include in try/except: a
+  failure inside Civic logs `[civic] not mounted` and the app boots anyway.
+- **Capped threads.** A synthesis holds a threadpool thread for 15-25s and
+  that pool is the CRM's (`WEB_CONCURRENCY=1` by default). At most
+  `CIVIC_MAX_CONCURRENCY` (2) run at once; past that a request is shed with a
+  503, never queued — queueing is what would hold the threads.
+- **Bounded request time.** 75s per model call, and the second search only
+  runs if the first finished inside 45s.
+- **Capped spend.** `CIVIC_DAILY_ANSWERS` (250) uncached answers per process
+  per UTC day is the ceiling on what Civic can take of the shared Anthropic /
+  Exa keys and their rate limits. Cache hits don't count.
+- **Off switch.** `CIVIC_ENABLED=0` returns 404 for the page and 503 for the
+  API — an env change, not a deploy.
+
+Env: `ANTHROPIC_API_KEY` (required — without it `/api/civic/ask` returns 503
+and says why), `EXA_API_KEY` (optional, switches on the retrieval path),
+`CIVIC_MODEL` (default `claude-sonnet-5`), `CIVIC_MAX_SEARCHES` (default 8,
+only used on the `web_search` fallback), plus the four caps above.
 
 ## 6. The updates → draft → Book flow (end to end)
 
