@@ -469,3 +469,42 @@ def test_exa_pauses_itself_when_it_is_out_of_credits(monkeypatch):
     assert not cs.available()
     assert "402" in cs.exa_status()
     monkeypatch.setattr(cs, "_exa_paused_until", 0.0)
+
+
+# --------------------------------------------------------------------------
+# Text off someone else's server: linear scans, never a backtracking regex
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,expected", [
+    ("<jats:p>We find a 2% effect.</jats:p>", "We find a 2% effect."),
+    ("<p>Nested <b>markup</b> here</p>", "Nested markup here"),
+    ("<!-- a comment --> visible", "visible"),
+    ('<a href="a>b">link</a> text', "link text"),      # quoted > in an attribute
+    ("Rent &amp; supply &lt;2%&gt;", "Rent & supply <2%>"),
+    ("", ""),
+])
+def test_clean_strips_markup_without_a_tag_regex(raw, expected):
+    assert cs._clean(raw) == expected
+
+
+def test_clean_bounds_the_work_before_doing_any():
+    # A hostile "feed" cannot buy more than a bounded scan.
+    assert len(cs._clean("<b>" * 50_000 + "x")) <= cs.SNIPPET_CHARS
+
+
+def test_items_scans_the_feed_and_stops():
+    feed = "<rss>" + "<item><title>t</title></item>" * 30 + "</rss>"
+    blocks = cs._items(feed)
+    assert len(blocks) == 12                    # capped, not unbounded
+    assert cs._tag(blocks[0], "title") == "t"
+
+
+def test_items_survives_an_unclosed_item():
+    assert cs._items("<item><title>t</title>") == []
+    assert cs._tag("<title>unterminated", "title") == ""
+
+
+def test_tag_reads_attributes_and_cdata():
+    block = '<source url="https://x.com">Mercury News</source>'
+    assert cs._tag(block, "source") == "Mercury News"
+    assert cs._tag("<title><![CDATA[Housing plan]]></title>", "title") == "Housing plan"

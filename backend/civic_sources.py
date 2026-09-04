@@ -34,8 +34,8 @@ it is written.
 """
 from __future__ import annotations
 
+import html
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
@@ -193,8 +193,34 @@ def _cached(key: str, produce: Callable[[], list]) -> list:
     return found
 
 
+def _strip_tags(text: str) -> str:
+    """Drop everything between angle brackets, in one linear pass.
+
+    Deliberately not a regex. `<[^>]+>` is the textbook incomplete tag filter
+    (it mishandles comments and quoted attributes), and the lazy alternatives
+    backtrack on hostile input -- and every string reaching this function came
+    off someone else's server. A scan cannot do either.
+    """
+    out, in_tag, quote = [], False, ""
+    for char in text:
+        if in_tag:
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif char in ("\"", "'"):
+                quote = char           # a > inside an attribute is not the end
+            elif char == ">":
+                in_tag = False
+        elif char == "<":
+            in_tag = True
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 def _clean(text: Optional[str], limit: int = SNIPPET_CHARS) -> str:
-    return " ".join(re.sub(r"<[^>]+>", " ", str(text or "")).split())[:limit]
+    raw = str(text or "")[:20_000]          # bound the work before doing any
+    return " ".join(html.unescape(_strip_tags(raw)).split())[:limit]
 
 
 def _result(tier: str, backend: str, title, url, snippet="", published="") -> Optional[dict]:
@@ -322,16 +348,40 @@ def _gdelt(question: str, place: str) -> list[dict]:
     return [r for r in out if r]
 
 
-_ITEM_RE = re.compile(r"<item>(.*?)</item>", re.S | re.I)
+def _items(feed: str) -> list:
+    """The <item> blocks of an RSS feed, found by scanning rather than matching.
+
+    String search is linear and cannot be made to backtrack ; a feed is
+    someone else's document and does not get to choose how long we spend on it.
+    """
+    blocks, cursor = [], 0
+    lowered = feed.lower()
+    while len(blocks) < 12:
+        start = lowered.find("<item>", cursor)
+        if start < 0:
+            break
+        end = lowered.find("</item>", start)
+        if end < 0:
+            break
+        blocks.append(feed[start + len("<item>"):end])
+        cursor = end + len("</item>")
+    return blocks
 
 
 def _tag(block: str, name: str) -> str:
-    match = re.search(rf"<{name}[^>]*>(.*?)</{name}>", block, re.S | re.I)
-    if not match:
+    """The text of one <tag> in an item block. Same scan, same reason."""
+    lowered = block.lower()
+    open_at = lowered.find("<" + name)
+    if open_at < 0:
         return ""
-    text = match.group(1)
-    text = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", text, flags=re.S)
-    return " ".join(text.split())
+    text_at = block.find(">", open_at)
+    close_at = lowered.find("</" + name, text_at if text_at > 0 else open_at)
+    if text_at < 0 or close_at < 0:
+        return ""
+    text = block[text_at + 1:close_at]
+    if "<![CDATA[" in text:
+        text = text.replace("<![CDATA[", "").replace("]]>", "")
+    return " ".join(html.unescape(text).split())
 
 
 def _google_news(question: str, place: str) -> list[dict]:
@@ -347,7 +397,7 @@ def _google_news(question: str, place: str) -> list[dict]:
                      {"q": f"{question} {place}".strip(), "hl": "en-US",
                       "gl": "US", "ceid": "US:en"})
     out = []
-    for block in _ITEM_RE.findall(body)[:8]:
+    for block in _items(body)[:8]:
         out.append(_result("E", "google_news", _tag(block, "title"),
                            _tag(block, "link"),
                            snippet=_tag(block, "source"),
