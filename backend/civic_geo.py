@@ -34,6 +34,12 @@ from typing import Optional
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 TIMEOUT_S = 12.0
+
+# The Census geocoder is routinely slower than any other source here -- ten to
+# twenty seconds is ordinary for it -- and it runs in parallel with Overpass,
+# so waiting longer costs nothing but the patience of one thread. A 12s cap
+# was quietly turning every one of its answers into a timeout.
+CENSUS_TIMEOUT_S = 30.0
 CACHE_TTL_S = 900
 
 USER_AGENT = "surplus-civic/1.0 (+https://event.surpluslayer.com/civic)"
@@ -168,14 +174,17 @@ LAYER_ORDER = ["landuse", "council", "place", "school", "county",
 
 # Census Geocoder names its geography collections in prose ; match loosely so a
 # vintage change does not silently empty a layer.
+# Matched as (must contain ALL of these) so a vintage prefix cannot break it:
+# the Census labels these collections "119th Congressional Districts" and
+# "2024 State Legislative Districts - Upper", which is why looking for the
+# phrase "upper chamber" found nothing even when the call succeeded.
 _CENSUS_KEYS = {
-    "congress": ("congressional district",),
-    "state_upper": ("upper chamber",),
-    "state_lower": ("lower chamber",),
-    "county": ("counties",),
-    "place": ("incorporated places", "census designated places"),
-    "school": ("unified school districts", "secondary school districts",
-               "elementary school districts"),
+    "congress": (("congressional",),),
+    "state_upper": (("legislative", "upper"),),
+    "state_lower": (("legislative", "lower"),),
+    "county": (("counties",), ("county", "subdivision")),
+    "place": (("incorporated places",), ("census designated places",)),
+    "school": (("unified school",), ("secondary school",), ("elementary school",)),
 }
 
 _CACHE: dict = {}
@@ -198,17 +207,56 @@ def _cached(key: str, produce):
 # Sources
 # ---------------------------------------------------------------------------
 
+# The geocoder takes a benchmark/vintage pair, and a wrong one is rejected
+# rather than ignored. Rather than bet the rail on a single spelling, try the
+# current pair, then the decennial one, then the plain call with no layer
+# filter -- stopping at the first that returns geographies.
+CENSUS_ATTEMPTS = (
+    {"benchmark": "Public_AR_Current", "vintage": "Current_Current", "layers": "all"},
+    {"benchmark": "Public_AR_Current", "vintage": "Census2020_Current", "layers": "all"},
+    {"benchmark": "Public_AR_Current", "vintage": "Current_Current"},
+)
+
+# Total wall clock for all of them. One slow source must not hold the card.
+CENSUS_BUDGET_S = 45.0
+
+
 def census_geographies(lat: float, lon: float) -> dict:
-    """Every Census geography containing this point, in one keyless call."""
+    """Every Census geography containing this point, in one keyless call.
+
+    Tried more than once, because a single miss costs five of the eight layers
+    on the rail -- everything a resident cannot name from memory. An error
+    body is read and reported: the geocoder explains a bad benchmark or
+    vintage in words, and that sentence is worth more than "it failed".
+    """
     import httpx
-    params = {"x": f"{lon:.6f}", "y": f"{lat:.6f}", "benchmark": "Public_AR_Current",
-              "vintage": "Current_Current", "layers": "all", "format": "json"}
-    with httpx.Client(timeout=TIMEOUT_S) as client:
-        resp = client.get(CENSUS_URL, params=params,
-                          headers={"user-agent": USER_AGENT, "accept": "application/json"})
-    if resp.status_code >= 400:
-        raise RuntimeError(f"HTTP {resp.status_code}")
-    return ((resp.json().get("result") or {}).get("geographies") or {})
+    headers = {"user-agent": USER_AGENT, "accept": "application/json"}
+    started = time.monotonic()
+    last: Optional[Exception] = None
+
+    for params in CENSUS_ATTEMPTS:
+        if time.monotonic() - started > CENSUS_BUDGET_S:
+            break
+        query = dict(params, x=f"{lon:.6f}", y=f"{lat:.6f}", format="json")
+        try:
+            with httpx.Client(timeout=CENSUS_TIMEOUT_S) as client:
+                resp = client.get(CENSUS_URL, params=query, headers=headers)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:160]}")
+            body = resp.json()
+            # The geocoder reports bad parameters in the body, with a 200.
+            errors = body.get("errors") or []
+            if errors:
+                raise RuntimeError("; ".join(str(e) for e in errors)[:160])
+            found = (body.get("result") or {}).get("geographies") or {}
+            if found:
+                return found
+            last = RuntimeError("no geographies for this point")
+        except Exception as exc:  # noqa: BLE001 : tried again, then reported
+            last = exc
+            print(f"  [civic.census] {params.get('vintage')} failed: "
+                  f"{type(exc).__name__}: {str(exc)[:160]}")
+    raise last or RuntimeError("census geocoder gave nothing")
 
 
 def osm_areas(lat: float, lon: float) -> list[dict]:
@@ -285,12 +333,17 @@ def outline(relation_id: int) -> dict:
 # The stack
 # ---------------------------------------------------------------------------
 
+def _matches_collection(name: str, patterns) -> bool:
+    """True when the collection name contains every word of any one pattern."""
+    low = (name or "").lower()
+    return any(all(word in low for word in pattern) for pattern in patterns)
+
+
 def _census_layers(geographies: dict) -> dict:
     found: dict = {}
     for collection, entries in (geographies or {}).items():
-        low = collection.lower()
-        for key, needles in _CENSUS_KEYS.items():
-            if key in found or not any(n in low for n in needles):
+        for key, patterns in _CENSUS_KEYS.items():
+            if key in found or not _matches_collection(collection, patterns):
                 continue
             for entry in entries or []:
                 name = (entry.get("NAME") or entry.get("BASENAME") or "").strip()
@@ -319,11 +372,20 @@ def _osm_layers(elements: list) -> dict:
         if website and not website.startswith("http"):
             website = "https://" + website
 
-        if boundary == "political" and name and "council" not in found:
-            found["council"] = {"name": name, "source": "openstreetmap",
-                                "detail": (tags.get("political_division") or
-                                           "political district").replace("_", " "),
-                                "relation": element.get("id"), "website": website}
+        if boundary == "political" and name:
+            # Not every political boundary is a council district: OSM maps
+            # congressional and state-legislative districts the same way, and
+            # taking the first one meant a congressional district could sit in
+            # the council slot while the real council district went missing.
+            division = (tags.get("political_division") or "").lower()
+            slot = ("congress" if "congress" in division else
+                    "state_upper" if "senate" in division else
+                    "state_lower" if ("house" in division or "assembly" in division) else
+                    "council")
+            if slot not in found:
+                found[slot] = {"name": name, "source": "openstreetmap",
+                               "detail": (division or "political district").replace("_", " "),
+                               "relation": element.get("id"), "website": website}
         elif boundary == "administrative" and name:
             slot = {"8": "place", "6": "county", "4": "state"}.get(str(level))
             if slot and slot not in found:

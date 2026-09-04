@@ -1575,3 +1575,106 @@ def test_outline_by_name_flattens_whitespace_before_it_reaches_the_query(monkeyp
     civic_geo.outline_by_name("Council\nDistrict 3")
     assert "\n" not in sent[0].split("[out:json]")[1]
     assert '"Council District 3"' in sent[0]
+
+
+# --------------------------------------------------------------------------
+# Why the rail was three chips long
+# --------------------------------------------------------------------------
+
+# The names the Census actually uses. The old matcher looked for the phrase
+# "upper chamber", which appears in none of them, so both legislative layers
+# were dropped even when the call succeeded.
+_REAL_CENSUS = {
+    "119th Congressional Districts": [{"NAME": "Congressional District 12"}],
+    "2024 State Legislative Districts - Upper": [{"NAME": "State Senate District 7"}],
+    "2024 State Legislative Districts - Lower": [{"NAME": "Assembly District 18"}],
+    "Counties": [{"NAME": "Alameda County"}],
+    "Incorporated Places": [{"NAME": "Oakland"}],
+    "Unified School Districts": [{"NAME": "Oakland Unified School District"}],
+    "Census Blocks": [{"NAME": "Block 1042"}],
+}
+
+
+def test_the_census_collections_are_matched_by_the_names_it_really_uses(monkeypatch):
+    found = _stack(monkeypatch, census=_REAL_CENSUS, osm=[])
+    by_key = {l["key"]: l["name"] for l in found["layers"]}
+    assert by_key["congress"] == "Congressional District 12"
+    assert by_key["state_upper"] == "State Senate District 7"
+    assert by_key["state_lower"] == "Assembly District 18"
+    assert by_key["school"] == "Oakland Unified School District"
+
+
+def test_a_pin_with_both_sources_gives_the_whole_rail(monkeypatch):
+    found = _stack(monkeypatch, census=_REAL_CENSUS, osm=_OSM)
+    # Eight chips: what a resident is actually governed by.
+    assert len(found["layers"]) == 8
+    assert found["sources"] == {"census": 6, "openstreetmap": 3}
+
+
+def test_a_congressional_boundary_in_osm_is_not_filed_as_a_council_district(monkeypatch):
+    osm = [
+        {"type": "relation", "id": 5, "tags": {"boundary": "political",
+         "political_division": "us_congress", "name": "CA-12"}},
+        {"type": "relation", "id": 77, "tags": {"boundary": "political",
+         "political_division": "city_council", "name": "Council District 3"}},
+    ]
+    by_key = {l["key"]: l["name"] for l in _stack(monkeypatch, census={}, osm=osm)["layers"]}
+    assert by_key["congress"] == "CA-12"
+    assert by_key["council"] == "Council District 3"
+
+
+def _census_client(monkeypatch, responses):
+    """Stand in for httpx, handing back one queued response per attempt."""
+    sent = []
+
+    class _Resp:
+        def __init__(self, payload, status=200):
+            self.status_code, self._payload = status, payload
+            self.text = json.dumps(payload)
+
+        def json(self): return self._payload
+
+    class _Client:
+        def __init__(self, **kw): self.timeout = kw.get("timeout")
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, params=None, headers=None):
+            sent.append({"vintage": params.get("vintage"), "layers": params.get("layers"),
+                         "timeout": self.timeout})
+            payload = responses[min(len(sent) - 1, len(responses) - 1)]
+            if isinstance(payload, Exception):
+                raise payload
+            return _Resp(payload, payload.pop("_status", 200))
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    return sent
+
+
+def test_a_second_vintage_is_tried_when_the_first_is_rejected(monkeypatch):
+    sent = _census_client(monkeypatch, [
+        {"errors": ["Vintage Current_Current is not valid for benchmark ..."]},
+        {"result": {"geographies": _REAL_CENSUS}},
+    ])
+    found = civic_geo.census_geographies(37.8, -122.2)
+    assert [s["vintage"] for s in sent] == ["Current_Current", "Census2020_Current"]
+    assert "Counties" in found
+    # And it waits long enough for a service that is routinely slow.
+    assert sent[0]["timeout"] >= 30
+
+
+def test_the_geocoder_s_own_words_are_what_gets_reported(monkeypatch):
+    _census_client(monkeypatch, [{"errors": ["Vintage is not valid"]}])
+    with pytest.raises(RuntimeError) as exc:
+        civic_geo.census_geographies(37.8, -122.2)
+    # "Vintage is not valid" diagnoses this in one read ; "it failed" does not.
+    assert "Vintage is not valid" in str(exc.value)
+
+
+def test_the_layer_filter_is_dropped_as_a_last_resort(monkeypatch):
+    sent = _census_client(monkeypatch, [
+        {"errors": ["bad layers"]}, {"errors": ["bad layers"]},
+        {"result": {"geographies": _REAL_CENSUS}},
+    ])
+    civic_geo.census_geographies(37.8, -122.2)
+    assert [s["layers"] for s in sent] == ["all", "all", None]
