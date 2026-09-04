@@ -391,7 +391,11 @@ def test_ask_returns_an_answer_and_a_permalink_id(client, monkeypatch):
                                             "lat": 37.8, "lon": -122.27})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["id"] == civic.cache_key("Why is rent up?", "Oakland, CA")
+    # The id is a share token, not a cache id: it carries the question, so a
+    # permalink works on the replica that never answered it.
+    assert civic.read_token(body["id"]) == {"question": "Why is rent up?",
+                                            "location": "Oakland, CA",
+                                            "brief": False}
     assert body["cached"] is False
     assert body["answer"]["tiers"] == ["A", "B", "E"]
     assert calls[0][2]["lat"] == 37.8
@@ -1217,3 +1221,56 @@ def test_one_sourced_pass_survives_an_unsourced_one(monkeypatch):
 
     answer, _ = civic.synthesize("Why?", "", create=create)
     assert len(answer["evidence"]) == 3
+
+
+# --------------------------------------------------------------------------
+# Permalinks : two replicas, one link, no database
+# --------------------------------------------------------------------------
+
+def test_a_share_token_round_trips():
+    token = civic.share_token("Why did my rent go up 15%?", "Oakland, CA", brief=True)
+    assert civic.read_token(token) == {"question": "Why did my rent go up 15%?",
+                                       "location": "Oakland, CA", "brief": True}
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "not a token", "abc123def4567890",
+                                 "x" * 3000, "!!!!"])
+def test_read_token_refuses_anything_that_is_not_one(bad):
+    assert civic.read_token(bad) is None
+
+
+def test_read_token_will_not_unpack_a_bomb():
+    # A few hundred bytes of base64 must not become a gigabyte of JSON.
+    import base64 as b64
+    import zlib as z
+    bomb = b64.urlsafe_b64encode(z.compress(b"[" + b"0," * 2_000_000 + b"0]")).decode()
+    assert civic.read_token(bomb.rstrip("=")) is None
+
+
+def test_a_permalink_this_replica_never_answered_hands_back_the_question(client):
+    # The exact production case: two replicas, and the link lands on the one
+    # without the answer (or on any replica after a deploy).
+    civic.cache_clear()
+    token = civic.share_token("Why is rent up?", "Oakland, CA")
+    r = client.get(f"/api/civic/answer/{token}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rebuild"] is True
+    assert body["answer"] is None
+    assert body["question"] == "Why is rent up?"
+    assert body["location"] == "Oakland, CA"
+
+
+def test_a_permalink_this_replica_did_answer_is_served_from_cache(client, monkeypatch):
+    _stub_synthesis(monkeypatch)
+    posted = client.post("/api/civic/ask", json={"question": "Why is rent up?",
+                                                 "location": "Oakland, CA"}).json()
+    r = client.get(f"/api/civic/answer/{posted['id']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rebuild"] is False
+    assert body["answer"]["headline"] == posted["answer"]["headline"]
+
+
+def test_a_link_that_is_not_ours_is_still_a_404(client):
+    assert client.get("/api/civic/answer/deadbeefdeadbeef").status_code == 404
