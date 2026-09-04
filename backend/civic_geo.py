@@ -32,6 +32,11 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
+# The Census publishes the shapes of the districts it names. Same agency, same
+# vintage, keyless -- so the outline of a congressional or state legislative
+# district comes from the body that drew it rather than from a name guess.
+TIGER_URL = ("https://tigerweb.geo.census.gov/arcgis/rest/services"
+             "/TIGERweb/tigerWMS_Current/MapServer")
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 TIMEOUT_S = 12.0
 
@@ -187,6 +192,20 @@ _CENSUS_KEYS = {
     "school": (("unified school",), ("secondary school",), ("elementary school",)),
 }
 
+# Which TIGERweb layer holds each lens, matched on the words in its published
+# name rather than a layer number: the numbers move with every vintage, the
+# names do not. Ordered -- the first that answers for a GEOID wins.
+_TIGER_KEYS = {
+    "congress": (("congressional", "districts"),),
+    "state_upper": (("legislative", "districts", "upper"),),
+    "state_lower": (("legislative", "districts", "lower"),),
+    "county": (("counties",),),
+    "place": (("incorporated", "places"), ("census", "designated", "places")),
+    "school": (("unified", "school", "districts"),
+               ("elementary", "school", "districts"),
+               ("secondary", "school", "districts")),
+}
+
 _CACHE: dict = {}
 
 
@@ -276,6 +295,220 @@ def osm_areas(lat: float, lon: float) -> list[dict]:
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}")
     return resp.json().get("elements") or []
+
+
+def tiger_layer_ids() -> list[tuple[int, str]]:
+    """Every layer TIGERweb publishes, as (id, name).
+
+    Read once and cached, because the whole point of reading it is to stop
+    hard-coding layer numbers that change with each vintage.
+    """
+    def build():
+        import httpx
+        with httpx.Client(timeout=TIMEOUT_S) as client:
+            resp = client.get(TIGER_URL, params={"f": "json"},
+                              headers={"user-agent": USER_AGENT,
+                                       "accept": "application/json"})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        return [(int(layer["id"]), str(layer.get("name") or ""))
+                for layer in resp.json().get("layers") or []
+                if layer.get("id") is not None]
+
+    return _cached("tiger:layers", build)
+
+
+def outline_by_geoid(layer_key: str, geoid: str, detail: str = "") -> dict:
+    """The Census's own shape for a Census-named district.
+
+    The geocoder names the districts nobody can name from memory and hands
+    back no geometry, so the map knew you were in Congressional District 12
+    and could not draw it. TIGERweb has the shape, keyed by the same GEOID
+    the geocoder returned -- so the outline is the boundary the Census drew,
+    not a boundary that happens to share a name.
+    """
+    # The GEOID goes into a where= clause. Census GEOIDs are digits and
+    # nothing else, so anything else is rejected rather than escaped.
+    geoid = (geoid or "").strip()
+    if not geoid.isdigit() or len(geoid) > 20:
+        return {}
+    patterns = _TIGER_KEYS.get(layer_key)
+    if not patterns:
+        return {}
+    # A point sits in exactly one of the three kinds of school district, and
+    # the geocoder already said which. Ask that one first.
+    low = (detail or "").lower()
+    patterns = sorted(patterns, key=lambda p: not all(w in low for w in p))
+
+    layers = tiger_layer_ids()
+    tried = 0
+    for pattern in patterns:
+        for layer_id, layer_name in layers:
+            if not _matches_collection(layer_name, (pattern,)) or tried >= 4:
+                continue
+            tried += 1
+            shape = _tiger_query(layer_id, geoid)
+            if shape:
+                return shape
+    return {}
+
+
+def _tiger_query(layer_id: int, geoid: str) -> dict:
+    """One TIGERweb layer, asked for one GEOID's geometry."""
+    import httpx
+    params = {"where": f"GEOID='{geoid}'", "outFields": "GEOID",
+              "returnGeometry": "true", "outSR": "4326", "f": "geojson"}
+    with httpx.Client(timeout=TIMEOUT_S + 8) as client:
+        resp = client.get(f"{TIGER_URL}/{int(layer_id)}/query", params=params,
+                          headers={"user-agent": USER_AGENT,
+                                   "accept": "application/json"})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}")
+    body = resp.json()
+    # ArcGIS reports a rejected query in the body, with a 200.
+    if body.get("error"):
+        raise RuntimeError(str(body["error"].get("message") or "query rejected")[:120])
+    for feature in body.get("features") or []:
+        geometry = feature.get("geometry") or {}
+        if geometry.get("coordinates"):
+            return geometry
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Who currently holds the seat
+# ---------------------------------------------------------------------------
+# A district is an abstraction until it has a name and a face on it. The Census
+# says which district ; these say who is in it right now, and both sources
+# publish the seat itself rather than commentary about it.
+
+GOVTRACK_URL = "https://www.govtrack.us/api/v2/role"
+OPENSTATES_PEOPLE_URL = "https://v3.openstates.org/people.geo"
+
+# The Census keys states by FIPS code ; every roster keys them by postal
+# abbreviation. One table, no network call, no guessing from a place name.
+_FIPS = {
+    "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO",
+    "09": "CT", "10": "DE", "11": "DC", "12": "FL", "13": "GA", "15": "HI",
+    "16": "ID", "17": "IL", "18": "IN", "19": "IA", "20": "KS", "21": "KY",
+    "22": "LA", "23": "ME", "24": "MD", "25": "MA", "26": "MI", "27": "MN",
+    "28": "MS", "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH",
+    "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND", "39": "OH",
+    "40": "OK", "41": "OR", "42": "PA", "44": "RI", "45": "SC", "46": "SD",
+    "47": "TN", "48": "TX", "49": "UT", "50": "VT", "51": "VA", "53": "WA",
+    "54": "WV", "55": "WI", "56": "WY", "60": "AS", "66": "GU", "69": "MP",
+    "72": "PR", "78": "VI",
+}
+
+
+def _person(name: str, role: str, party: str = "", url: str = "",
+            source: str = "", since: str = "") -> dict:
+    return {"name": " ".join((name or "").split())[:120], "role": role,
+            "party": (party or "").strip()[:40], "url": (url or "")[:300],
+            "source": source, "since": (since or "")[:10]}
+
+
+def congress_members(geoid: str) -> list[dict]:
+    """The three people your congressional GEOID sends to Washington.
+
+    GovTrack keys current roles by state and district, needs no key, and
+    publishes the seat rather than an opinion about who should hold it. Both
+    senators come too : they vote on the same bills as the House member and
+    nobody's ballot separates them.
+    """
+    geoid = (geoid or "").strip()
+    if not geoid.isdigit() or len(geoid) != 4:
+        return []
+    state, district = _FIPS.get(geoid[:2], ""), int(geoid[2:])
+    if not state:
+        return []
+    import httpx
+    people: list[dict] = []
+    asks = [{"role_type": "representative", "district": district},
+            {"role_type": "senator"}]
+    with httpx.Client(timeout=TIMEOUT_S) as client:
+        for ask in asks:
+            params = dict(ask, current="true", state=state, limit=3)
+            resp = client.get(GOVTRACK_URL, params=params,
+                              headers={"user-agent": USER_AGENT,
+                                       "accept": "application/json"})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            for role in resp.json().get("objects") or []:
+                who = role.get("person") or {}
+                people.append(_person(
+                    who.get("name") or "", role.get("title_long") or role.get("title") or "",
+                    role.get("party") or "", who.get("link") or "",
+                    "govtrack", (role.get("startdate") or "")))
+    return people
+
+
+def state_legislators(lat: float, lon: float) -> dict:
+    """Who sits for this point in each chamber of the state legislature.
+
+    OpenStates answers by coordinate, which is the only way to get this right
+    -- state legislative districts are the boundaries residents are least
+    able to name. Needs a free OPENSTATES_API_KEY ; without one the card says
+    so rather than inventing a name.
+    """
+    import os
+    key = (os.environ.get("OPENSTATES_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("no OPENSTATES_API_KEY")
+    import httpx
+    with httpx.Client(timeout=TIMEOUT_S) as client:
+        resp = client.get(OPENSTATES_PEOPLE_URL,
+                          params={"lat": f"{lat:.6f}", "lng": f"{lon:.6f}"},
+                          headers={"x-api-key": key, "user-agent": USER_AGENT,
+                                   "accept": "application/json"})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}")
+    found: dict = {}
+    for who in resp.json().get("results") or []:
+        current = who.get("current_role") or {}
+        chamber = str(current.get("org_classification") or "").lower()
+        layer = {"upper": "state_upper", "lower": "state_lower"}.get(chamber)
+        if not layer:
+            continue
+        title = current.get("title") or chamber.title()
+        district = current.get("district")
+        role = f"{title}, district {district}" if district else str(title)
+        found.setdefault(layer, []).append(_person(
+            who.get("name") or "", role, who.get("party") or "",
+            who.get("openstates_url") or "", "openstates"))
+    return found
+
+
+def officials(lat: float, lon: float, congress_geoid: str = "") -> dict:
+    """Everyone this point elects that a public roster will name.
+
+    Both rosters are asked at once and either may fail ; a chamber nobody
+    could name comes back as the reason it could not, so the card can say
+    "no roster" instead of showing an empty space that reads as "nobody".
+    """
+    def build():
+        people: dict = {"by_layer": {}, "sources": {}}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            house = pool.submit(congress_members, congress_geoid) \
+                if congress_geoid else None
+            state = pool.submit(state_legislators, lat, lon)
+            if house is not None:
+                try:
+                    got = house.result()
+                    if got:
+                        people["by_layer"]["congress"] = got
+                    people["sources"]["govtrack"] = len(got)
+                except Exception as exc:  # noqa: BLE001 : one roster down is not an outage
+                    people["sources"]["govtrack"] = type(exc).__name__
+            try:
+                got = state.result()
+                people["by_layer"].update(got)
+                people["sources"]["openstates"] = sum(len(v) for v in got.values())
+            except Exception as exc:  # noqa: BLE001
+                people["sources"]["openstates"] = type(exc).__name__
+        return people
+
+    return _cached(f"who:{lat:.4f},{lon:.4f},{congress_geoid}", build)
 
 
 def outline_by_name(name: str) -> dict:

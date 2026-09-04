@@ -1780,3 +1780,221 @@ def test_the_lens_rail_is_one_row():
 
 def test_the_page_does_not_preach_its_own_method():
     assert "Social posts last" not in _page()
+
+
+# --- the Census's own shapes, and who sits in them -------------------------
+
+class _Reply:
+    def __init__(self, payload, status=200):
+        self.status_code, self._payload = status, payload
+
+    def json(self):
+        return self._payload
+
+
+def _http(monkeypatch, handler):
+    """Route every httpx GET through one handler(url, params) -> _Reply."""
+    calls = []
+
+    class _Client:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+        def get(self, url, params=None, headers=None):
+            calls.append((url, dict(params or {})))
+            return handler(url, dict(params or {}))
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    civic_geo._CACHE.clear()
+    return calls
+
+
+_TIGER_SERVICE = {"layers": [
+    {"id": 3, "name": "Counties"},
+    {"id": 54, "name": "Congressional Districts"},
+    {"id": 60, "name": "State Legislative Districts - Upper"},
+    {"id": 62, "name": "State Legislative Districts - Lower"},
+    {"id": 24, "name": "Unified School Districts"},
+    {"id": 25, "name": "Elementary School Districts"},
+]}
+_SQUARE = {"type": "MultiPolygon",
+           "coordinates": [[[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]]}
+
+
+def test_the_census_district_is_drawn_from_the_census_own_shape(monkeypatch):
+    def handler(url, params):
+        if params.get("f") == "json":
+            return _Reply(_TIGER_SERVICE)
+        assert "/54/query" in url                  # Congressional Districts
+        assert params["where"] == "GEOID='0612'"
+        return _Reply({"features": [{"geometry": _SQUARE}]})
+
+    _http(monkeypatch, handler)
+    assert civic_geo.outline_by_geoid("congress", "0612") == _SQUARE
+
+
+@pytest.mark.parametrize("bad", ["06'12", "0612 OR 1=1", "abc", "", "1" * 21])
+def test_a_geoid_that_could_escape_the_query_never_reaches_the_network(monkeypatch, bad):
+    def handler(url, params):
+        raise AssertionError("must not call TIGERweb with " + repr(bad))
+
+    _http(monkeypatch, handler)
+    assert civic_geo.outline_by_geoid("congress", bad) == {}
+
+
+def test_the_school_layer_named_by_the_geocoder_is_asked_first(monkeypatch):
+    seen = []
+
+    def handler(url, params):
+        if params.get("f") == "json":
+            return _Reply(_TIGER_SERVICE)
+        seen.append(url)
+        return _Reply({"features": [{"geometry": _SQUARE}]})
+
+    _http(monkeypatch, handler)
+    civic_geo.outline_by_geoid("school", "0612345", "Elementary School Districts")
+    assert "/25/query" in seen[0]                  # not the unified layer
+
+
+def test_a_tigerweb_error_body_is_raised_rather_than_drawn(monkeypatch):
+    def handler(url, params):
+        if params.get("f") == "json":
+            return _Reply(_TIGER_SERVICE)
+        return _Reply({"error": {"message": "Invalid where clause"}})
+
+    _http(monkeypatch, handler)
+    with pytest.raises(RuntimeError):
+        civic_geo._tiger_query(54, "0612")
+
+
+def test_congress_members_come_back_with_their_seat(monkeypatch):
+    def handler(url, params):
+        assert params["state"] == "CA"
+        if params["role_type"] == "representative":
+            assert params["district"] == 12
+            return _Reply({"objects": [{"title_long": "Representative", "party": "Democrat",
+                                        "startdate": "2023-01-03",
+                                        "person": {"name": "A. Rep",
+                                                   "link": "https://www.govtrack.us/x"}}]})
+        return _Reply({"objects": [{"title_long": "Senator", "party": "Democrat",
+                                    "person": {"name": "B. Sen"}}]})
+
+    _http(monkeypatch, handler)
+    people = civic_geo.congress_members("0612")
+    assert [p["name"] for p in people] == ["A. Rep", "B. Sen"]
+    assert people[0]["since"] == "2023-01-03"
+    assert people[0]["source"] == "govtrack"
+
+
+@pytest.mark.parametrize("bad", ["", "06", "0612345", "CA12"])
+def test_a_congress_geoid_that_is_not_a_district_asks_nobody(monkeypatch, bad):
+    _http(monkeypatch, lambda url, params: (_ for _ in ()).throw(AssertionError("called")))
+    assert civic_geo.congress_members(bad) == []
+
+
+def test_state_legislators_split_into_their_two_chambers(monkeypatch):
+    monkeypatch.setenv("OPENSTATES_API_KEY", "k")
+    _http(monkeypatch, lambda url, params: _Reply({"results": [
+        {"name": "U. Senator", "party": "Green",
+         "current_role": {"org_classification": "upper", "title": "Senator", "district": "9"}},
+        {"name": "L. Member", "party": "Green",
+         "current_role": {"org_classification": "lower", "title": "Assemblymember", "district": "18"}},
+        {"name": "Nobody", "current_role": {"org_classification": "executive"}},
+    ]}))
+    found = civic_geo.state_legislators(37.8, -122.27)
+    assert found["state_upper"][0]["name"] == "U. Senator"
+    assert found["state_lower"][0]["role"] == "Assemblymember, district 18"
+    assert "executive" not in str(found)
+
+
+def test_without_an_openstates_key_the_card_is_told_why(monkeypatch):
+    monkeypatch.delenv("OPENSTATES_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENSTATES"):
+        civic_geo.state_legislators(37.8, -122.27)
+
+
+def test_one_broken_roster_does_not_take_the_other_down(monkeypatch):
+    monkeypatch.setenv("OPENSTATES_API_KEY", "k")
+
+    def handler(url, params):
+        if "openstates" in url:
+            return _Reply({}, status=503)
+        return _Reply({"objects": [{"title_long": "Representative",
+                                    "person": {"name": "A. Rep"}}]})
+
+    _http(monkeypatch, handler)
+    people = civic_geo.officials(37.8, -122.27, "0612")
+    assert people["by_layer"]["congress"][0]["name"] == "A. Rep"
+    assert people["sources"]["openstates"] == "RuntimeError"
+    assert "state_upper" not in people["by_layer"]
+
+
+def test_the_outline_route_prefers_the_census_shape_and_says_so(client, monkeypatch):
+    monkeypatch.setattr(civic_geo, "outline_by_geoid", lambda *a, **k: _SQUARE)
+    monkeypatch.setattr(civic_geo, "outline",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("asked OSM")))
+    body = client.get("/api/civic/outline?layer=congress&geoid=0612&relation=77").json()
+    assert body["geometry"] == _SQUARE
+    assert body["basis"] == "census" and body["exact"] is True
+    assert "Census" in body["note"]
+
+
+def test_a_name_match_is_drawn_but_never_called_the_district(client, monkeypatch):
+    monkeypatch.setattr(civic_geo, "outline_by_geoid", lambda *a, **k: {})
+    monkeypatch.setattr(civic_geo, "outline_by_name", lambda name: _SQUARE)
+    body = client.get("/api/civic/outline?layer=congress&geoid=0612"
+                      "&name=Congressional+District+12").json()
+    assert body["geometry"] == _SQUARE
+    assert body["basis"] == "name" and body["exact"] is False
+    assert "may be a different" in body["note"]
+
+
+def test_a_half_received_relation_is_reported_as_a_fragment(client, monkeypatch):
+    monkeypatch.setattr(civic_geo, "outline",
+                        lambda r: {"type": "MultiLineString", "coordinates": [[[0, 0], [1, 1]]]})
+    body = client.get("/api/civic/outline?relation=77").json()
+    assert body["basis"] == "partial" and body["exact"] is False
+    assert "part of this boundary" in body["note"]
+
+
+def test_a_source_that_throws_falls_through_to_the_next_one(client, monkeypatch):
+    monkeypatch.setattr(civic_geo, "outline_by_geoid",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("HTTP 500")))
+    monkeypatch.setattr(civic_geo, "outline", lambda r: _SQUARE)
+    body = client.get("/api/civic/outline?layer=county&geoid=06001&relation=77").json()
+    assert body["basis"] == "relation" and body["exact"] is True
+
+
+def test_no_source_has_a_shape_and_the_map_is_told_that_plainly(client, monkeypatch):
+    monkeypatch.setattr(civic_geo, "outline_by_geoid", lambda *a, **k: {})
+    monkeypatch.setattr(civic_geo, "outline_by_name", lambda name: {})
+    body = client.get("/api/civic/outline?layer=congress&geoid=0612&name=X").json()
+    assert body["geometry"] == {} and body["basis"] == "" and body["exact"] is False
+
+
+def test_officials_route_rejects_a_point_that_is_not_on_earth(client):
+    assert client.get("/api/civic/officials?lat=999&lon=0").status_code == 400
+
+
+def test_every_census_lens_has_a_tigerweb_layer_to_ask(monkeypatch):
+    # A lens the Census can name but TIGERweb is never asked for is a lens
+    # that silently falls back to a name guess.
+    named = set(civic_geo._CENSUS_KEYS) - {"place"}
+    assert named <= set(civic_geo._TIGER_KEYS)
+
+
+def test_the_layer_card_leads_with_who_holds_the_seat():
+    page = _page()
+    seats = page.index("Who holds this seat")
+    assert seats < page.index("What it decides")      # the seat comes first
+    assert "<details class=\"decides\">" in page      # and the chamber folds away
+    assert "/api/civic/officials?lat=" in page
+
+
+def test_an_estimated_outline_is_drawn_differently_from_a_surveyed_one():
+    page = _page()
+    fill = page.split('{id: "layer-fill"', 1)[1].split("}}", 1)[0]
+    assert '["get", "exact"]' in fill                 # faint when not exact
+    assert "line-dasharray" in page                   # and dashed

@@ -476,24 +476,91 @@ def jurisdictions(lat: float, lon: float) -> dict:
     return found
 
 
-@router.get("/outline", dependencies=[Depends(_GEO_LIMIT)])
-def outline(relation: int = 0, name: str = "") -> dict:
-    """One boundary's geometry, so the map can draw the district you are in.
+@router.get("/officials", dependencies=[Depends(_GEO_LIMIT)])
+def officials(lat: float, lon: float, congress: str = "") -> dict:
+    """Who currently holds the seats this point votes for.
 
-    By relation id when OpenStreetMap gave us one, otherwise by name: the
-    Census names districts without shapes, and a district you cannot see is
-    half an answer.
+    The static list of what a chamber decides is the same in every district
+    in the country. Who sits in it, and since when, is the part that is
+    actually about you -- so the card leads with this.
     """
     if not enabled():
         raise HTTPException(503, {"code": "disabled",
                                   "message": "Civic search is switched off here."})
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(400, {"code": "bad_point",
+                                  "message": "That is not a point on Earth."})
     try:
-        shape = (civic_geo.outline(relation) if relation
-                 else civic_geo.outline_by_name(name))
-    except Exception as exc:  # noqa: BLE001 : a missing outline is not an error
-        print(f"  [civic] outline {relation or name!r} failed: {type(exc).__name__}")
-        shape = {}
-    return {"relation": relation, "name": name, "geometry": shape}
+        return civic_geo.officials(lat, lon, congress)
+    except Exception as exc:  # noqa: BLE001 : an unnamed seat is not an error
+        print(f"  [civic] officials failed: {type(exc).__name__}")
+        return {"by_layer": {}, "sources": {"error": type(exc).__name__}}
+
+
+# How a drawn boundary was arrived at, worst case first. The map says which
+# one it is, because a shape the reader cannot tell apart from a surveyed one
+# is a shape they will trust more than it deserves.
+_BASIS_NOTE = {
+    "census": "Drawn by the US Census from the same district record that named it.",
+    "relation": "The mapped boundary of the district this point falls inside.",
+    "name": "Matched by name, not by your location — it may be a different "
+            "body that shares this name.",
+    "partial": "Only part of this boundary was available, so it is drawn as "
+               "the edges we have rather than filled as a whole district.",
+}
+
+
+@router.get("/outline", dependencies=[Depends(_GEO_LIMIT)])
+def outline(relation: int = 0, name: str = "", layer: str = "",
+            geoid: str = "", detail: str = "") -> dict:
+    """One boundary's geometry, so the map can draw the district you are in.
+
+    Three ways in, best first. The Census names five of the eight lenses and
+    hands back no shape, so its own published boundary is asked for by the
+    same GEOID it returned ; then the OpenStreetMap relation the point is
+    actually inside ; then, last, a boundary carrying the same name.
+
+    The answer says which of those it was. A name match is a guess about
+    identity even when the geometry is exact, and a half-received relation is
+    a fragment -- both are drawn, and both are labelled as estimates rather
+    than passed off as the district itself.
+    """
+    if not enabled():
+        raise HTTPException(503, {"code": "disabled",
+                                  "message": "Civic search is switched off here."})
+    shape, basis, tried = {}, "", []
+
+    def attempt(label: str, produce):
+        nonlocal shape, basis
+        if shape:
+            return
+        try:
+            found = produce()
+        except Exception as exc:  # noqa: BLE001 : a missing outline is not an error
+            tried.append(f"{label}:{type(exc).__name__}")
+            return
+        if found:
+            shape, basis = found, label
+        else:
+            tried.append(f"{label}:empty")
+
+    if layer and geoid:
+        attempt("census", lambda: civic_geo.outline_by_geoid(layer, geoid, detail))
+    if relation:
+        attempt("relation", lambda: civic_geo.outline(relation))
+    if name:
+        attempt("name", lambda: civic_geo.outline_by_name(name))
+
+    if tried:
+        print(f"  [civic] outline {layer or relation or name!r}: {' '.join(tried)}")
+    # Rings that would not close come back as lines. That is a fragment
+    # whatever route found it, and it outranks how it was found.
+    if shape and "line" in str(shape.get("type", "")).lower():
+        basis = "partial"
+    return {"relation": relation, "name": name, "geometry": shape,
+            "basis": basis,
+            "exact": basis in ("census", "relation"),
+            "note": _BASIS_NOTE.get(basis, "")}
 
 
 # 30/min/IP. The endpoint is cheap, but it is unauthenticated and it exists to

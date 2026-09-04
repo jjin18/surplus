@@ -283,8 +283,28 @@ paints that boundary in its colour, scopes the map's pins to the things that
 layer governs, and asks its question in its own vocabulary: a school board
 question is about budgets, boundaries and closures; a state-senate question is
 about preemption and the funding formula. `GET /api/civic/jurisdictions`
-returns the stack, `GET /api/civic/outline` the geometry (by OSM relation, or
-by name for the Census-named districts that arrive without a shape).
+returns the stack.
+
+`GET /api/civic/outline` returns the geometry, and tries three routes in
+order of how much it proves: the Census's own published boundary from
+**TIGERweb**, keyed by the same GEOID the geocoder returned; then the
+OpenStreetMap relation the point actually falls inside; then, last, a
+boundary carrying the same name. The reply says which route it was
+(`basis`, `exact`), because they are not the same claim — a name match is a
+guess about *identity* even when its geometry is exact, and a relation whose
+ways would not close into rings is a fragment. The map draws all of them and
+labels the last two: faint fill, dashed edge, and a note on the card saying
+what was estimated and why. The GEOID goes into a TIGERweb `where=` clause,
+so it is rejected unless it is digits.
+
+`GET /api/civic/officials` answers the other half — **who currently holds the
+seat**. GovTrack (keyless) names the House member for a congressional GEOID
+plus both senators; OpenStates `people.geo` names both state chambers by
+coordinate when `OPENSTATES_API_KEY` is set. Either may fail without taking
+the other down, and a chamber with no roster says so rather than showing a
+blank that reads as "nobody". The layer card leads with this and with recent
+coverage; the static list of what a chamber decides is identical in every
+district in the country, so it folds away underneath.
 
 The legal zoning code is not in OpenStreetMap, which knows how land is *used*
 rather than what an ordinance permits — so the land-use layer says so, and two
