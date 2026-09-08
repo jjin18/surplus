@@ -35,3 +35,9 @@ bcrypt>=4.1,<6
 # cryptography: application-level field encryption (backend/crypto.py) --
 # AES-256-GCM envelope encryption for OAuth tokens at rest, per-tenant DEK.
 cryptography>=41,<46
+
+# pypdf: California publishes its certified candidate list as a PDF, so the CA
+# filing adapter (backend/campaigns_ca.py) extracts text from it. Imported
+# lazily inside extract_pdf_text(), so nothing else pays for it at import and
+# the parser stays testable without it.
+pypdf==5.1.0

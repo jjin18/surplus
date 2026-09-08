@@ -54,9 +54,10 @@ whole product and it is worth stating plainly:
 
 That ingest is the actual work of this product, and pretending otherwise (as a
 "just pull it from the FEC" plan does) hides the only genuinely hard part.
-STATE_FILING_SOURCES below is the registry it goes in; it ships empty, with the
-adapter contract documented, because fifty speculative scrapers written against
-response shapes nobody has looked at is fifty things that break silently.
+STATE_FILING_SOURCES below is the registry it goes in, and it is filled one
+state at a time against the real document -- never speculatively, because fifty
+scrapers written against response shapes nobody has opened is fifty things that
+break silently. California is wired (campaigns_ca.py); the rest are not.
 """
 from __future__ import annotations
 
@@ -252,12 +253,45 @@ INCUMBENT_BACKENDS: dict[str, Callable[[str, str], list[CandidateRecord]]] = {
 #     tells those apart; collapsing them hides an outage as an empty state.
 #   - It must not read from FEC filings. See the module docstring.
 #
-# Ships EMPTY. Fill it one state at a time, verifying each against the live
-# endpoint, starting with the states holding the races you actually care about.
-# A speculative adapter written against a response shape nobody has looked at
-# fails silently and is worse than an obviously missing one.
+# Filled one state at a time, each verified against the live document, in the
+# order campaigns_races.priority_states() gives. A speculative adapter written
+# against a response shape nobody has looked at fails silently and is worse
+# than an obviously missing one.
 #
 STATE_FILING_SOURCES: dict[str, Callable[[str, str], list[CandidateRecord]]] = {}
+
+# State adapter modules to load. Each imports this module (for CandidateRecord)
+# and calls register_filing_source() at import time, so the wiring runs one way
+# only and this list is the single place that says which states are live.
+_STATE_ADAPTER_MODULES: tuple[str, ...] = ("campaigns_ca",)
+
+# Adapters that failed to import, by module name. A broken adapter must not
+# take the whole registry down -- but it must not vanish either, so the failure
+# is recorded here and surfaced by filing_coverage().
+ADAPTER_LOAD_ERRORS: dict[str, str] = {}
+_adapters_loaded = False
+
+
+def register_filing_source(
+        state: str, fn: Callable[[str, str], list[CandidateRecord]]) -> None:
+    """Register a state's filing adapter. Called by the adapter at import."""
+    STATE_FILING_SOURCES[(state or "").strip().upper()] = fn
+
+
+def load_state_adapters() -> None:
+    """Import the state adapters once, so importing this module alone is
+    enough to get a populated registry. Idempotent."""
+    global _adapters_loaded
+    if _adapters_loaded:
+        return
+    _adapters_loaded = True
+
+    import importlib
+    for name in _STATE_ADAPTER_MODULES:
+        try:
+            importlib.import_module(f".{name}", __package__)
+        except Exception as exc:                      # noqa: BLE001
+            ADAPTER_LOAD_ERRORS[name] = f"{type(exc).__name__}: {exc}"[:200]
 
 
 def filing_coverage() -> dict[str, object]:
@@ -265,12 +299,16 @@ def filing_coverage() -> dict[str, object]:
     anyone a national list -- with an empty registry the honest answer is
     'incumbents only', and that should be visible rather than inferred from a
     thin result set."""
+    load_state_adapters()
     states = sorted(STATE_FILING_SOURCES)
     return {
         "states_with_filing_source": states,
         "state_count": len(states),
         "has_challenger_coverage": bool(states),
         "incumbent_backends": sorted(INCUMBENT_BACKENDS),
+        # An adapter that failed to import is not the same as one that was
+        # never written, and reporting zero states either way would hide it.
+        "adapter_load_errors": dict(ADAPTER_LOAD_ERRORS),
     }
 
 
@@ -317,6 +355,8 @@ def gather(state: str, office: str = "", *,
     if not state:
         return []
 
+    if filing_sources is None:
+        load_state_adapters()
     filings = STATE_FILING_SOURCES if filing_sources is None else filing_sources
     roster = INCUMBENT_BACKENDS if incumbent_backends is None else incumbent_backends
 

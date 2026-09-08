@@ -17,7 +17,8 @@ from backend import campaigns_sources as src
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1] / "backend"
 CAMPAIGN_MODULES = ("campaigns_sources.py", "campaigns_score.py",
-                    "campaigns_races.py", "campaigns_filings.py")
+                    "campaigns_races.py", "campaigns_filings.py",
+                    "campaigns_ca.py")
 
 
 def rec(name="Pat Doe", **kw) -> src.CandidateRecord:
@@ -224,15 +225,55 @@ def test_gather_deduplicates_across_backends():
 # Coverage honesty
 # --------------------------------------------------------------------------
 
-def test_filing_registry_ships_empty_and_says_so():
-    """Incumbent rosters contain no challengers, so an empty filing registry
-    means no challenger coverage. That has to be visible rather than inferred
-    from a thin result set."""
-    assert src.STATE_FILING_SOURCES == {}
+def test_filing_coverage_names_exactly_the_states_that_are_wired():
+    """Incumbent rosters contain no challengers, so coverage has to come from
+    the filing registry and has to be visible rather than inferred from a thin
+    result set. California is wired; nothing else is yet."""
     coverage = src.filing_coverage()
-    assert coverage["has_challenger_coverage"] is False
-    assert coverage["state_count"] == 0
+    assert coverage["states_with_filing_source"] == ["CA"]
+    assert coverage["state_count"] == 1
+    assert coverage["has_challenger_coverage"] is True
     assert "govtrack" in coverage["incumbent_backends"]
+
+
+def test_an_adapter_that_fails_to_import_is_reported_not_swallowed():
+    """A missing state and a broken state must not look the same."""
+    src._adapters_loaded = False
+    src.ADAPTER_LOAD_ERRORS.clear()
+    original = src._STATE_ADAPTER_MODULES
+    try:
+        src._STATE_ADAPTER_MODULES = ("campaigns_does_not_exist",)
+        src.load_state_adapters()
+        assert "campaigns_does_not_exist" in src.ADAPTER_LOAD_ERRORS
+        assert "adapter_load_errors" in src.filing_coverage()
+    finally:
+        src._STATE_ADAPTER_MODULES = original
+        src.ADAPTER_LOAD_ERRORS.clear()
+        src._adapters_loaded = False
+        src.load_state_adapters()
+
+
+def test_importing_sources_alone_populates_the_registry():
+    """A caller that never imports campaigns_ca still gets California.
+
+    Checked in a FRESH INTERPRETER rather than with importlib.reload: reload
+    hands back a new module object, but campaigns_ca is already in sys.modules
+    so its body never re-runs and never re-registers against the new object.
+    That is an artefact of reload, not of the wiring, and testing it that way
+    would assert something the production path never does.
+    """
+    import subprocess
+    import sys
+
+    probe = ("from backend import campaigns_sources as s; "
+             "s.load_state_adapters(); "
+             "print(sorted(s.STATE_FILING_SOURCES), s.ADAPTER_LOAD_ERRORS)")
+    result = subprocess.run([sys.executable, "-c", probe],
+                            cwd=str(BACKEND.parent), capture_output=True,
+                            text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "'CA'" in result.stdout, result.stdout
+    assert "{}" in result.stdout, f"an adapter failed to load: {result.stdout}"
 
 
 def test_incumbent_records_are_labelled_as_seat_context():

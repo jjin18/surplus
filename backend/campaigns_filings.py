@@ -79,6 +79,7 @@ class FieldMap:
     email: Any = ("email", "contact_email")
     website: Any = ("website", "url", "campaign_website")
     contact: Any = ("committee", "contact", "treasurer")
+    notes: Any = ("notes", "ballot_designation", "designation", "occupation")
     first_name: Any = ("first_name", "firstname", "given_name")
     last_name: Any = ("last_name", "lastname", "surname", "family_name")
 
@@ -308,6 +309,7 @@ def from_rows(rows: Iterable[dict], *, state: str, source_url: str,
             contact_name=_pick(row, fields.contact),
             source_url=row_source,
             found_by=found_by,
+            notes=_pick(row, fields.notes),
         ))
         report.kept += 1
 
