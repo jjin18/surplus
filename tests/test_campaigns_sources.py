@@ -16,7 +16,8 @@ import pytest
 from backend import campaigns_sources as src
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1] / "backend"
-CAMPAIGN_MODULES = ("campaigns_sources.py", "campaigns_score.py")
+CAMPAIGN_MODULES = ("campaigns_sources.py", "campaigns_score.py",
+                    "campaigns_races.py", "campaigns_filings.py")
 
 
 def rec(name="Pat Doe", **kw) -> src.CandidateRecord:
