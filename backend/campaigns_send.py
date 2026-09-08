@@ -59,10 +59,34 @@ WARMUP_RAMP: tuple[tuple[int, int], ...] = (
 )
 
 # Placed at the end of every message, by code. See the module docstring.
+#
+# TWO VARIANTS, AND THE REASON IS NOT COSMETIC. "reply STOP" is an opt-out
+# mechanism, and CAN-SPAM requires the opt-out to WORK. A sending domain with
+# no MX record receives nothing: the recipient replies STOP, the reply bounces
+# to them rather than reaching anybody here, and the opt-out they were promised
+# never happened. That failure is invisible from the sending side -- the run
+# looks clean, and the only party who learns the opt-out was fiction is the
+# person who used it. So the STOP clause is printed only when somebody has
+# declared inbound mail actually works, and the default is not to promise it.
 FOOTER_TEMPLATE = ("\n\n--\n{from_name}\n{postal_address}\n\n"
                    "You received this because you are a candidate or campaign "
                    "in the 2026 election. To stop receiving these, reply STOP "
                    "or use {unsubscribe}.")
+FOOTER_TEMPLATE_NO_REPLY = ("\n\n--\n{from_name}\n{postal_address}\n\n"
+                            "You received this because you are a candidate or "
+                            "campaign in the 2026 election. To stop receiving "
+                            "these, use {unsubscribe}.")
+
+# SPF includes for the providers this is likely to send through. A provider not
+# in this table is not guessed at -- see dns_records().
+PROVIDER_SPF: dict[str, str] = {
+    "ses": "amazonses.com",
+    "sendgrid": "sendgrid.net",
+    "mailgun": "mailgun.org",
+    "postmark": "spf.mtasv.net",
+    "google": "_spf.google.com",
+    "microsoft": "spf.protection.outlook.com",
+}
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -88,6 +112,13 @@ class SendingIdentity:
     postal_address: str
     unsubscribe: str                 # a URL, or "mailto:..."
     reply_to: str = ""
+
+    # Does mail sent TO this domain reach a monitored mailbox? Defaults to
+    # False, and the default is the point: a fresh sending subdomain has no MX
+    # record, so replies to it bounce. Until somebody has published an MX and
+    # checked that a reply arrives, the footer must not offer "reply STOP" as
+    # a way out -- see FOOTER_TEMPLATE_NO_REPLY.
+    accepts_replies: bool = False
 
     def problems(self) -> list[str]:
         """Everything wrong with this identity, so one call names them all
@@ -122,6 +153,8 @@ def load_identity(env: Optional[dict] = None) -> SendingIdentity:
         postal_address=(env.get("SURPLUS_CAMPAIGNS_POSTAL_ADDRESS") or "").strip(),
         unsubscribe=(env.get("SURPLUS_CAMPAIGNS_UNSUBSCRIBE") or "").strip(),
         reply_to=(env.get("SURPLUS_CAMPAIGNS_REPLY_TO") or "").strip(),
+        accepts_replies=(env.get("SURPLUS_CAMPAIGNS_ACCEPTS_REPLIES") or ""
+                         ).strip().lower() in ("1", "true", "yes"),
     )
     problems = identity.problems()
     if problems:
@@ -229,7 +262,9 @@ def finalize(message: Message, identity: SendingIdentity) -> Message:
     """
     if identity.postal_address.strip() in message.body:
         return message
-    footer = FOOTER_TEMPLATE.format(
+    template = (FOOTER_TEMPLATE if identity.accepts_replies
+                else FOOTER_TEMPLATE_NO_REPLY)
+    footer = template.format(
         from_name=identity.from_name,
         postal_address=identity.postal_address,
         unsubscribe=identity.unsubscribe)
@@ -293,12 +328,23 @@ def approve(message: Message, identity: SendingIdentity, *,
     return ready
 
 
-def dns_records(domain: str, *, dmarc_report_to: str = "") -> list[dict]:
+def dns_records(domain: str, *, dmarc_report_to: str = "",
+                provider: str = "") -> list[dict]:
     """The DNS a sending domain needs, as records you can paste.
+
+    PUBLISH THESE ON A SUBDOMAIN YOU SEND FROM, NOT ON A DOMAIN THAT ALREADY
+    CARRIES MAIL. A domain may hold exactly one SPF record, so pasting the SPF
+    below onto an apex that already has one REPLACES it, and every existing
+    mailbox on that domain starts failing SPF immediately. Sending from
+    `campaigns.example.com` gives the campaign its own SPF, DKIM and DMARC with
+    nothing to merge and nothing to break.
 
     DKIM is not here: its selector and public key are issued by whichever
     provider you send through, so a value invented here would be a wrong one.
-    Everything else is computable from the domain alone.
+    `provider` fills in the SPF include for the providers in PROVIDER_SPF; an
+    unrecognised name raises rather than being passed through, because an SPF
+    record naming a host that does not authorise you fails exactly like no SPF
+    at all while looking configured.
 
     p=none on DMARC is deliberate for a new domain: it reports without
     rejecting, so a misconfiguration shows up in reports rather than silently
@@ -309,12 +355,22 @@ def dns_records(domain: str, *, dmarc_report_to: str = "") -> list[dict]:
     if not domain or "." not in domain:
         raise NotConfigured(f"{domain!r} is not a domain")
 
+    provider = (provider or "").strip().lower()
+    if provider and provider not in PROVIDER_SPF:
+        raise NotConfigured(
+            f"{provider!r} is not a provider this knows the SPF include for. "
+            f"Known: {', '.join(sorted(PROVIDER_SPF))}. Pass one of those, or "
+            f"pass none and paste your provider's include yourself -- a "
+            f"guessed include fails SPF while looking configured.")
+    include = PROVIDER_SPF.get(provider, "<your-provider-spf-include>")
+
     rua = f" rua=mailto:{dmarc_report_to};" if dmarc_report_to else ""
     return [
         {"host": domain, "type": "TXT", "purpose": "SPF",
-         "value": "v=spf1 include:<your-provider-spf-include> -all",
-         "note": "Replace the include with your provider's. -all, not ~all: "
-                 "a soft fail teaches nothing."},
+         "value": f"v=spf1 include:{include} -all",
+         "note": "-all, not ~all: a soft fail teaches nothing. One SPF record "
+                 "per domain -- if this host already has one, merge the "
+                 "includes rather than adding a second."},
         {"host": f"_dmarc.{domain}", "type": "TXT", "purpose": "DMARC",
          "value": f"v=DMARC1; p=none;{rua} fo=1",
          "note": "p=none reports without rejecting. Move to quarantine, then "
@@ -324,4 +380,11 @@ def dns_records(domain: str, *, dmarc_report_to: str = "") -> list[dict]:
          "value": "<issued by your sending provider>",
          "note": "Selector and key come from the provider. Nothing here can "
                  "compute them, and a guessed value would fail alignment."},
+        {"host": domain, "type": "MX", "purpose": "INBOUND",
+         "value": "<your inbound provider's MX host>",
+         "note": "Required before the footer may offer 'reply STOP'. Without "
+                 "an MX here that reply bounces and the opt-out the recipient "
+                 "was promised silently never happens. Leave it unpublished "
+                 "and leave SURPLUS_CAMPAIGNS_ACCEPTS_REPLIES unset -- the "
+                 "footer then routes opt-outs to the unsubscribe URL only."},
     ]

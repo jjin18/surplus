@@ -289,3 +289,90 @@ def test_a_non_domain_is_refused(bad):
 
 def test_a_leading_at_is_tolerated():
     assert snd.dns_records("@x.example")[0]["host"] == "x.example"
+
+
+# --------------------------------------------------------------------------
+# The opt-out has to be one that works
+# --------------------------------------------------------------------------
+
+def _identity(**kw) -> snd.SendingIdentity:
+    base = dict(from_address="jia@campaigns.example.com", from_name="Jia",
+                postal_address="410 Bryant St, San Francisco, CA 94107",
+                unsubscribe="https://www.example.com/unsubscribe")
+    base.update(kw)
+    return snd.SendingIdentity(**base)
+
+
+def test_the_footer_does_not_offer_reply_stop_by_default():
+    """A fresh sending subdomain has no MX, so a STOP reply bounces to the
+    recipient and reaches nobody here. Promising it anyway makes the opt-out
+    fiction, and the only party who finds out is the person who used it."""
+    ready = snd.finalize(snd.Message(to="a@b.example", subject="s", body="hi"),
+                         _identity())
+    assert "reply STOP" not in ready.body
+    assert "https://www.example.com/unsubscribe" in ready.body
+
+
+def test_the_footer_offers_reply_stop_once_inbound_is_declared():
+    ready = snd.finalize(snd.Message(to="a@b.example", subject="s", body="hi"),
+                         _identity(accepts_replies=True))
+    assert "reply STOP" in ready.body
+
+
+def test_both_footers_still_carry_the_address_and_the_unsubscribe():
+    """The variant that drops the STOP clause must not drop a legal element
+    with it -- that would trade one compliance failure for another."""
+    for replies in (False, True):
+        identity = _identity(accepts_replies=replies)
+        ready = snd.finalize(snd.Message(to="a@b.example", subject="s", body="hi"),
+                             identity)
+        assert not snd.validate(ready, identity)
+
+
+def test_accepts_replies_is_off_unless_the_environment_says_otherwise():
+    env = {"SURPLUS_CAMPAIGNS_FROM_ADDRESS": "jia@campaigns.example.com",
+           "SURPLUS_CAMPAIGNS_FROM_NAME": "Jia",
+           "SURPLUS_CAMPAIGNS_POSTAL_ADDRESS": "410 Bryant St, SF, CA 94107",
+           "SURPLUS_CAMPAIGNS_UNSUBSCRIBE": "https://www.example.com/u"}
+    assert snd.load_identity(env).accepts_replies is False
+    assert snd.load_identity({**env, "SURPLUS_CAMPAIGNS_ACCEPTS_REPLIES": "true"}
+                             ).accepts_replies is True
+    assert snd.load_identity({**env, "SURPLUS_CAMPAIGNS_ACCEPTS_REPLIES": "maybe"}
+                             ).accepts_replies is False
+
+
+# --------------------------------------------------------------------------
+# DNS: the records that break things if they are wrong
+# --------------------------------------------------------------------------
+
+def test_an_mx_requirement_is_stated_rather_than_left_to_be_discovered():
+    mx = next(r for r in snd.dns_records("campaigns.example.com")
+              if r["type"] == "MX")
+    assert "reply STOP" in mx["note"]
+
+
+def test_a_known_provider_fills_in_its_own_spf_include():
+    spf = next(r for r in snd.dns_records("c.example.com", provider="ses")
+               if r["purpose"] == "SPF")
+    assert spf["value"] == "v=spf1 include:amazonses.com -all"
+
+
+def test_an_unknown_provider_is_refused_rather_than_passed_through():
+    """An SPF record naming a host that does not authorise you fails exactly
+    like no SPF at all, while looking configured."""
+    with pytest.raises(snd.NotConfigured, match="not a provider"):
+        snd.dns_records("c.example.com", provider="sendblaster")
+
+
+def test_no_provider_leaves_the_include_visibly_unfilled():
+    spf = next(r for r in snd.dns_records("c.example.com")
+               if r["purpose"] == "SPF")
+    assert "<your-provider-spf-include>" in spf["value"]
+
+
+def test_the_spf_note_warns_about_replacing_an_existing_record():
+    """Pasting this onto an apex that already sends mail replaces its SPF and
+    breaks every existing mailbox on the domain."""
+    spf = next(r for r in snd.dns_records("example.com")
+               if r["purpose"] == "SPF")
+    assert "merge" in spf["note"].lower()
