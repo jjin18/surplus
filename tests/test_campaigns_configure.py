@@ -77,12 +77,21 @@ def test_a_district_count_just_over_half_is_not_called_thin(monkeypatch, capsys)
 
 def test_a_failed_fetch_reports_the_source_page_rather_than_a_traceback(
         monkeypatch, capsys):
+    """A fetch that fails has to say WHERE to go looking, because the state is
+    unconfigured precisely when nobody knows the URL yet.
+
+    The source page is a sentinel rather than a real URL on purpose. Asserting
+    that some https:// string appears would pass if the URL turned up for an
+    unrelated reason, and CodeQL is right to call a URL substring check a weak
+    test; a sentinel proves the source_page FIELD is what reached stderr.
+    """
+    sentinel = "SOURCE-PAGE-REACHED-STDERR"
     monkeypatch.setattr(gen, "probe", lambda state: {
         "ok": False, "stage": "fetch", "state": "PA",
         "error": "SourceError: 403", "dataset": "(unset)",
-        "source_page": "https://data.pa.gov/"})
+        "source_page": sentinel})
     assert cli.cmd_probe(Args()) == 2
-    assert "https://data.pa.gov/" in capsys.readouterr().err
+    assert sentinel in capsys.readouterr().err
 
 
 def test_an_unknown_state_exits_rather_than_raising_keyerror(capsys):
