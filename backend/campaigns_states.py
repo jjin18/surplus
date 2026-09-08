@@ -438,3 +438,136 @@ def _worklist_row(state: str) -> dict:
 
 
 register_profile_adapters()
+
+
+# ---------------------------------------------------------------------------
+# THE REST OF THE COUNTRY
+#
+# The fourteen states above carry the competitive House races and were worked
+# one at a time. These thirty-six complete the map: with them, PROFILES covers
+# every state on the 2026 ballot, so "find every candidate in the midterm" has
+# an adapter for each of the 504 federal and gubernatorial seats rather than
+# for the toss-up subset.
+#
+# WHAT IS REAL HERE AND WHAT IS NOT. Seats and schedule are not guessed -- they
+# come from campaigns_races, which is law and arithmetic-tested. The office
+# TRAPS below are researched and are the actual value of this block: they are
+# the wordings that would be silently misfiled, and finding them after the fact
+# means finding them by noticing a number was wrong. Everything else --
+# publishing format, dataset location, column names -- is UNINVESTIGATED, which
+# is why every one of these ships as publication="assumed" with an empty
+# dataset. The adapter refuses to run until someone fills that in, so an
+# assumption cannot quietly become a fetch.
+#
+# THE TRAPS, AND WHY EACH ONE MATTERS
+#
+#   "General Court" (MA, NH) is the worst of them. A Massachusetts statehouse
+#   candidate runs for "Representative in General Court" -- which contains
+#   "Representative", does not contain "state", and therefore falls through the
+#   shared normaliser straight into U.S. House. Exactly Pennsylvania's bug, in
+#   two more states, and neither says anything that looks wrong in a log.
+#
+#   "House of Delegates" (MD, WV, VA) fails the same way: "House" matches, no
+#   "state" excludes it, so every delegate becomes a congressional candidate.
+#
+#   "Assembly" (NV, WI) fails the OTHER way. It matches nothing at all, so the
+#   rows are dropped rather than misfiled -- a silent undercount instead of a
+#   silent miscount. Less damaging, equally invisible.
+# ---------------------------------------------------------------------------
+
+# Massachusetts and New Hampshire: the legislature is the General Court.
+_GENERAL_COURT: dict[str, str] = {
+    "representative in general court": "State House",
+    "state representative in general court": "State House",
+    "senator in general court": "State Senate",
+    "state senator in general court": "State Senate",
+    "general court": "State House",
+}
+
+# Maryland, West Virginia, Virginia: a lower house of Delegates.
+_DELEGATES: dict[str, str] = {
+    "house of delegates": "State House",
+    "delegate": "State House",
+    "state delegate": "State House",
+}
+
+# Nevada, Wisconsin: an Assembly that does not say "state".
+_ASSEMBLY: dict[str, str] = {
+    "general assembly": "State House",
+    "assembly": "State House",
+    "assembly member": "State House",
+    "member of the assembly": "State House",
+    "state assembly": "State House",
+}
+
+_ASSUMED_NOTE = ("Publishing format NOT investigated. 'file' is the assumption "
+                 "that wires the generic adapter, not a finding; dataset stays "
+                 "empty so the adapter refuses until someone looks.")
+
+# state -> (statehouse wording block, office_trap, quirk)
+_REST: dict[str, tuple] = {
+    "MA": (_GENERAL_COURT,
+           "The legislature is the GENERAL COURT: 'Representative in General "
+           "Court' is the state house. It contains 'Representative' and not "
+           "'state', so unmapped it files as U.S. House -- Pennsylvania's bug "
+           "again.", ""),
+    "NH": (_GENERAL_COURT,
+           "General Court, as in Massachusetts: 'Representative in General "
+           "Court' is the state house and would otherwise read as federal.",
+           "No lieutenant governor, so a governor row carries one name."),
+    "MD": (_DELEGATES,
+           "'House of Delegates' is the state house. 'House' matches the "
+           "federal pattern and nothing excludes it, so every delegate would "
+           "file as a U.S. House candidate.", ""),
+    "WV": (_DELEGATES,
+           "'House of Delegates' is the state house -- same trap as Maryland.",
+           ""),
+    "VA": (_DELEGATES,
+           "'House of Delegates' is the state house -- same trap as Maryland.",
+           "No legislative elections in 2026: Virginia runs them in odd years, "
+           "so a run finding zero statehouse candidates here is correct."),
+    "NV": (_ASSEMBLY,
+           "The lower house is the 'Assembly' with no 'state' in front. That "
+           "matches NEITHER pattern, so its rows are dropped rather than "
+           "misfiled: a silent undercount, not a silent miscount.", ""),
+    "WI": (_ASSEMBLY,
+           "'Assembly' without 'state' -- dropped rather than misfiled, as in "
+           "Nevada.", ""),
+    "LA": (_PLAIN_STATEHOUSE, "",
+           "JUNGLE PRIMARY: every candidate of every party appears on the "
+           "November ballot together, with a December runoff if nobody clears "
+           "50%. So Louisiana's 'general election' field is the whole field, "
+           "not two nominees -- expect many more candidates per seat than "
+           "elsewhere, which is not a duplicate-row bug. No legislative "
+           "elections in 2026 (odd-year state)."),
+    "AK": (_PLAIN_STATEHOUSE, "",
+           "Top-four primary and ranked-choice general, so the November ballot "
+           "can carry four candidates for one seat, several of the same party. "
+           "Changes nothing here -- party is discarded by design -- but four "
+           "rows for one at-large seat is correct, not a parse fault."),
+    "MS": (_PLAIN_STATEHOUSE, "",
+           "No legislative elections in 2026 (odd-year state)."),
+    "NJ": (_ASSEMBLY,
+           "The lower house is the 'General Assembly', which does not say "
+           "'state' -- the Pennsylvania family of trap.",
+           "No legislative elections in 2026 (odd-year state)."),
+    "TN": (_PLAIN_STATEHOUSE,
+           "The body is the General Assembly but its members are styled State "
+           "Representative and State Senator, so the plain mapping holds. "
+           "Worth confirming on the first real run.", ""),
+}
+
+for _state in sorted(races.STATES - set(PROFILES)):
+    _house, _trap, _quirk = _REST.get(_state, (_PLAIN_STATEHOUSE, "", ""))
+    PROFILES[_state] = StateProfile(
+        state=_state,
+        publication="assumed",
+        shape="file",
+        source_page=f"https://www.usa.gov/state-election-office-{_state.lower()}",
+        note=_ASSUMED_NOTE,
+        office_trap=_trap,
+        quirk=_quirk,
+        office_names=_offices(_house),
+    )
+
+register_profile_adapters()

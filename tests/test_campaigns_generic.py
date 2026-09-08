@@ -238,10 +238,10 @@ def test_probe_reports_the_fusion_collapse_for_new_york():
 # Registry and coverage
 # --------------------------------------------------------------------------
 
-def test_all_fourteen_priority_states_have_an_adapter():
+def test_every_state_has_an_adapter():
     src.load_state_adapters()
     assert set(src.STATE_FILING_SOURCES) == set(st.PROFILES)
-    assert len(src.STATE_FILING_SOURCES) == 14
+    assert len(src.STATE_FILING_SOURCES) == 50
 
 
 def test_bespoke_states_keep_their_own_modules():
@@ -253,9 +253,12 @@ def test_bespoke_states_keep_their_own_modules():
     assert src.STATE_FILING_SOURCES["OH"] is campaigns_oh.ohio
 
 
-def test_reach_is_now_every_toss_up_state():
+def test_reach_is_the_whole_ballot_and_configured_is_not():
+    """Every seat has an adapter; one state has a document. Reporting these as
+    one number is how a coverage figure starts describing reach as if it were
+    data."""
     report = st.status()
-    assert report["reach"]["seats_reachable"] == 234
+    assert report["reach"]["seats_reachable"] == 504
     assert report["configured"] == ["CA"]
     assert report["actual"]["seats_reachable"] == 53
 
