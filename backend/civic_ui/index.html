@@ -321,6 +321,12 @@
     border-radius:999px;padding:8px 14px;cursor:pointer;color:var(--ink);text-align:left}
   .rewrites button:hover{border-color:var(--ink)}
   .caveat{font-size:16px;color:var(--ink-2);max-width:62ch;margin:0 0 8px}
+  /* Why an answer is thin, when the reason is us rather than the world. */
+  .degraded{font-family:var(--sans);font-size:14px;line-height:1.5;max-width:62ch;
+    margin:0 0 18px;padding:11px 13px;border-radius:10px;
+    color:#7A4B08;background:#FDF3E2;border:1px solid #E7C99A}
+  .degraded b{font-weight:700}
+  .degraded[hidden]{display:none}
   .creed-foot{font-family:var(--sans);font-size:13px;color:var(--ink-2);border-top:1px solid var(--rule);
     padding-top:12px;max-width:62ch}
 
@@ -437,6 +443,7 @@
     <div class="sec" id="sec-live"><h3>Decisions open right now</h3><ul class="live" id="r-live"></ul></div>
     <div class="sec" id="sec-actions"><h3>What you can do</h3><ul class="actions" id="r-actions"></ul></div>
 
+    <p class="degraded" id="r-degraded" hidden></p>
     <p class="caveat" id="r-caveat"></p>
     <p class="creed-foot">Sources are ranked by how they were made, not by who agrees with them.
       Open a link before you act on a number.</p>
@@ -536,9 +543,7 @@ const MAX_SITES = 40;
 const LAYER_PINS = {
   landuse: ["development", "housing"],
   council: ["development", "housing", "park", "civic"],
-  place: ["civic", "court", "development", "park"],
-  school: ["school"],
-  county: ["court", "hospital", "civic"],
+  place: ["civic", "court", "development", "park", "school", "hospital"],
   state_lower: [], state_upper: [], congress: [],
   utilities: ["datacenter", "power", "transit"]
 };
@@ -1000,10 +1005,8 @@ const NO_ROSTER = {
   congress: "GovTrack did not answer for this district just now.",
   state_upper: "The state roster did not name a member for this district.",
   state_lower: "The state roster did not name a member for this district.",
-  county: "Counties publish their board themselves \u2014 no national roster covers them.",
   place: "Cities publish their mayor and council themselves.",
   council: "Council seats are published by the city, not by any national roster.",
-  school: "School boards are published by the district itself.",
   landuse: "Land use is a code, not a seat \u2014 nobody is elected to it.",
 };
 
@@ -1073,10 +1076,8 @@ const LAYER_ASKS = {
     " — housing, tax, energy or transport — and what is moving in Congress now?",
   state_upper: (n, p) => "What bills in " + n + " would change rents, property tax, schools or utility bills in " + p + ", and where are they now?",
   state_lower: (n, p) => "What bills in " + n + " would change housing, tax or schools in " + p + ", and what is on the floor now?",
-  county: (n, p) => "What is changing in " + n + " about property assessment, tax rates, or services that reach " + p + "?",
   place: (n, p) => "What is " + n + " deciding now about zoning, housing, permits or local taxes, and what changed in the last two years?",
   council: (n, p) => "What is on the agenda for " + n + " in " + p + " — projects, hearings and votes affecting this neighbourhood?",
-  school: (n, p) => "What is changing in " + n + " — budget, boundaries, closures, board policy — and what decisions are open?",
   landuse: (n, p) => "Which zoning district covers " + p + ", what does that section of the municipal code permit — height, density, parking — and what change to it is proposed?"
 };
 
@@ -1464,6 +1465,21 @@ function render(payload){
   $("asked").textContent = payload.question + (payload.location ? " · " + payload.location : "");
   $("r-head").textContent = d.headline || "";
   $("r-summary").textContent = d.summary || "";
+
+  // "Nothing was written about San Mateo County" is a claim about the world.
+  // "Our search account is out of credit" is a claim about us. When the
+  // second one is true the reader has to be told, or they will read a thin
+  // answer as an empty record.
+  const degraded = (payload.notes || {}).search_degraded || "";
+  $("r-degraded").hidden = !degraded;
+  if (degraded) {
+    $("r-degraded").innerHTML = "<b>This search ran short-handed.</b> The " +
+      "ranked search did not run because " + esc(degraded) +
+      ", so only the free fallbacks were asked \u2014 and those index " +
+      "national records and research, not city or county agendas. A thin " +
+      "answer here means we could not look properly, not that there is " +
+      "nothing to find.";
+  }
 
   // Vague question: the rewrites ARE the answer, so the rest is hidden.
   const rewrites = d.rewrites || [];

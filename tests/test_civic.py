@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import pathlib
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1347,12 +1348,14 @@ def _stack(monkeypatch, census=None, osm=None):
 def test_the_stack_names_every_layer_closest_to_home_first(monkeypatch):
     found = _stack(monkeypatch)
     assert [l["key"] for l in found["layers"]] == [
-        "landuse", "council", "place", "school", "county",
-        "state_lower", "state_upper", "congress"]
+        "landuse", "council", "place", "state_lower", "state_upper", "congress"]
     by_key = {l["key"]: l for l in found["layers"]}
     assert by_key["congress"]["name"] == "Congressional District 12"
     assert by_key["council"]["name"] == "Council District 3"      # OSM only
-    assert by_key["school"]["name"] == "Oakland Unified School District"
+    assert by_key["state_upper"]["name"] == "State Senate District 7"
+    # The school and county lenses were removed ; a geocoder that still names
+    # them must not put them back on the rail.
+    assert "school" not in by_key and "county" not in by_key
 
 
 def test_every_layer_says_what_it_decides(monkeypatch):
@@ -1388,9 +1391,8 @@ def test_one_source_failing_still_names_what_the_other_knows(monkeypatch):
 
 def test_the_question_speaks_the_layer_s_own_vocabulary(monkeypatch):
     by_key = {l["key"]: l for l in _stack(monkeypatch)["layers"]}
-    school = civic_geo.question_for(by_key["school"], "Oakland")
-    assert "Oakland Unified School District" in school
-    assert "boundaries" in school
+    council = civic_geo.question_for(by_key["council"], "Oakland")
+    assert "Council District 3" in council and "hearings" in council
     congress = civic_geo.question_for(by_key["congress"], "Oakland")
     assert "Congressional District 12" in congress and "Oakland" in congress
 
@@ -1400,7 +1402,7 @@ def test_the_jurisdictions_endpoint_returns_the_stack(client, monkeypatch):
     civic_geo._CACHE.clear()
     r = client.get("/api/civic/jurisdictions?lat=37.8044&lon=-122.2712")
     assert r.status_code == 200
-    assert {l["key"] for l in r.json()["layers"]} >= {"place", "school", "congress"}
+    assert {l["key"] for l in r.json()["layers"]} >= {"place", "congress"}
 
 
 def test_the_jurisdictions_endpoint_rejects_a_point_off_the_earth(client):
@@ -1448,10 +1450,10 @@ def test_outline_by_name_refuses_anything_that_could_escape_the_query(bad):
 
 def test_each_layer_says_what_to_look_up_on_its_own_site(monkeypatch):
     by_key = {l["key"]: l for l in _stack(monkeypatch)["layers"]}
-    assert "assessor" in by_key["county"]["lookup"]
+    assert "permit" in by_key["place"]["lookup"]
     assert "permit" in by_key["place"]["lookup"]
     assert "agenda" in by_key["council"]["lookup"]
-    assert "board agenda" in by_key["school"]["lookup"]
+    assert "bills" in by_key["congress"]["lookup"]
 
 
 def test_a_body_s_official_site_comes_off_the_boundary_relation(monkeypatch):
@@ -1602,14 +1604,14 @@ def test_the_census_collections_are_matched_by_the_names_it_really_uses(monkeypa
     assert by_key["congress"] == "Congressional District 12"
     assert by_key["state_upper"] == "State Senate District 7"
     assert by_key["state_lower"] == "Assembly District 18"
-    assert by_key["school"] == "Oakland Unified School District"
+
 
 
 def test_a_pin_with_both_sources_gives_the_whole_rail(monkeypatch):
     found = _stack(monkeypatch, census=_REAL_CENSUS, osm=_OSM)
     # Eight chips: what a resident is actually governed by.
-    assert len(found["layers"]) == 8
-    assert found["sources"] == {"census": 6, "openstreetmap": 3}
+    assert len(found["layers"]) == 6
+    assert found["sources"] == {"census": 4, "openstreetmap": 3}
 
 
 def test_a_congressional_boundary_in_osm_is_not_filed_as_a_council_district(monkeypatch):
@@ -1844,18 +1846,17 @@ def test_a_geoid_that_could_escape_the_query_never_reaches_the_network(monkeypat
     assert civic_geo.outline_by_geoid("congress", bad) == {}
 
 
-def test_the_school_layer_named_by_the_geocoder_is_asked_first(monkeypatch):
-    seen = []
-
+def test_a_lens_with_no_tigerweb_layer_asks_nobody(monkeypatch):
+    # The school and county lenses are gone, so a stale caller naming one must
+    # not fall through to some other layer's geometry.
     def handler(url, params):
         if params.get("f") == "json":
             return _Reply(_TIGER_SERVICE)
-        seen.append(url)
-        return _Reply({"features": [{"geometry": _SQUARE}]})
+        raise AssertionError("queried a layer for a lens that does not exist")
 
     _http(monkeypatch, handler)
-    civic_geo.outline_by_geoid("school", "0612345", "Elementary School Districts")
-    assert "/25/query" in seen[0]                  # not the unified layer
+    assert civic_geo.outline_by_geoid("school", "0612345") == {}
+    assert civic_geo.outline_by_geoid("county", "06081") == {}
 
 
 def test_a_tigerweb_error_body_is_raised_rather_than_drawn(monkeypatch):
@@ -2132,7 +2133,7 @@ def test_the_roster_starts_when_the_pin_lands_not_when_a_card_opens():
 
 def test_a_body_with_no_national_roster_is_pointed_at_its_own_page():
     page = _page()
-    for key in ("county", "place", "council", "school"):
+    for key in ("place", "council"):
         assert '  ' + key + ':' in page.split("const NO_ROSTER", 1)[1][:900]
     assert 'link(layer.website, "Members' in page
 
@@ -2267,3 +2268,79 @@ def test_three_suggestions_not_five():
     assert static.count("<button") == 3
     built = page.split("function placeChips(", 1)[1].split("];", 1)[0]
     assert built.count('short + "?"') == 3
+
+
+# --- the two lenses that were removed ---------------------------------------
+
+def test_the_school_and_county_lenses_are_gone_everywhere():
+    # A lens half-removed is worse than either state: a chip with no question,
+    # or a question for a chip nobody can reach.
+    for table in (civic_geo.LAYERS, civic_geo.LOOKUPS, civic_geo._CENSUS_KEYS,
+                  civic_geo._TIGER_KEYS):
+        assert "school" not in table and "county" not in table
+    assert "school" not in civic_geo.LAYER_ORDER
+    assert "county" not in civic_geo.LAYER_ORDER
+    page = _page()
+    asks = page.split("const LAYER_ASKS", 1)[1].split("};", 1)[0]
+    assert "\n  school:" not in asks and "\n  county:" not in asks
+    pins = page.split("const LAYER_PINS", 1)[1].split("};", 1)[0]
+    assert "\n  school:" not in pins and "\n  county:" not in pins
+
+
+def test_every_lens_on_the_rail_has_a_question_and_a_pin_rule():
+    page = _page()
+    asks = page.split("const LAYER_ASKS", 1)[1].split("};", 1)[0]
+    pins = page.split("const LAYER_PINS", 1)[1].split("};", 1)[0]
+    for key in civic_geo.LAYER_ORDER:
+        assert key + ":" in asks or key + ":" in pins, key
+        assert key + ":" in pins, key
+
+
+def test_the_school_and_hospital_pins_survive_under_the_city_lens():
+    # They are places you can tap, not lenses. Removing the lenses must not
+    # take the buildings off the map.
+    page = _page()
+    pins = page.split("const LAYER_PINS", 1)[1].split("};", 1)[0]
+    place = pins.split("place:", 1)[1].split("]", 1)[0]
+    assert '"school"' in place and '"hospital"' in place
+
+
+# --- a thin answer says whose fault it is -----------------------------------
+
+def test_an_out_of_credit_search_account_is_named_as_such(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "x")
+    monkeypatch.setattr(civic_sources, "LAST_EXA_STATUS", "HTTP 402")
+    monkeypatch.setattr(civic_sources, "_exa_paused_until", time.time() + 60)
+    assert civic_sources.exa_degraded() == "the search account is out of credit"
+
+
+def test_a_rejected_key_is_not_reported_as_an_empty_record(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "x")
+    monkeypatch.setattr(civic_sources, "LAST_EXA_STATUS", "HTTP 401")
+    monkeypatch.setattr(civic_sources, "_exa_paused_until", time.time() + 60)
+    assert "rejected our key" in civic_sources.exa_degraded()
+
+
+def test_a_working_search_says_nothing(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "x")
+    monkeypatch.setattr(civic_sources, "LAST_EXA_STATUS", "")
+    monkeypatch.setattr(civic_sources, "_exa_paused_until", 0.0)
+    assert civic_sources.exa_degraded() == ""
+
+
+def test_only_the_degraded_note_reaches_the_reader():
+    # The rest of the notes are counters for the log, and one of them carries
+    # upstream error text.
+    from backend.routes import civic as routes
+    assert routes._reader_notes({"latency_ms": 900, "search_errors": ["boom"],
+                                 "sources_found": 3}) == {}
+    assert routes._reader_notes({"search_degraded": "out of credit",
+                                 "search_errors": ["boom"]}) == {
+        "search_degraded": "out of credit"}
+
+
+def test_the_page_blames_the_search_not_the_record():
+    page = _page()
+    assert "search_degraded" in page
+    assert "ran short-handed" in page
+    assert "not that there is" in page          # ... nothing to find

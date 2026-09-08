@@ -88,6 +88,25 @@ def exa_status() -> str:
     return LAST_EXA_STATUS or "ok"
 
 
+def exa_degraded() -> str:
+    """Why the tiered search did not run, or "" when it did.
+
+    Only the states that mean "we could not search properly" -- a missing key
+    or a paused account. A working Exa returns "", so callers can treat any
+    string here as something to tell the reader.
+    """
+    if not _api_key():
+        return "no search key is set on this deploy"
+    if time.time() < _exa_paused_until:
+        reason = ("the search account is out of credit"
+                  if "402" in LAST_EXA_STATUS
+                  else "the search provider rejected our key"
+                  if "401" in LAST_EXA_STATUS or "403" in LAST_EXA_STATUS
+                  else f"the search provider returned {LAST_EXA_STATUS}")
+        return reason
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # What to search for, one query per rung
 # ---------------------------------------------------------------------------
