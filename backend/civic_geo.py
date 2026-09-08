@@ -109,19 +109,6 @@ LAYERS: dict = {
         "asks": "What bills in {name} would change housing, tax or schools in "
                 "{place}, and what is on the floor now?",
     },
-    "county": {
-        "label": "County",
-        "color": "#D0B87F",
-        "elected": "Board of supervisors or commissioners, by district",
-        "decides": [
-            "Assessing your property and collecting the tax on it",
-            "Courts, the jail, the sheriff and public health",
-            "Zoning and permits outside city limits",
-            "Recording deeds, and running the elections themselves",
-        ],
-        "asks": "What is changing in {name} about property assessment, tax rates, "
-                "or services that reach {place}?",
-    },
     "place": {
         "label": "City",
         "color": "#5FD3A0",
@@ -147,18 +134,6 @@ LAYERS: dict = {
         "asks": "What is on the agenda for {name} in {place} — projects, hearings, "
                 "and votes affecting this neighbourhood?",
     },
-    "school": {
-        "label": "School district",
-        "color": "#B9791A",
-        "elected": "School board, often in off-cycle elections",
-        "decides": [
-            "School budgets, staffing and which schools close",
-            "Attendance boundaries — which school an address feeds into",
-            "Bond measures that arrive on your property-tax bill",
-        ],
-        "asks": "What is changing in {name} — budget, boundaries, closures, board "
-                "policy — and what decisions are open?",
-    },
     "landuse": {
         "label": "Land use here",
         "color": "#A0A8B0",
@@ -178,19 +153,16 @@ LAYERS: dict = {
 # portal (the actual application behind a building site) -- neither of which
 # any search will produce as reliably as the reader clicking through.
 LOOKUPS = {
-    "county": "Search your parcel in the assessor's record: the assessed value, "
-              "when it was last reassessed, and the exemptions on it",
     "place": "Search the permit and planning portal for your address, and the "
              "zoning designation the planning department publishes for it",
     "council": "Find your council member's page and the agenda for the next meeting",
-    "school": "Find the board agenda and the budget documents for this year",
     "state_upper": "Look up your senator and the bills they have authored this session",
     "state_lower": "Look up your representative and the bills they have authored",
     "congress": "Look up your representative's votes and the bills they sponsor",
 }
 
 # The order the map offers them in: closest to a resident's daily life first.
-LAYER_ORDER = ["landuse", "council", "place", "school", "county",
+LAYER_ORDER = ["landuse", "council", "place",
                "state_lower", "state_upper", "congress"]
 
 # Census Geocoder names its geography collections in prose ; match loosely so a
@@ -203,9 +175,7 @@ _CENSUS_KEYS = {
     "congress": (("congressional",),),
     "state_upper": (("legislative", "upper"),),
     "state_lower": (("legislative", "lower"),),
-    "county": (("counties",), ("county", "subdivision")),
     "place": (("incorporated places",), ("census designated places",)),
-    "school": (("unified school",), ("secondary school",), ("elementary school",)),
 }
 
 # Which TIGERweb layer holds each lens, matched on the words in its published
@@ -215,11 +185,7 @@ _TIGER_KEYS = {
     "congress": (("congressional", "districts"),),
     "state_upper": (("legislative", "districts", "upper"),),
     "state_lower": (("legislative", "districts", "lower"),),
-    "county": (("counties",),),
     "place": (("incorporated", "places"), ("census", "designated", "places")),
-    "school": (("unified", "school", "districts"),
-               ("elementary", "school", "districts"),
-               ("secondary", "school", "districts")),
 }
 
 _CACHE: dict = {}
@@ -868,7 +834,7 @@ def _osm_layers(elements: list) -> dict:
                                "detail": (division or "political district").replace("_", " "),
                                "relation": element.get("id"), "website": website}
         elif boundary == "administrative" and name:
-            slot = {"8": "place", "6": "county", "4": "state"}.get(str(level))
+            slot = {"8": "place"}.get(str(level))
             if slot and slot not in found:
                 found[slot] = {"name": name, "source": "openstreetmap",
                                "detail": f"admin level {level}",

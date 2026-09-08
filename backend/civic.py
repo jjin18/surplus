@@ -1057,6 +1057,15 @@ def synthesize(
     notes["sources"] = "exa" if retrieving else "web_search"
     notes["sources_found"] = sources_found
     notes["latency_ms"] = int((time.monotonic() - started) * 1000)
+    # A thin answer has two very different causes, and the page must not let
+    # the reader confuse them. "Nothing has been written about San Mateo
+    # County" is a claim about the world ; "our search account is out of
+    # credit, so only the keyless backends ran" is a claim about us. When the
+    # second is true, say it, because the tiered search that would have found
+    # the county's own agenda never ran.
+    degraded = civic_sources.exa_degraded()
+    if degraded:
+        notes["search_degraded"] = degraded
     return answer, notes
 
 

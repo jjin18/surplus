@@ -141,6 +141,17 @@ class AskIn(BaseModel):
     brief: bool = False
 
 
+def _reader_notes(notes: dict) -> dict:
+    """The part of the synthesis notes a reader is owed.
+
+    Everything else in there is a counter for the log. This is the one thing
+    that changes how an answer should be read: whether we could search
+    properly at all.
+    """
+    degraded = (notes or {}).get("search_degraded") or ""
+    return {"search_degraded": degraded} if degraded else {}
+
+
 class AskOut(BaseModel):
     # `id` is a share token: the question, packed. A permalink that carries
     # its own question can be answered by either replica and survives a
@@ -150,6 +161,8 @@ class AskOut(BaseModel):
     location: str
     answer: dict | None = None
     cached: bool
+    # Only ever carries `search_degraded`: why the ranked search did not run.
+    notes: dict = {}
     # True when the link is good but this replica has no answer for it yet :
     # the page re-asks rather than showing "expired".
     rebuild: bool = False
@@ -238,7 +251,7 @@ def ask(payload: AskIn) -> AskOut:
 
     record = {"question": question, "location": location, "answer": answer}
     civic.cache_put(key, record)
-    return AskOut(id=token, cached=False, **record)
+    return AskOut(id=token, cached=False, **record, notes=_reader_notes(notes))
 
 
 # --------------------------------------------------------------------------
@@ -357,7 +370,8 @@ def ask_stream(payload: AskIn):
                 f"retiered={notes.get('tiers_corrected')} "
                 f"retried={notes.get('retried')} {notes['latency_ms']}ms"
             )
-            events.put(("answer", {"id": token, "cached": False, **record}))
+            events.put(("answer", {"id": token, "cached": False, **record,
+                                   "notes": _reader_notes(notes)}))
         finally:
             events.put((None, None))
 
