@@ -248,3 +248,14 @@ def test_the_odd_year_states_say_they_have_no_2026_legislature():
         quirk = st.PROFILES[state].quirk.lower().replace("-", " ")
         assert "odd year" in quirk, state
         assert state not in races.LEGISLATIVE_2026
+
+
+def test_every_socrata_state_carries_its_portal_domain():
+    """A socrata profile with no domain builds 'domains=' and searches every
+    portal in the country, returning other states' datasets. PA had this: its
+    bespoke module knew the domain and its profile did not, so the generic
+    discover() path was silently wrong for it."""
+    for state, prof in st.PROFILES.items():
+        if prof.shape == "socrata":
+            assert prof.socrata_domain, f"{state} is socrata with no domain"
+            assert "." in prof.socrata_domain, state

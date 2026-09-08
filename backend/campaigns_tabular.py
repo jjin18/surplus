@@ -126,8 +126,21 @@ def discover_socrata(domain: str, query: str = "candidate", *,
     This is how you find a resource id without opening a browser. Returns
     {id, name, updated, rows, link} per hit, newest-looking first as the
     catalogue orders them.
+
+    An empty `domain` is REFUSED rather than sent. Socrata treats "domains="
+    as no filter at all and happily searches every portal in the country, so
+    the request succeeds and returns candidate datasets belonging to other
+    states -- results that look entirely correct and are about the wrong place.
+    That is the confidently-wrong failure this package exists to avoid, and it
+    is invisible unless you check which portal each hit came from.
     """
     from urllib.parse import quote
+
+    if not (domain or "").strip():
+        raise NotConfigured(
+            "discover_socrata() needs a portal domain: an empty one is not a "
+            "narrower search, it is every Socrata portal in the country, and "
+            "the hits would belong to other states.")
     url = (f"https://api.us.socrata.com/api/catalog/v1"
            f"?domains={quote(domain)}&q={quote(query)}&limit={int(limit)}")
     raw = _fetch(url, fetcher)
