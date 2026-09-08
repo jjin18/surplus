@@ -2,6 +2,8 @@
 thread helpers, and in-thread reply payloads. All offline (injected fetch)."""
 from __future__ import annotations
 import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -30,6 +32,28 @@ def _user(db):
                     email_status="active")
     db.add(u); db.commit(); db.refresh(u)
     return u
+
+
+def _days_ago(days: int) -> str:
+    """A provider-format timestamp `days` before now.
+
+    USE THIS, NOT A LITERAL DATE, for anything a pending-outreach marker has to
+    survive. sync_email_contacts() ends by sweeping markers older than
+    _pending_stale_days() -- 90 by default -- measured from the moment the test
+    runs, and the sweep happens in the same call that creates the marker. A
+    hardcoded fixture date is therefore a timer: the two tests below asserted on
+    a marker created from a literal 2026-06-07 and passed for months, until
+    2026-09-05, when that date turned ninety days old and the marker started
+    being created and immediately deleted inside one call. No code changed;
+    the calendar did. Relative dates keep the assertions about the behaviour
+    rather than about the date the suite happens to run on.
+
+    The other fixtures in this file keep their literal dates on purpose: they
+    assert on contacts, threads and rollups, none of which are swept, and only
+    relative ORDER matters to them.
+    """
+    stamp = datetime.now(timezone.utc) - timedelta(days=days)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _mail(frm, to, *, date, role="inbox", subject="hey", thread="t1", pid="m1"):
@@ -103,7 +127,7 @@ def test_one_way_outbound_becomes_pending_not_a_contact(db):
     u = _user(db)
     mails = [
         _mail(("host@gmail.com", "Host"), [("leo@acme.com", "Leo Park")],
-              date="2026-06-07T10:00:00Z", role="sent", pid="m1"),
+              date=_days_ago(7), role="sent", pid="m1"),
     ]
     stats = es.sync_email_contacts(db, u, dsn="d", api_key="k",
                                    fetch_page=lambda c: {"items": mails,
@@ -124,7 +148,7 @@ def test_delayed_reply_promotes_pending_to_contact(db):
     # Sync 1: you emailed Leo, no reply -> pending, no contact.
     es.sync_email_contacts(db, u, dsn="d", api_key="k", fetch_page=lambda c: {
         "items": [_mail(("host@gmail.com", "Host"), [("leo@acme.com", "Leo Park")],
-                        date="2026-06-07T10:00:00Z", role="sent", pid="m1")],
+                        date=_days_ago(7), role="sent", pid="m1")],
         "cursor": None})
     assert db.query(models.EmailPendingOutreach).count() == 1
     assert db.query(models.Contact).count() == 0
@@ -132,7 +156,7 @@ def test_delayed_reply_promotes_pending_to_contact(db):
     # Sync 2: ONLY Leo's reply is in the window (the original outbound aged out).
     stats = es.sync_email_contacts(db, u, dsn="d", api_key="k", fetch_page=lambda c: {
         "items": [_mail(("leo@acme.com", "Leo Park"), [("host@gmail.com", "Host")],
-                        date="2026-06-14T09:00:00Z", pid="m2")],
+                        date=_days_ago(0), pid="m2")],
         "cursor": None})
     assert stats["promoted_from_pending"] == 1
     assert stats["contacts_created"] == 1
