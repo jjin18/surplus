@@ -2344,3 +2344,27 @@ def test_the_page_blames_the_search_not_the_record():
     assert "search_degraded" in page
     assert "ran short-handed" in page
     assert "not that there is" in page          # ... nothing to find
+
+
+# --- the page answers on every host we own ----------------------------------
+# `_is_landing_host` peels the apex and www off to the marketing landing, but
+# only inside the SPA catch-all. /civic is a router route mounted above it, so
+# it must survive on those hosts too -- that is what makes surpluslayer.com/civic
+# work the moment the apex is pointed at this app.
+
+@pytest.mark.parametrize("host", [
+    "surpluslayer.com", "www.surpluslayer.com", "event.surpluslayer.com",
+    "join.surpluslayer.com", "surplus-production.up.railway.app",
+])
+def test_the_civic_page_is_served_on_every_host(client, host):
+    r = client.get("/civic", headers={"host": host})
+    assert r.status_code == 200
+    assert "Civic" in r.text
+
+
+@pytest.mark.parametrize("host", ["surpluslayer.com", "www.surpluslayer.com"])
+def test_the_civic_api_survives_the_landing_hosts(client, host):
+    # The landing shell must never shadow the API the page calls.
+    r = client.get("/api/civic/selftest", headers={"host": host})
+    assert r.status_code == 200
+    assert "boot" in r.json()
