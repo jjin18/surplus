@@ -139,6 +139,10 @@ class RaceRating:
     district: str = ""
     band: str = ""
     source: str = ""           # who rated it, e.g. "cook"
+    # The rater's own page. Carried so a signal derived from this rating can
+    # cite something a reader can open -- campaigns_score refuses to score on
+    # evidence with no URL, and a rating is evidence like any other.
+    source_url: str = ""
     as_of: Optional[date] = None
 
     def is_current(self, today: date, stale_after_days: int = 45) -> bool:
@@ -243,6 +247,7 @@ def load_ratings(path: Optional[pathlib.Path] = None) -> list[RaceRating]:
         as_of = None            # undated : is_current() will reject these
 
     source = str(blob.get("source") or "")
+    source_url = str(blob.get("source_url") or "")
     out: list[RaceRating] = []
     for row in blob.get("ratings") or []:
         state = str(row.get("state") or "").upper()
@@ -254,6 +259,7 @@ def load_ratings(path: Optional[pathlib.Path] = None) -> list[RaceRating]:
             district=str(row.get("district") or ""),
             band=str(row.get("band") or ""),
             source=source,
+            source_url=str(row.get("source_url") or source_url),
             as_of=as_of,
         ))
     return out

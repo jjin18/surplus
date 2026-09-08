@@ -21,7 +21,7 @@ CAMPAIGN_MODULES = ("campaigns_sources.py", "campaigns_score.py",
                     "campaigns_tabular.py", "campaigns_ca.py",
                     "campaigns_pa.py", "campaigns_oh.py",
                     "campaigns_az.py", "campaigns_states.py",
-                    "campaigns_generic.py")
+                    "campaigns_generic.py", "campaigns_enrich.py")
 
 
 def rec(name="Pat Doe", **kw) -> src.CandidateRecord:
