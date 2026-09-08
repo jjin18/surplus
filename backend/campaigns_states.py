@@ -125,6 +125,7 @@ PROFILES: dict[str, StateProfile] = {
     ),
     "PA": StateProfile(
         state="PA", publication="confirmed", shape="socrata",
+        socrata_domain="data.pa.gov",
         source_page="https://data.pa.gov/",
         note="Socrata portal confirmed; 2026 dataset id NOT identified. "
              "campaigns_pa.discover() searches the catalogue for it.",

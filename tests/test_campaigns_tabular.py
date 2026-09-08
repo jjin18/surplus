@@ -202,3 +202,25 @@ def test_missing_openpyxl_is_a_clear_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_openpyxl)
     with pytest.raises(tab.SourceError, match="openpyxl is required"):
         tab.parse_xlsx(b"PK\x03\x04")
+
+
+def test_an_empty_domain_is_refused_not_sent():
+    """Socrata reads "domains=" as no filter and searches every portal in the
+    country, so the request succeeds and returns candidate datasets belonging
+    to other states. It looks like a working discover() and is about the wrong
+    place -- exactly the confidently-wrong outcome this package refuses."""
+    with pytest.raises(tab.NotConfigured, match="every Socrata portal"):
+        tab.discover_socrata("", "candidate", fetcher=lambda url: b'{"results":[]}')
+    with pytest.raises(tab.NotConfigured):
+        tab.discover_socrata("   ", "candidate", fetcher=lambda url: b'{"results":[]}')
+
+
+def test_a_real_domain_is_still_sent():
+    seen: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        seen.append(url)
+        return b'{"results":[]}'
+
+    tab.discover_socrata("data.pa.gov", "candidate", fetcher=fetch)
+    assert "domains=data.pa.gov" in seen[0]
