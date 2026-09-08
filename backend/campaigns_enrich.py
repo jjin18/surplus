@@ -306,6 +306,33 @@ def verify(proposals: Iterable[dict], pool: Iterable[dict],
 # The proposer contract
 # ---------------------------------------------------------------------------
 
+# The static halves of the proposer prompt. Kept as named blocks rather than
+# wrapped string literals inside a list: a list of implicitly-concatenated
+# strings joined by newlines is one missing comma away from silently merging
+# two instructions into one, which is invisible in the rendered prompt and is
+# exactly what CodeQL's implicit-concatenation rule is for. Prose also reads
+# better as prose.
+_PROMPT_INTRO = (
+    "You are assessing whether a 2026 campaign is a good fit for a software "
+    "product. Judge ONLY from the sources listed below."
+)
+
+_PROMPT_SIGNAL_MENU = """Signals you may report, and what each means:
+  campaign_scale       staff or budget beyond a handful of people
+  stated_pain_point    an operational problem they describe having
+  technology_signal    a tool they adopted that required a decision
+  volunteer_operation  an organised volunteer effort
+  civic_tech_interest  stated interest in civic technology or AI"""
+
+_PROMPT_RULES = """Return JSON only: a list of \
+{"signal", "strength" (0-1), "url", "observed"}.
+`url` MUST be copied exactly from a source above. `observed` must be what \
+that page says, not your conclusion about it.
+A signal you cannot source from the list above must be omitted. Any entry \
+citing a url not listed above is DISCARDED, so an empty list is a better \
+answer than an unsourced one."""
+
+
 def build_prompt(record: CandidateRecord, pool: list[dict]) -> str:
     """What a model is asked. Pure, so the wording is reviewable and testable.
 
@@ -315,14 +342,12 @@ def build_prompt(record: CandidateRecord, pool: list[dict]) -> str:
     tends to say "no signal" instead of reaching, and an empty answer here is a
     correct one.
     """
+    seat = record.office + (f", district {record.district}" if record.district else "")
     lines = [
-        "You are assessing whether a 2026 campaign is a good fit for a "
-        "software product. Judge ONLY from the sources listed below.",
+        _PROMPT_INTRO,
         "",
         f"Candidate: {record.name}",
-        f"Seat: {record.office}"
-        + (f", district {record.district}" if record.district else "")
-        + f", {record.state}",
+        f"Seat: {seat}, {record.state}",
         "",
         "Sources:",
     ]
@@ -332,23 +357,7 @@ def build_prompt(record: CandidateRecord, pool: list[dict]) -> str:
         snippet = " ".join(str(row.get("snippet") or "").split())
         if snippet:
             lines.append(f"    {snippet[:700]}")
-    lines += [
-        "",
-        "Signals you may report, and what each means:",
-        "  campaign_scale       staff or budget beyond a handful of people",
-        "  stated_pain_point    an operational problem they describe having",
-        "  technology_signal    a tool they adopted that required a decision",
-        "  volunteer_operation  an organised volunteer effort",
-        "  civic_tech_interest  stated interest in civic technology or AI",
-        "",
-        "Return JSON only: a list of "
-        '{\"signal\", \"strength\" (0-1), \"url\", \"observed\"}.',
-        "`url` MUST be copied exactly from a source above. `observed` must be "
-        "what that page says, not your conclusion about it.",
-        "A signal you cannot source from the list above must be omitted. Any "
-        "entry citing a url not listed above is DISCARDED, so an empty list is "
-        "a better answer than an unsourced one.",
-    ]
+    lines += ["", _PROMPT_SIGNAL_MENU, "", _PROMPT_RULES]
     return "\n".join(lines)
 
 
