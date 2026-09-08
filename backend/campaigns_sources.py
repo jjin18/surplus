@@ -57,7 +57,7 @@ That ingest is the actual work of this product, and pretending otherwise (as a
 STATE_FILING_SOURCES below is the registry it goes in, and it is filled one
 state at a time against the real document -- never speculatively, because fifty
 scrapers written against response shapes nobody has opened is fifty things that
-break silently. California is wired (campaigns_ca.py); the rest are not.
+break silently. California, Pennsylvania and Ohio are wired; the rest are not.
 """
 from __future__ import annotations
 
@@ -263,7 +263,9 @@ STATE_FILING_SOURCES: dict[str, Callable[[str, str], list[CandidateRecord]]] = {
 # State adapter modules to load. Each imports this module (for CandidateRecord)
 # and calls register_filing_source() at import time, so the wiring runs one way
 # only and this list is the single place that says which states are live.
-_STATE_ADAPTER_MODULES: tuple[str, ...] = ("campaigns_ca",)
+_STATE_ADAPTER_MODULES: tuple[str, ...] = (
+    "campaigns_ca", "campaigns_pa", "campaigns_oh",
+)
 
 # Adapters that failed to import, by module name. A broken adapter must not
 # take the whole registry down -- but it must not vanish either, so the failure

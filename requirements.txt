@@ -41,3 +41,8 @@ cryptography>=41,<46
 # lazily inside extract_pdf_text(), so nothing else pays for it at import and
 # the parser stays testable without it.
 pypdf==5.1.0
+
+# openpyxl: several states publish their candidate list as a .xlsx rather than
+# a CSV (Ohio among them). Imported lazily inside campaigns_tabular.parse_xlsx,
+# so a deploy that only reads CSV/Socrata never loads it.
+openpyxl==3.1.5

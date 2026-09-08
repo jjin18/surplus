@@ -18,7 +18,8 @@ from backend import campaigns_sources as src
 BACKEND = pathlib.Path(__file__).resolve().parents[1] / "backend"
 CAMPAIGN_MODULES = ("campaigns_sources.py", "campaigns_score.py",
                     "campaigns_races.py", "campaigns_filings.py",
-                    "campaigns_ca.py")
+                    "campaigns_tabular.py", "campaigns_ca.py",
+                    "campaigns_pa.py", "campaigns_oh.py")
 
 
 def rec(name="Pat Doe", **kw) -> src.CandidateRecord:
@@ -230,8 +231,8 @@ def test_filing_coverage_names_exactly_the_states_that_are_wired():
     the filing registry and has to be visible rather than inferred from a thin
     result set. California is wired; nothing else is yet."""
     coverage = src.filing_coverage()
-    assert coverage["states_with_filing_source"] == ["CA"]
-    assert coverage["state_count"] == 1
+    assert coverage["states_with_filing_source"] == ["CA", "OH", "PA"]
+    assert coverage["state_count"] == 3
     assert coverage["has_challenger_coverage"] is True
     assert "govtrack" in coverage["incumbent_backends"]
 
@@ -272,7 +273,8 @@ def test_importing_sources_alone_populates_the_registry():
                             cwd=str(BACKEND.parent), capture_output=True,
                             text=True, timeout=60)
     assert result.returncode == 0, result.stderr
-    assert "'CA'" in result.stdout, result.stdout
+    for state in ("'CA'", "'OH'", "'PA'"):
+        assert state in result.stdout, result.stdout
     assert "{}" in result.stdout, f"an adapter failed to load: {result.stdout}"
 
 

@@ -285,7 +285,7 @@ def test_missing_pypdf_is_a_clear_error_not_an_import_crash(monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_california_alone_covers_fifty_three_seats():
-    cov = races.coverage(src.STATE_FILING_SOURCES.keys())
+    cov = races.coverage(["CA"])
     assert cov["states_covered"] == ["CA"]
     assert cov["seats_by_office"]["U.S. House"] == 52
     assert cov["seats_by_office"]["Governor"] == 1
@@ -296,4 +296,4 @@ def test_california_alone_covers_fifty_three_seats():
 def test_filing_coverage_now_reports_challenger_coverage():
     coverage = src.filing_coverage()
     assert coverage["has_challenger_coverage"] is True
-    assert coverage["states_with_filing_source"] == ["CA"]
+    assert "CA" in coverage["states_with_filing_source"]

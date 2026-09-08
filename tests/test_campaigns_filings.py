@@ -316,3 +316,52 @@ def test_parsed_records_survive_the_dedup_key():
         {"name": "Patricia Doe", "office": "US House", "district": "3"},
     ), state="TX", source_url=SRC, found_by="filing:tx")
     assert len(src.merge(found)) == 1
+
+
+# --------------------------------------------------------------------------
+# override(): the alias-precedence trap
+# --------------------------------------------------------------------------
+
+def test_override_clears_the_alias_that_would_have_won():
+    """The bug this exists for: an adapter canonicalises the office, sets it
+    alongside the raw column, and FieldMap picks the raw one anyway."""
+    fields = f.FieldMap(office=("office_name", "office"))
+    row = {"office_name": "Representative in the General Assembly",
+           "name": "Cy Webb"}
+
+    naive = {**row, "office": "State House"}
+    assert f._pick(naive, fields.office) == "Representative in the General Assembly"
+
+    fixed = f.override(row, fields, office="State House")
+    assert f._pick(fixed, fields.office) == "State House"
+    assert "office_name" not in fixed
+
+
+def test_override_is_case_insensitive_about_the_alias_it_clears():
+    fields = f.FieldMap(name=("Candidate_Name", "name"))
+    fixed = f.override({"CANDIDATE_NAME": "Jane Doe and John Roe"},
+                       fields, name="Jane Doe")
+    assert f._pick(fixed, fields.name) == "Jane Doe"
+
+
+def test_override_leaves_other_columns_untouched():
+    fields = f.FieldMap(office=("office_name", "office"))
+    fixed = f.override({"office_name": "x", "district": "7", "status": "Filed"},
+                       fields, office="Governor")
+    assert fixed["district"] == "7" and fixed["status"] == "Filed"
+
+
+def test_override_does_not_mutate_the_input_row():
+    """Adapters iterate the fetched rows; mutating them corrupts a retry."""
+    fields = f.FieldMap(office=("office_name", "office"))
+    row = {"office_name": "Representative in Congress"}
+    f.override(row, fields, office="U.S. House")
+    assert row == {"office_name": "Representative in Congress"}
+
+
+def test_override_handles_several_fields_at_once():
+    fields = f.FieldMap(name=("full_name", "name"), notes=("notes",))
+    fixed = f.override({"full_name": "A and B"}, fields,
+                       name="A", notes="running mate: B")
+    assert fixed["name"] == "A" and fixed["notes"] == "running mate: B"
+    assert "full_name" not in fixed

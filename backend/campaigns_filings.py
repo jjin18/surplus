@@ -109,6 +109,33 @@ class ParseReport:
                 "withdrawn": self.dropped_withdrawn}
 
 
+def override(row: dict, fields: FieldMap, **values: str) -> dict:
+    """Replace a field's value in a row, removing every alias that would win.
+
+    THIS EXISTS BECAUSE OF A BUG WORTH REMEMBERING. FieldMap resolves a field
+    by trying its alias columns IN ORDER, so setting row["office"] = "State
+    House" does nothing when the map tries "office_name" first and the raw
+    "Representative in the General Assembly" is still sitting there. The
+    adapter looks correct, the mapping table looks correct, and every
+    Pennsylvania statehouse candidate is silently filed as a candidate for the
+    U.S. House.
+
+    An adapter that has already canonicalised a value must therefore clear the
+    alternatives rather than just add its answer alongside them. Doing that by
+    hand in each adapter is the same bug waiting fifty times, so it is here.
+    """
+    updated = dict(row)
+    for field_name, value in values.items():
+        spec = getattr(fields, field_name, field_name)
+        aliases = {spec} if isinstance(spec, str) else set(spec)
+        aliases.add(field_name)
+        lowered = {alias.strip().lower() for alias in aliases}
+        for key in [k for k in updated if str(k).strip().lower() in lowered]:
+            updated.pop(key)
+        updated[field_name] = value
+    return updated
+
+
 def _pick(row: dict, spec: Any) -> str:
     """First non-empty value among the candidate column names, case-insensitively."""
     if spec is None:
