@@ -82,7 +82,7 @@ def _fake_search(results_by_tier):
     return search, calls
 
 
-def test_gather_searches_every_rung_once_and_orders_the_results():
+def test_gather_searches_the_first_pass_rungs_and_orders_the_results():
     search, calls = _fake_search({
         "E": ["https://news.example.com/story"],
         "A": ["https://www.census.gov/data"],
@@ -90,10 +90,44 @@ def test_gather_searches_every_rung_once_and_orders_the_results():
     })
     results = cs.gather("Why is rent up?", "Oakland, CA", search=search, backends={})
 
-    assert sorted(c["tier"] for c in calls) == ["A", "B", "C", "D", "E", "F"]
-    assert [r["tier"] for r in results] == ["A", "E", "F"]
+    # Two A rungs (the general one and the municipal-code one), then B, C, E.
+    # D and F are held back for the second pass -- every rung is a paid search
+    # plus a paid page fetch, and A/B/C/E already span more tiers than an
+    # answer has to.
+    assert sorted(c["tier"] for c in calls) == ["A", "A", "B", "C", "E"]
+    assert [r["tier"] for r in results] == ["A", "E"]   # F was not searched
     assert calls[0]["place"] == "Oakland, CA"
     assert all(c["harder"] is False for c in calls)
+
+
+def test_the_second_pass_buys_only_what_the_first_one_did_not():
+    # Re-running C and E at the same depth buys the same results twice.
+    search, calls = _fake_search({})
+    cs.gather("Why is rent up?", "Oakland, CA", search=search, harder=True,
+              backends={})
+    assert sorted(c["tier"] for c in calls) == ["A", "A", "B", "D", "F"]
+    assert all(c["harder"] is True for c in calls)
+
+
+def test_a_pass_never_costs_more_than_the_plan_it_was_given():
+    # The bill is one search per rung plus one page fetch per result, so both
+    # counts are worth pinning against a rung quietly growing back.
+    def spend(harder):
+        plan = cs.plan_for(harder)
+        results = sum(cs._HARDER.get(s["tier"], s["results"]) if harder
+                      else s["results"] for s in plan)
+        fetches = sum(cs._HARDER.get(s["tier"], s["results"]) if harder
+                      else s["results"] for s in plan if s.get("text", True))
+        return len(plan), results, fetches
+
+    assert spend(False) == (5, 21, 21)
+    assert spend(True) == (5, 29, 26)
+
+
+def test_the_rung_that_only_shows_a_signal_does_not_pay_for_the_prose():
+    social = [s for s in cs.TIER_PLAN if s["tier"] == "F"][0]
+    assert social.get("text") is False
+    assert social.get("thin_only") is True
 
 
 def test_gather_drops_a_url_found_by_two_rungs():
@@ -531,3 +565,19 @@ def test_the_code_hosts_have_their_own_rung_in_the_exa_plan():
     assert len(code_step) == 1
     assert code_step[0]["tier"] == "A"
     assert "library.municode.com" in code_step[0]["domains"]
+
+
+def test_no_two_rungs_share_a_name():
+    # The name is the cache key and the log label. Two rungs are tier A -- the
+    # general one and the municipal-code one -- and sharing a name made them
+    # share a cache entry, serving whichever ran first as the answer to both.
+    for harder in (False, True):
+        names = [cs.step_name(s) for s in cs.plan_for(harder)]
+        assert len(names) == len(set(names)), names
+
+
+def test_the_municipal_code_rung_is_named_apart_from_the_general_one():
+    a_rungs = [s for s in cs.TIER_PLAN if s["tier"] == "A"]
+    assert len(a_rungs) == 2
+    assert cs.step_name(a_rungs[0]) != cs.step_name(a_rungs[1])
+    assert "code" in cs.step_name(a_rungs[1])

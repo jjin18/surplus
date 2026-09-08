@@ -126,28 +126,68 @@ _SOCIAL_DOMAINS = ["reddit.com", "x.com", "twitter.com", "news.ycombinator.com",
 # `category` values are Exa's own; the rest is plain neural search. Each entry
 # is deliberately phrased the way the source type describes itself, because
 # that is what a semantic index matches on.
+# Every rung is a paid search plus a paid page fetch per result, so the plan
+# is what we are willing to spend on a first pass -- not everything we could
+# conceivably ask.
+#
+# `thin_only` rungs sit out the first pass. D (a named expert) and F (what
+# residents are saying) are the two the ladder trusts least -- F is ranked
+# last by the whole product -- and A, B, C and E already give four tiers,
+# above the three an answer must span. They come back on the second pass,
+# which is exactly when a thin ladder needs breadth rather than depth.
+#
+# `text` is the page fetch. It is billed separately from the search, and the
+# rungs that only need to show that a signal exists do not need the prose.
 TIER_PLAN: list[dict] = [
-    {"tier": "A", "results": 6, "category": None,
+    {"tier": "A", "results": 5, "category": None,
      "query": "{q} {place} official government data, agency statistics or public records"},
-    {"tier": "B", "results": 5, "category": "research paper",
+    {"tier": "B", "results": 4, "category": "research paper",
      "query": "{q} peer-reviewed study or working paper on the causes and effects"},
-    {"tier": "C", "results": 5, "category": None,
+    {"tier": "C", "results": 4, "category": None,
      "query": "{q} {place} policy analysis from a research institute, university or legislative office"},
-    {"tier": "D", "results": 4, "category": None,
+    {"tier": "D", "results": 3, "category": None, "thin_only": True,
      "query": "{q} explained by a named expert, economist or professional association"},
-    {"tier": "E", "results": 6, "category": "news",
+    {"tier": "E", "results": 5, "category": "news",
      "query": "{q} {place} what is happening now, reporting and coverage"},
-    {"tier": "F", "results": 4, "category": None, "domains": _SOCIAL_DOMAINS,
+    {"tier": "F", "results": 3, "category": None, "domains": _SOCIAL_DOMAINS,
+     "thin_only": True, "text": False,
      "query": "{q} {place} what residents are saying and complaining about"},
     # The code section itself. Only Exa can be pointed at a domain list, so
     # this rung exists only on that path.
-    {"tier": "A", "results": 4, "category": None, "domains": sorted(_CODE_HOSTS),
+    {"tier": "A", "results": 3, "category": None, "domains": sorted(_CODE_HOSTS),
+     "label": "code",
      "query": "{q} {place} municipal code ordinance section"},
 ]
 
 # When the first pass comes back thin, this is what "search harder at tiers A
 # and B" means in retrieval terms: more results where numbers come from.
-_HARDER = {"A": 10, "B": 9}
+_HARDER = {"A": 8, "B": 7}
+
+
+def step_name(step: dict) -> str:
+    """A rung's name in the cache and in the log.
+
+    Two rungs are tier A -- the general one and the one pointed at municipal
+    code hosts -- so the tier alone is not a name. Sharing one made them share
+    a cache entry, which quietly served whichever ran first as the answer to
+    both, and the ordinance rung is the one that finds the primary law.
+    """
+    label = step.get("label")
+    return f"exa:{step['tier']}" + (f":{label}" if label else "")
+
+
+def plan_for(harder: bool) -> list[dict]:
+    """The rungs worth paying for on this pass.
+
+    First pass: everything except the two rungs the ladder trusts least.
+    Second pass: only the rungs that actually change -- A and B go deeper,
+    D and F appear for the first time. Re-running C and E at the same depth
+    would buy the same results twice, which is what the old plan did.
+    """
+    if not harder:
+        return [step for step in TIER_PLAN if not step.get("thin_only")]
+    return [step for step in TIER_PLAN
+            if step.get("thin_only") or step["tier"] in _HARDER]
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +248,13 @@ def _get_text(url: str, params: dict, timeout: float = BACKEND_TIMEOUT_S) -> str
 
 # Results keep for a few minutes, per process. Repeated questions about the
 # same place are the common case, and it takes the edge off the rate limits.
-_CACHE_TTL_S = 300
+# What a search costs is what this is for. A policy question's sources do not
+# turn over in five minutes -- an ordinance, a study, a council agenda are the
+# same documents an hour later -- so the old five-minute window meant two
+# people asking the same thing ten minutes apart both paid full price. Six
+# hours is well inside the shelf life of everything on the ladder, and the
+# answer cache above it already expires in a day.
+_CACHE_TTL_S = 6 * 3600
 _RESULT_CACHE: dict = {}
 
 
@@ -709,8 +755,11 @@ def _one_search(step: dict, question: str, place: str, harder: bool) -> list[dic
         "query": query,
         "type": "auto",
         "numResults": _HARDER.get(step["tier"], step["results"]) if harder else step["results"],
-        "contents": {"text": {"maxCharacters": SNIPPET_CHARS}},
     }
+    # The page fetch is billed on top of the search. Skip it where the rung
+    # exists to show that a signal is there, not to quote it.
+    if step.get("text", True):
+        body["contents"] = {"text": {"maxCharacters": SNIPPET_CHARS}}
     if step.get("category"):
         body["category"] = step["category"]
     if step.get("domains"):
@@ -749,9 +798,9 @@ def gather(question: str, location: str = "", *, harder: bool = False,
            backends: Optional[dict] = None) -> list[dict]:
     """Ask every source at once and return what came back, strongest first.
 
-    Breadth here costs threads, not seconds: the six Exa queries and the seven
-    keyless backends all run concurrently, so consulting thirteen indexes takes
-    about as long as consulting one. That is the whole argument for doing the
+    Breadth here costs threads, not seconds: the Exa rungs and the keyless
+    backends all run concurrently, so consulting a dozen indexes takes about
+    as long as consulting one. That is the whole argument for doing the
     searching ourselves instead of handing the model a search tool and waiting
     out its round-trips.
 
@@ -769,8 +818,8 @@ def gather(question: str, location: str = "", *, harder: bool = False,
 
     # `search` injected means a test is driving the Exa path without a key.
     if available() or search is not None:
-        for step in TIER_PLAN:
-            jobs.append((f"exa:{step['tier']}",
+        for step in plan_for(harder):
+            jobs.append((step_name(step),
                          lambda step=step: run(step, question, place, harder)))
 
     for name, (fn, needs_place) in backends.items():
