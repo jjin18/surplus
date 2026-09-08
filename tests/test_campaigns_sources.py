@@ -233,7 +233,7 @@ def test_filing_coverage_names_exactly_the_states_that_are_wired():
     the filing registry and has to be visible rather than inferred from a thin
     result set. California is wired; nothing else is yet."""
     coverage = src.filing_coverage()
-    assert coverage["state_count"] == 14
+    assert coverage["state_count"] == 50
     assert set(coverage["states_with_filing_source"]) >= {"CA", "PA", "OH", "AZ"}
     assert coverage["has_challenger_coverage"] is True
     assert "govtrack" in coverage["incumbent_backends"]

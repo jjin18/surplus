@@ -14,15 +14,19 @@ from backend import campaigns_sources as src
 from backend import campaigns_states as st
 
 
-def test_every_toss_up_state_has_a_profile():
-    """The fourteen states carrying the toss-ups are the worklist. A state in
-    the priority order with no profile is one nobody has looked at and nobody
-    will notice."""
+def test_every_state_on_the_ballot_has_a_profile():
+    """All fifty, so 'every candidate in the midterm' has an adapter for every
+    seat rather than for the toss-up subset."""
+    assert set(st.PROFILES) == races.STATES
+    assert len(st.PROFILES) == 50
+
+
+def test_the_toss_up_states_are_still_covered():
     ratings = races.load_ratings()
     priority = {state for state, _ in
                 races.priority_states(ratings, today=ratings[0].as_of)}
     assert priority <= set(st.PROFILES)
-    assert len(st.PROFILES) == 14
+    assert len(priority) == 14
 
 
 def test_profiles_only_name_real_states():
@@ -41,10 +45,24 @@ def test_every_profile_is_internally_consistent(state):
 
 def test_an_unknown_publication_does_not_claim_a_shape():
     """Writing 'CSV' for a state nobody has checked makes the worklist look
-    finished and sends the next person down the wrong path."""
+    finished and sends the next person down the wrong path. Currently no state
+    sits at "unknown" -- the ones nobody investigated are "assumed", which
+    admits the guess -- so this guards future entries rather than present ones.
+    """
     for prof in st.PROFILES.values():
         if prof.publication == "unknown":
             assert prof.shape == "unknown", prof.state
+
+
+def test_most_of_the_country_is_recorded_as_assumed_not_confirmed():
+    """Forty-two of fifty states were never investigated. That has to be
+    visible in the data, not just in a commit message."""
+    levels = {}
+    for prof in st.PROFILES.values():
+        levels[prof.publication] = levels.get(prof.publication, 0) + 1
+    assert levels["confirmed"] == 4          # CA, PA, OH, AZ
+    assert levels["assumed"] >= 40
+    assert sum(levels.values()) == 50
 
 
 def test_an_assumed_shape_says_so_in_its_note():
@@ -86,10 +104,10 @@ def test_written_and_configured_are_different_claims():
     """Four adapters exist; only California knows which document to read. A
     coverage number that conflated them would describe reach, not data."""
     report = st.status()
-    assert len(report["written"]) == 14
+    assert len(report["written"]) == 50
     assert report["configured"] == ["CA"]
-    assert report["reach"]["seats_reachable"] == 234
-    assert report["actual"]["seats_reachable"] == 53
+    assert report["reach"]["seats_reachable"] == 504     # every seat, on paper
+    assert report["actual"]["seats_reachable"] == 53     # what can be read
 
 
 def test_configured_is_read_from_each_module_not_duplicated():
@@ -156,9 +174,10 @@ def test_unconfigured_states_are_ordered_by_seats():
     """Once a dataset is filled in the whole state comes with it, so seats
     order the work -- Texas is 40 seats behind one file."""
     rows = st.unconfigured_states(limit=4)
-    # PA and OH are written but equally unconfigured, so they are in the list.
-    assert [row["state"] for row in rows] == ["TX", "NY", "PA", "OH"]
-    assert [row["seats"] for row in rows] == [40, 27, 18, 16]
+    # Florida is 29 seats with no toss-up race in it, and still outranks New
+    # York here: once a dataset is filled in the whole state comes with it.
+    assert [row["state"] for row in rows] == ["TX", "FL", "NY", "IL"]
+    assert [row["seats"] for row in rows] == [40, 29, 27, 19]
 
 
 def test_unconfigured_states_carry_what_you_need_to_start():
@@ -172,6 +191,60 @@ def test_california_is_not_listed_as_unconfigured():
     assert "CA" not in {r["state"] for r in st.unconfigured_states(limit=20)}
 
 
-def test_the_worklist_totals_the_toss_up_states():
+def test_the_worklist_totals_the_whole_ballot():
     report = st.status()
-    assert sum(row["seats"] for row in report["states"]) == 234
+    assert sum(row["seats"] for row in report["states"]) == 504
+
+
+# --------------------------------------------------------------------------
+# The office traps, which are the researched half of the profile
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("state,wording", [
+    ("MA", "Representative in General Court"),
+    ("MA", "Senator in General Court"),
+    ("NH", "Representative in General Court"),
+    ("MD", "House of Delegates"),
+    ("WV", "House of Delegates"),
+    ("VA", "House of Delegates"),
+    ("NV", "Assembly"),
+    ("WI", "Assembly"),
+    ("NJ", "General Assembly"),
+])
+def test_statehouse_wordings_the_shared_rule_gets_wrong(state, wording):
+    """Each of these is either misfiled as U.S. House or dropped entirely by
+    normalize_office(), and pinned correctly by the state's profile. That gap
+    is the whole reason office_names exists."""
+    from backend import campaigns_filings as filings
+    from backend import campaigns_generic as generic
+
+    shared = filings.normalize_office(wording)
+    mapped = generic.map_office(wording, st.PROFILES[state].office_names)
+    assert mapped in ("State House", "State Senate"), (state, wording, mapped)
+    assert shared != mapped, f"{state} {wording!r} needs no pin after all"
+
+
+def test_every_generic_state_has_a_non_empty_office_map():
+    """A profile-driven state with no office map silently maps nothing, and
+    fails downstream with a message about column names instead. The four
+    bespoke states are exempt: their mapping lives in their own module."""
+    for state, prof in st.PROFILES.items():
+        if state in st.BESPOKE_ADAPTERS:
+            continue
+        assert prof.office_names, f"{state} rides the generic path with no offices"
+        assert "U.S. House" in prof.office_names.values(), state
+
+
+def test_the_jungle_primary_and_ranked_choice_states_are_flagged():
+    """Louisiana puts every candidate on the November ballot and Alaska sends
+    four forward, so an unusually long candidate list in either is correct."""
+    assert "jungle primary" in st.PROFILES["LA"].quirk.lower()
+    assert "top-four" in st.PROFILES["AK"].quirk.lower()
+
+
+def test_the_odd_year_states_say_they_have_no_2026_legislature():
+    for state in ("LA", "MS", "NJ", "VA"):
+        # Hyphenation varies between the notes; the claim is what matters.
+        quirk = st.PROFILES[state].quirk.lower().replace("-", " ")
+        assert "odd year" in quirk, state
+        assert state not in races.LEGISLATIVE_2026
