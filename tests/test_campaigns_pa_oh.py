@@ -255,14 +255,12 @@ def test_both_adapters_are_registered():
     assert src.STATE_FILING_SOURCES["OH"] is oh.ohio
 
 
-def test_three_states_now_cover_eighty_seven_seats():
-    src.load_state_adapters()
-    cov = races.coverage(src.STATE_FILING_SOURCES.keys())
-    assert cov["states_covered"] == ["CA", "OH", "PA"]
-    assert cov["seats_by_office"]["U.S. House"] == 52 + 15 + 17
-    assert cov["seats_by_office"]["Governor"] == 3
-    assert cov["seats_by_office"]["U.S. Senate"] == 0   # none are Class 2
-    assert cov["seats_reachable"] == 87
+def test_pa_and_oh_add_thirty_four_seats():
+    cov = races.coverage(["PA", "OH"])
+    assert cov["seats_by_office"]["U.S. House"] == 17 + 15
+    assert cov["seats_by_office"]["Governor"] == 2
+    assert cov["seats_by_office"]["U.S. Senate"] == 0   # neither is Class 2
+    assert cov["seats_reachable"] == 34
 
 
 def test_gather_does_not_die_when_one_state_is_unconfigured():

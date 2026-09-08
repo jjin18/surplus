@@ -59,6 +59,11 @@ WITHDRAWN_STATUSES: frozenset[str] = frozenset({
     "write-in withdrawn", "inactive",
 })
 
+# A joint ticket arrives as one name cell: "Jane Doe and John Roe". Split on a
+# standalone conjunction, never inside a word -- "Alexander Anderson" and
+# "Fernando Castillo" both contain the letters and must survive untouched.
+_JOINT_TICKET = re.compile(r"\s+(?:and|&|/)\s+", re.IGNORECASE)
+
 # Suffixes that are part of a name rather than part of the surname.
 _SUFFIXES: frozenset[str] = frozenset({
     "jr", "sr", "ii", "iii", "iv", "v", "md", "phd", "esq", "dds", "cpa",
@@ -107,6 +112,32 @@ class ParseReport:
                 "no_source": self.dropped_no_source,
                 "unknown_office": self.dropped_unknown_office,
                 "withdrawn": self.dropped_withdrawn}
+
+
+def split_ticket(name: str) -> tuple[str, str]:
+    """A joint-ticket name into (head of ticket, running mate).
+
+    Shared rather than per-state because it is not one state's quirk: Ohio has
+    run governor and lieutenant governor as a joint ticket for decades, and
+    Arizona joins it in 2026 -- Proposition 131 created the office and November
+    3, 2026 is its first election, with running mates due by September 4.
+    Several more states elect their two executives jointly.
+
+    Keeping both names glued into one cell is the failure to avoid: "Jane Doe
+    and John Roe" matches no campaign, no search, and no dedup key, so the row
+    is present and useless. The head of the ticket is the candidate; the running
+    mate is worth recording but is not who a software decision runs through.
+
+    Returns the name unchanged with an empty mate when there is no split, which
+    is every office except the joint executive ones.
+    """
+    text = " ".join((name or "").split())
+    if not text:
+        return "", ""
+    parts = _JOINT_TICKET.split(text, maxsplit=1)
+    if len(parts) == 2 and all(part.strip() for part in parts):
+        return parts[0].strip(), parts[1].strip()
+    return text, ""
 
 
 def override(row: dict, fields: FieldMap, **values: str) -> dict:

@@ -37,18 +37,16 @@ THE JOINT TICKET
 -----------------------------------------------------------------------------
 Ohio elects Governor and Lieutenant Governor as a single ticket, so the office
 reads "Governor and Lieutenant Governor" and the name cell can carry two people
-("Jane Doe and John Roe"). Both facts are handled here: the office maps to
-"Governor", and a joint name keeps the gubernatorial candidate -- the head of
-the ticket, and the person a campaign's software decision runs through -- with
-the running mate recorded in notes rather than silently dropped or, worse, left
-glued into the name so that every downstream match on that campaign fails.
+("Jane Doe and John Roe"). The office maps to "Governor" here; the name split
+lives in campaigns_filings.split_ticket, shared because Arizona joins Ohio in
+running a joint executive ticket from 2026.
 """
 from __future__ import annotations
 
-import re
 from typing import Optional
 
-from .campaigns_filings import FieldMap, from_rows, override
+from .campaigns_filings import (FieldMap, from_rows, override,
+                                split_ticket)
 from .campaigns_races import HOUSE_SEATS
 from .campaigns_sources import CandidateRecord, register_filing_source
 from .campaigns_tabular import Fetcher, NotConfigured, fetch_table
@@ -89,10 +87,6 @@ _OFFICE_NAMES: dict[str, str] = {
     "state representative": "State House",
 }
 
-# "Jane Doe and John Roe" on a joint ticket. Split on a standalone "and" or an
-# ampersand, never on a name that merely contains those letters.
-_JOINT_TICKET = re.compile(r"\s+(?:and|&|/)\s+", re.IGNORECASE)
-
 
 def map_office(raw: str) -> str:
     """Ohio's office wording -> canonical, or '' to drop the row.
@@ -109,21 +103,6 @@ def map_office(raw: str) -> str:
         if wording in text:
             return _OFFICE_NAMES[wording]
     return ""
-
-
-def split_ticket(name: str) -> tuple[str, str]:
-    """A joint-ticket name into (head of ticket, running mate).
-
-    Returns the name unchanged and an empty mate when there is no split, which
-    is every office except governor.
-    """
-    text = " ".join((name or "").split())
-    if not text:
-        return "", ""
-    parts = _JOINT_TICKET.split(text, maxsplit=1)
-    if len(parts) == 2 and all(part.strip() for part in parts):
-        return parts[0].strip(), parts[1].strip()
-    return text, ""
 
 
 def _rows(fetcher: Optional[Fetcher], rows: Optional[list[dict]]) -> list[dict]:
