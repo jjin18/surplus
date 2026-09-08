@@ -1,0 +1,28 @@
+{
+  "_comment": "House competitiveness ratings, as published by a third-party rater. This is a DATED SNAPSHOT, not a schedule fact: refresh it and campaigns_races.priority_states() re-derives the adapter build order with no code change. Ratings older than stale_after_days are ignored rather than silently trusted. District numbers are recorded only where verified against the rater's own table; a wrong district silently targets the wrong race, so an empty string is the honest value until someone checks. Incumbent names are the rater's identification of the seat, not a claim about who is on the 2026 ballot.",
+  "source": "cook",
+  "source_name": "Cook Political Report",
+  "as_of": "2026-09-08",
+  "retrieved_via": "published reporting; not fetched directly (see ARCHITECTURE note on egress)",
+  "bands_present": ["toss-up"],
+  "ratings": [
+    {"state": "CA", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Adam Gray"},
+    {"state": "CA", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Derek Tran"},
+    {"state": "ME", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Jared Golden"},
+    {"state": "NM", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Gabe Vasquez"},
+    {"state": "NY", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Laura Gillen"},
+    {"state": "NC", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Don Davis"},
+    {"state": "OH", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Marcy Kaptur"},
+    {"state": "OH", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Emilia Sykes"},
+    {"state": "TX", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Vicente Gonzalez"},
+    {"state": "WA", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Marie Gluesenkamp Perez"},
+    {"state": "AZ", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "David Schweikert"},
+    {"state": "AZ", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Juan Ciscomani"},
+    {"state": "CO", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Gabe Evans"},
+    {"state": "IA", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Mariannette Miller-Meeks"},
+    {"state": "MI", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Tom Barrett"},
+    {"state": "NE", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Don Bacon"},
+    {"state": "PA", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Ryan Mackenzie"},
+    {"state": "PA", "office": "U.S. House", "district": "", "band": "toss-up", "incumbent": "Scott Perry"}
+  ]
+}
