@@ -33,7 +33,7 @@ def test_profiles_only_name_real_states():
 def test_every_profile_is_internally_consistent(state):
     prof = st.PROFILES[state]
     assert prof.state == state
-    assert prof.publication in ("confirmed", "likely", "unknown")
+    assert prof.publication in ("confirmed", "likely", "assumed", "unknown")
     assert prof.shape in ("pdf", "socrata", "file", "search-form", "unknown")
     assert prof.source_page.startswith("http")
     assert prof.note, "a profile with no note tells the next person nothing"
@@ -47,9 +47,28 @@ def test_an_unknown_publication_does_not_claim_a_shape():
             assert prof.shape == "unknown", prof.state
 
 
-def test_the_states_with_adapters_are_the_confirmed_ones():
-    src.load_state_adapters()
-    for state in src.STATE_FILING_SOURCES:
+def test_an_assumed_shape_says_so_in_its_note():
+    """'assumed' exists so that wiring an adapter never launders a guess into
+    a finding. Every one of them has to admit it in the note."""
+    assumed = [p for p in st.PROFILES.values() if p.publication == "assumed"]
+    assert assumed, "the level should be in use or removed"
+    for prof in assumed:
+        assert "not investigated" in prof.note.lower(), prof.state
+        assert "assumption" in prof.note.lower(), prof.state
+
+
+def test_no_assumed_state_is_configured():
+    """An assumption must never become a fetch. Their datasets stay empty, so
+    the adapter refuses before it can read anything."""
+    for prof in st.PROFILES.values():
+        if prof.publication == "assumed":
+            assert not prof.dataset, prof.state
+
+
+def test_the_bespoke_states_are_the_confirmed_ones():
+    """A state gets its own module once its source is confirmed; the rest ride
+    the generic path until someone identifies theirs."""
+    for state in st.BESPOKE_ADAPTERS:
         assert st.PROFILES[state].publication == "confirmed", state
 
 
@@ -67,9 +86,9 @@ def test_written_and_configured_are_different_claims():
     """Four adapters exist; only California knows which document to read. A
     coverage number that conflated them would describe reach, not data."""
     report = st.status()
-    assert set(report["written"]) == {"CA", "PA", "OH", "AZ"}
+    assert len(report["written"]) == 14
     assert report["configured"] == ["CA"]
-    assert report["reach"]["seats_reachable"] == 97
+    assert report["reach"]["seats_reachable"] == 234
     assert report["actual"]["seats_reachable"] == 53
 
 
@@ -127,25 +146,30 @@ def test_nebraskas_unicameral_legislature_is_recorded():
 # What to do next
 # --------------------------------------------------------------------------
 
-def test_next_states_excludes_the_ones_already_written():
-    src.load_state_adapters()
-    pending = {row["state"] for row in st.next_states(limit=20)}
-    assert not (pending & set(src.STATE_FILING_SOURCES))
+def test_next_states_is_empty_now_that_every_state_has_an_adapter():
+    """Every priority state is written. What remains is configuring them, which
+    unconfigured_states() reports instead."""
+    assert st.next_states(limit=20) == []
 
 
-def test_next_states_is_ordered_by_seats():
-    """Once an adapter exists the whole state comes with it, so seats order the
-    work -- Texas is 40 seats behind one filing office."""
-    rows = st.next_states(limit=4)
-    # MI and NC are both 15 seats, so the tie breaks alphabetically.
-    assert [row["state"] for row in rows] == ["TX", "NY", "MI", "NC"]
-    assert [row["seats"] for row in rows] == [40, 27, 15, 15]
+def test_unconfigured_states_are_ordered_by_seats():
+    """Once a dataset is filled in the whole state comes with it, so seats
+    order the work -- Texas is 40 seats behind one file."""
+    rows = st.unconfigured_states(limit=4)
+    # PA and OH are written but equally unconfigured, so they are in the list.
+    assert [row["state"] for row in rows] == ["TX", "NY", "PA", "OH"]
+    assert [row["seats"] for row in rows] == [40, 27, 18, 16]
 
 
-def test_next_states_carries_what_you_need_to_start():
-    row = st.next_states(limit=1)[0]
+def test_unconfigured_states_carry_what_you_need_to_start():
+    row = st.unconfigured_states(limit=1)[0]
     assert row["source_page"].startswith("http")
     assert "shape" in row and "publication" in row
+    assert row["how"], "each row should say what the next action is"
+
+
+def test_california_is_not_listed_as_unconfigured():
+    assert "CA" not in {r["state"] for r in st.unconfigured_states(limit=20)}
 
 
 def test_the_worklist_totals_the_toss_up_states():

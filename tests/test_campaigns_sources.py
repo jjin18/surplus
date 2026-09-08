@@ -20,7 +20,8 @@ CAMPAIGN_MODULES = ("campaigns_sources.py", "campaigns_score.py",
                     "campaigns_races.py", "campaigns_filings.py",
                     "campaigns_tabular.py", "campaigns_ca.py",
                     "campaigns_pa.py", "campaigns_oh.py",
-                    "campaigns_az.py", "campaigns_states.py")
+                    "campaigns_az.py", "campaigns_states.py",
+                    "campaigns_generic.py")
 
 
 def rec(name="Pat Doe", **kw) -> src.CandidateRecord:
@@ -232,8 +233,8 @@ def test_filing_coverage_names_exactly_the_states_that_are_wired():
     the filing registry and has to be visible rather than inferred from a thin
     result set. California is wired; nothing else is yet."""
     coverage = src.filing_coverage()
-    assert coverage["states_with_filing_source"] == ["AZ", "CA", "OH", "PA"]
-    assert coverage["state_count"] == 4
+    assert coverage["state_count"] == 14
+    assert set(coverage["states_with_filing_source"]) >= {"CA", "PA", "OH", "AZ"}
     assert coverage["has_challenger_coverage"] is True
     assert "govtrack" in coverage["incumbent_backends"]
 

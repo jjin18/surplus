@@ -17,11 +17,21 @@ until it was mapped -- so `office_trap` records it per state, in advance,
 whether or not the adapter exists yet.
 
 CONFIDENCE IS RECORDED, NOT ASSUMED. `publication` says how well the format is
-actually known: "confirmed" means a document or portal was identified,
-"likely" means the state is known to run a platform that probably carries it,
-"unknown" means nobody has looked. Writing "CSV" for a state nobody has checked
-would make the worklist look finished and send whoever picks it up down the
-wrong path, so unknown stays unknown.
+actually known:
+
+    confirmed  a specific document or portal was identified
+    likely     the state is known to run a platform that probably carries it
+    assumed    a shape was ASSUMED so the generic adapter could be wired.
+               Nobody has checked. The adapter will refuse to run until
+               someone sets a dataset, so an assumption cannot quietly become
+               a fetch -- but it is recorded as an assumption, not a finding.
+    unknown    nobody has looked, and no shape is claimed
+
+The distinction between "assumed" and "confirmed" is the one that matters when
+someone picks up a state: writing "file" for a state nobody has opened would
+make the worklist look finished and send them down the wrong path, so the
+level says plainly which it is. A test enforces that "unknown" never carries
+a shape.
 
 None of this fetches anything. It is a map of the territory, kept beside the
 code that crosses it.
@@ -33,13 +43,14 @@ from typing import Optional
 
 from . import campaigns_races as races
 from . import campaigns_sources as sources
+from .campaigns_filings import FieldMap
 
 
 @dataclass(frozen=True)
 class StateProfile:
     """What is known about one state's candidate publishing."""
     state: str
-    publication: str          # "confirmed" | "likely" | "unknown"
+    publication: str          # "confirmed" | "likely" | "assumed" | "unknown"
     shape: str                # "pdf" | "socrata" | "file" | "search-form" | "unknown"
     source_page: str = ""
     note: str = ""
@@ -47,6 +58,59 @@ class StateProfile:
     office_trap: str = ""
     # Anything about the state's institutions that changes what a row means.
     quirk: str = ""
+
+    # --- the parts campaigns_generic needs to actually read the state -------
+    # Where the table is: a Socrata resource id, or a file URL. Empty means
+    # nobody has identified it and the adapter refuses to run.
+    dataset: str = ""
+    socrata_domain: str = ""
+    # This state's wording -> canonical office. Best-effort and unverified
+    # against the real file; a missing wording DROPS a row rather than
+    # misfiling it, except for statehouse names lacking the word "state",
+    # which is why those are pinned. probe() reports what went unmapped.
+    office_names: dict = field(default_factory=dict)
+    fields: FieldMap = field(default_factory=FieldMap)
+    # A candidate may hold several rows, one per party line. See
+    # campaigns_generic on fusion voting -- off everywhere else, where two
+    # rows for one seat is a bug worth seeing.
+    fusion_voting: bool = False
+
+    @property
+    def is_tabular(self) -> bool:
+        """PDF states need their own parser; these can use the generic path."""
+        return self.shape in ("socrata", "file")
+
+
+# The federal offices, worded the way most states word them. Merged into each
+# state's own map so a profile only has to carry what is unusual about it.
+_FEDERAL: dict[str, str] = {
+    "united states representative": "U.S. House",
+    "u.s. representative": "U.S. House",
+    "us representative": "U.S. House",
+    "representative in congress": "U.S. House",
+    "representative to congress": "U.S. House",
+    "united states senator": "U.S. Senate",
+    "u.s. senator": "U.S. Senate",
+    "us senator": "U.S. Senate",
+    "governor and lieutenant governor": "Governor",
+    "governor": "Governor",
+}
+
+# The ordinary statehouse wording, for states that DO say "state".
+_PLAIN_STATEHOUSE: dict[str, str] = {
+    "state senator": "State Senate",
+    "state senate": "State Senate",
+    "state representative": "State House",
+    "state house": "State House",
+}
+
+
+def _offices(*extra: dict) -> dict[str, str]:
+    """Federal wordings plus whatever this state does differently."""
+    merged = dict(_FEDERAL)
+    for block in extra:
+        merged.update(block)
+    return merged
 
 
 PROFILES: dict[str, StateProfile] = {
@@ -92,90 +156,179 @@ PROFILES: dict[str, StateProfile] = {
               "against, so that wording is the least-confirmed thing about AZ.",
     ),
     "TX": StateProfile(
-        state="TX", publication="unknown", shape="unknown",
-        source_page="https://www.sos.state.tx.us/elections/",
-        note="Not investigated. Largest unclaimed prize on this list at 40 "
-             "seats -- 38 districts, a Class 2 Senate seat and a governorship.",
-        office_trap="'State Representative' / 'State Senator' against the "
-                    "federal offices; check whether TX writes 'United States "
-                    "Representative' or 'U.S. Representative'.",
+        state="TX", publication="likely", shape="file",
+        source_page="https://www.sos.state.tx.us/elections/candidates/index.shtml",
+        note="The largest prize on this list: 40 seats -- 38 districts, the "
+             "Class 2 Senate seat and the governorship -- behind one office. "
+             "The SOS publishes 'Candidate Listing Information' for the "
+             "November 3 general election; whether that is a downloadable file "
+             "or only a web page is UNCONFIRMED, so `dataset` stays empty and "
+             "the adapter refuses rather than guessing a URL.",
+        office_trap="'State Representative' and 'State Senator' against the "
+                    "federal offices. Texas does say 'state', so the shared "
+                    "rule would cope, but both are pinned anyway.",
+        quirk="Texas elects its lieutenant governor SEPARATELY, not on a joint "
+              "ticket -- so a Texas governor row carries one name. Harmless "
+              "either way: split_ticket is a no-op without a conjunction.",
+        office_names=_offices(_PLAIN_STATEHOUSE),
     ),
     "NY": StateProfile(
         state="NY", publication="likely", shape="socrata",
+        socrata_domain="data.ny.gov",
         source_page="https://data.ny.gov/",
-        note="New York runs a Socrata portal, so IF the candidate list is "
-             "published there this is a resource id plus a FieldMap and "
-             "nothing else. Whether it carries 2026 candidates is unconfirmed; "
-             "the State Board of Elections is the fallback.",
-        office_trap="'Member of Assembly' is the state house and does not "
-                    "contain the word 'state'. Same trap as Pennsylvania.",
+        note="New York runs a Socrata portal, so IF the 2026 candidate list is "
+             "published there this is a resource id and nothing else. "
+             "Unconfirmed; the State Board of Elections is the fallback and "
+             "would make this a 'file' state instead.",
+        office_trap="'Member of Assembly' is the STATE house and never says "
+                    "'state' -- exactly Pennsylvania's trap, which silently "
+                    "filed every statehouse candidate as U.S. House until it "
+                    "was pinned. Pinned here before the first run.",
+        quirk="FUSION VOTING. A New York candidate may run on several party "
+              "lines at once -- a major party plus Conservative or Working "
+              "Families -- and appears as a SEPARATE ROW per line. Parsed "
+              "naively New York reports roughly half again as many candidates "
+              "as are running, and the extra rows are not malformed, so "
+              "nothing flags them. fusion_voting collapses them on the "
+              "identity key and reports the count folded.",
+        office_names=_offices(_PLAIN_STATEHOUSE, {
+            "member of assembly": "State House",
+            "state assembly": "State House",
+            "assembly": "State House",
+        }),
+        fusion_voting=True,
     ),
     "NC": StateProfile(
         state="NC", publication="likely", shape="file",
         source_page="https://www.ncsbe.gov/results-data",
-        note="The State Board of Elections is known for publishing bulk data "
-             "files rather than a portal or a search form, which if it holds "
-             "makes this one of the easier states. Unconfirmed.",
-        office_trap="'NC House of Representatives' / 'NC Senate' use the state "
-                    "abbreviation instead of the word 'state'.",
+        note="The State Board of Elections publishes bulk data files rather "
+             "than a portal or a search form, which if it holds for candidate "
+             "lists makes this one of the easier states. Unconfirmed. No "
+             "governor's race: Stein was elected in 2024.",
+        office_trap="'NC House of Representatives' and 'NC Senate' use the "
+                    "state ABBREVIATION where the shared rule looks for the "
+                    "word 'state' -- so 'NC House of Representatives' would "
+                    "fall through to U.S. House. Pinned.",
+        office_names=_offices(_PLAIN_STATEHOUSE, {
+            "nc house of representatives": "State House",
+            "nc senate": "State Senate",
+            "n.c. house of representatives": "State House",
+            "n.c. senate": "State Senate",
+            "us house of representatives": "U.S. House",
+        }),
     ),
     "MI": StateProfile(
-        state="MI", publication="unknown", shape="unknown",
+        state="MI", publication="assumed", shape="file",
         source_page="https://www.michigan.gov/sos/elections",
-        note="Not investigated.",
-        office_trap="'Representative in Congress' is federal; check the "
-                    "statehouse wording.",
+        note="Publishing format NOT investigated. 'file' is the assumption "
+             "that wires the generic adapter, not a finding; dataset stays "
+             "empty so the adapter refuses until someone looks.",
+        office_trap="'Representative in Congress' is federal. Michigan does "
+                    "say 'state' for its statehouse, so the shared rule would "
+                    "cope, but both are pinned.",
+        office_names=_offices(_PLAIN_STATEHOUSE),
     ),
     "WA": StateProfile(
         state="WA", publication="likely", shape="socrata",
+        socrata_domain="data.wa.gov",
         source_page="https://data.wa.gov/",
         note="Washington runs a Socrata portal and the Secretary of State "
-             "publishes candidate data; which of the two carries the 2026 "
-             "list is unconfirmed.",
-        office_trap="'Legislative District' numbering is shared between the "
-                    "two state chambers, so district alone does not identify "
-                    "a seat.",
+             "publishes candidate data; which carries the 2026 list is "
+             "unconfirmed. No Senate or governor race -- 10 House seats only.",
+        office_trap="A 'Legislative District' number is shared by both state "
+                    "chambers, so district alone does not identify a seat; the "
+                    "office column is what separates them.",
+        quirk="Top-two primary: the November ballot can carry two candidates "
+              "of the SAME party for one seat. Nothing here depends on party, "
+              "so it changes no parsing -- noted so two same-party rows for "
+              "one district do not read as a duplicate.",
+        office_names=_offices(_PLAIN_STATEHOUSE),
     ),
     "CO": StateProfile(
-        state="CO", publication="unknown", shape="unknown",
+        state="CO", publication="assumed", shape="file",
         source_page="https://www.coloradosos.gov/pubs/elections/",
-        note="Not investigated.",
+        note="Publishing format NOT investigated. 'file' is the assumption "
+             "that wires the generic adapter, not a finding.",
+        office_names=_offices(_PLAIN_STATEHOUSE, {
+            "representative to the united states congress": "U.S. House",
+        }),
     ),
     "IA": StateProfile(
-        state="IA", publication="unknown", shape="unknown",
+        state="IA", publication="assumed", shape="file",
         source_page="https://sos.iowa.gov/elections/",
-        note="Not investigated.",
+        note="Publishing format NOT investigated. 'file' is the assumption "
+             "that wires the generic adapter, not a finding.",
+        office_names=_offices(_PLAIN_STATEHOUSE),
     ),
     "NE": StateProfile(
-        state="NE", publication="unknown", shape="unknown",
+        state="NE", publication="assumed", shape="file",
         source_page="https://sos.nebraska.gov/elections/",
-        note="Not investigated.",
-        office_trap="There is no state house. A Nebraska 'State Senator' is a "
-                    "member of the only chamber -- mapping it to State Senate "
-                    "is right, but expecting a State House row is not.",
+        note="Publishing format NOT investigated. 'file' is the assumption "
+             "that wires the generic adapter, not a finding.",
+        office_trap="There is NO state house. A Nebraska 'State Senator' sits "
+                    "in the only chamber -- mapping it to State Senate is "
+                    "right, but waiting for a State House row is not, and a "
+                    "coverage check expecting one would read as a thin parse.",
         quirk="The Legislature is UNICAMERAL and officially NONPARTISAN, so "
-              "its rows carry no party at all. Harmless here, since party is "
-              "discarded by design, but it means a party column being empty is "
-              "not evidence the parse failed.",
+              "its rows carry no party at all. Harmless, since party is "
+              "discarded by design -- but an empty party column here is not "
+              "evidence that the parse failed.",
+        office_names=_offices({
+            "state senator": "State Senate",
+            "member of the legislature": "State Senate",
+            "legislature": "State Senate",
+        }),
     ),
     "NM": StateProfile(
-        state="NM", publication="unknown", shape="unknown",
+        state="NM", publication="assumed", shape="file",
         source_page="https://www.sos.nm.gov/voting-and-elections/",
-        note="Not investigated.",
+        note="Publishing format NOT investigated. 'file' is the assumption "
+             "that wires the generic adapter, not a finding.",
+        office_names=_offices(_PLAIN_STATEHOUSE),
     ),
     "ME": StateProfile(
-        state="ME", publication="unknown", shape="unknown",
+        state="ME", publication="assumed", shape="file",
         source_page="https://www.maine.gov/sos/cec/elec/",
-        note="Not investigated. Smallest of the toss-up states at 4 seats.",
-        quirk="Maine uses ranked-choice voting for federal races. It does not "
-              "change who is on the ballot, so it does not change this parse -- "
-              "noted so nobody goes looking for a problem that is not here.",
+        note="Publishing format NOT investigated. 'file' is the assumption "
+             "that wires the generic adapter, not a finding. Smallest "
+             "toss-up state at 4 seats.",
+        quirk="Ranked-choice voting for federal races, and NO lieutenant "
+              "governor -- Maine is one of the few states without the office, "
+              "so a Maine governor row carries exactly one name. Neither "
+              "changes this parse; both are noted so nobody goes looking for a "
+              "problem that is not here.",
+        office_names=_offices(_PLAIN_STATEHOUSE),
     ),
 }
 
 
+# States with a bespoke module. The rule: a state gets its own file when it
+# needs a PARSER (California and Arizona publish PDFs) or its own discovery
+# helper; otherwise it is a profile plus campaigns_generic. Pennsylvania and
+# Ohio predate the generic path and keep their modules -- they work and are
+# tested, and churning them to prove a point is not worth a regression.
+BESPOKE_ADAPTERS: frozenset[str] = frozenset({"CA", "PA", "OH", "AZ"})
+
+
 def profile(state: str) -> Optional[StateProfile]:
     return PROFILES.get((state or "").strip().upper())
+
+
+def register_profile_adapters() -> list[str]:
+    """Wire every tabular state that has no module of its own.
+
+    Called at import, so importing this module is enough to make the generic
+    states reachable through campaigns_sources.gather().
+    """
+    from . import campaigns_generic
+
+    wired: list[str] = []
+    for state, prof in PROFILES.items():
+        if state in BESPOKE_ADAPTERS or not prof.is_tabular:
+            continue
+        sources.register_filing_source(state, campaigns_generic.build_adapter(prof))
+        wired.append(state)
+    return sorted(wired)
 
 
 def status() -> dict[str, object]:
@@ -233,7 +386,9 @@ def _is_configured(state: str) -> bool:
                  "AZ": ("campaigns_az", "DOCUMENT_URL")}
     entry = locations.get(state)
     if not entry:
-        return False
+        # A profile-driven state is configured when its dataset is filled in.
+        prof = PROFILES.get(state)
+        return bool(prof and prof.is_tabular and prof.dataset)
     module_name, attribute = entry
     try:
         module = importlib.import_module(f".{module_name}", __package__)
@@ -243,20 +398,43 @@ def _is_configured(state: str) -> bool:
 
 
 def next_states(limit: int = 5) -> list[dict]:
-    """What to do next: unwritten states, most seats first.
-
-    Seats rather than toss-up count, because once an adapter exists the whole
-    state comes with it -- Texas is 40 seats behind one filing office whether
-    or not its one toss-up is the reason for going there.
-    """
+    """States with no adapter at all, most seats first. Empty once every
+    priority state is wired -- at which point unconfigured_states() is the
+    list that matters."""
     sources.load_state_adapters()
     registered = set(sources.STATE_FILING_SOURCES)
-    pending = [s for s in PROFILES if s not in registered]
-    pending.sort(key=lambda s: (-len(races.seats_for_state(s)), s))
-    return [{"state": s,
-             "seats": len(races.seats_for_state(s)),
-             "shape": PROFILES[s].shape,
-             "publication": PROFILES[s].publication,
-             "source_page": PROFILES[s].source_page,
-             "office_trap": PROFILES[s].office_trap}
-            for s in pending[:limit]]
+    pending = sorted((s for s in PROFILES if s not in registered),
+                     key=lambda s: (-len(races.seats_for_state(s)), s))
+    return [_worklist_row(s) for s in pending[:limit]]
+
+
+def unconfigured_states(limit: int = 20) -> list[dict]:
+    """Written but not yet pointed at a document, most seats first.
+
+    This is the real remaining work once every state has an adapter: an
+    adapter with no dataset returns nothing, so reach without configuration
+    describes what the code could read rather than what it can.
+    """
+    pending = sorted((s for s in PROFILES if not _is_configured(s)),
+                     key=lambda s: (-len(races.seats_for_state(s)), s))
+    return [_worklist_row(s) for s in pending[:limit]]
+
+
+def _worklist_row(state: str) -> dict:
+    prof = PROFILES[state]
+    if prof.shape == "socrata":
+        how = f"campaigns_generic.discover('{state}') to find the resource id"
+    elif prof.shape == "pdf":
+        how = f"find the general-election PDF at {prof.source_page}"
+    else:
+        how = f"find the candidate file at {prof.source_page}"
+    return {"state": state,
+            "seats": len(races.seats_for_state(state)),
+            "shape": prof.shape,
+            "publication": prof.publication,
+            "source_page": prof.source_page,
+            "office_trap": prof.office_trap,
+            "how": how}
+
+
+register_profile_adapters()

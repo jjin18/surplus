@@ -266,6 +266,9 @@ STATE_FILING_SOURCES: dict[str, Callable[[str, str], list[CandidateRecord]]] = {
 # only and this list is the single place that says which states are live.
 _STATE_ADAPTER_MODULES: tuple[str, ...] = (
     "campaigns_ca", "campaigns_pa", "campaigns_oh", "campaigns_az",
+    # campaigns_states registers every remaining tabular state from its
+    # profile, so the generic ones arrive through the same one-way wiring.
+    "campaigns_states",
 )
 
 # Adapters that failed to import, by module name. A broken adapter must not
